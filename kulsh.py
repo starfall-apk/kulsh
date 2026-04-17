@@ -140,8 +140,9 @@ async def say_in_voice(voice_client, text):
 
 # --- НОВОЕ: РАСПОЗНАВАНИЕ РЕЧИ ЧЕРЕЗ discord-ext-voice-receive ---
 if VOICE_RECOGNITION_ENABLED:
-    class RecognitionSink(voice_recv.VoiceSink):
+    class RecognitionSink(voice_recv.AudioSink):  # <-- ИСПРАВЛЕНО: VoiceSink заменен на AudioSink
         def __init__(self, bot, guild, text_channel):
+            super().__init__()  # <-- ИСПРАВЛЕНО: Добавлен обязательный вызов родительского инициализатора
             self.bot = bot
             self.guild = guild
             self.text_channel = text_channel
