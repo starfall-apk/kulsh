@@ -120,7 +120,8 @@ ds_bot = discord.Client(intents=intents)
 @ds_bot.event
 async def on_message(message):
     if message.author == ds_bot.user: return
-
+    if message.guild is None:
+        return
     chat_id = f"ds_guild_{message.guild.id}"
     memory = get_chat_memory(chat_id)
     content_lower = message.content.lower()
