@@ -137,9 +137,12 @@ async def on_message(message):
             if channel is None:
                 try:
                     channel = await ds_bot.fetch_channel(channel_id)
-                except Exception:
+                except discord.NotFound:
                     await message.reply("вообще не вижу такого канала. ты точно айди ВОЙСА скинул, а не чата?")
                     return
+                except Exception as e:
+                    await message.reply("чето поломалось бля")
+                    print(f"fetch_channel error: {e}")
 
             if isinstance(channel, discord.VoiceChannel):
                 try:
@@ -202,7 +205,7 @@ async def random_post_loop():
         await asyncio.sleep(random.randint(3600, 14400))
         answer = await ask_ai_async(None, context_type="random")
         try: await tg_bot.send_message(TG_TARGET_CHAT, answer)
-        except: pass
+        except Exception: pass
 
 async def main():
     asyncio.create_task(random_post_loop())
