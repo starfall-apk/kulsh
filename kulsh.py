@@ -9,11 +9,10 @@ import random
 from collections import deque
 import base64
 from io import BytesIO
-
-# --- КОНФИГУРАЦИЯ ---
 import os
 from dotenv import load_dotenv
 
+# --- КОНФИГУРАЦИЯ ---
 load_dotenv()
 TG_TOKEN = os.getenv('TG_TOKEN')
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
@@ -21,7 +20,7 @@ AI_KEY = os.getenv('AI_KEY')
 TG_TARGET_CHAT = int(os.getenv('TG_TARGET_CHAT'))
 DS_ALLOWED_GUILD_ID = int(os.getenv('DS_ALLOWED_GUILD_ID'))
 
-# Опциональные импорты для голоса (могут отсутствовать)
+# Опциональные импорты для голоса
 try:
     import edge_tts
     from discord import FFmpegPCMAudio
@@ -30,7 +29,20 @@ except ImportError:
     VOICE_ENABLED = False
     print("⚠️ edge_tts или FFmpeg не найдены, голосовые функции отключены")
 
+# Опциональные импорты для распознавания речи
+try:
+    import speech_recognition as sr
+    from pydub import AudioSegment
+    import io
+    import struct
+    VOICE_RECOGNITION_ENABLED = True
+except ImportError:
+    VOICE_RECOGNITION_ENABLED = False
+    print("⚠️ speech_recognition или pydub не найдены, распознавание речи отключено")
+
 chat_memories = {}
+voice_text_channels = {}  # guild_id -> text_channel для ответов
+voice_listening_tasks = {}  # guild_id -> asyncio.Task
 
 def get_chat_memory(chat_id):
     if chat_id not in chat_memories:
@@ -39,7 +51,6 @@ def get_chat_memory(chat_id):
 
 # --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ ИЗОБРАЖЕНИЙ ---
 async def download_image_bytes(url):
-    """Скачивает изображение по URL и возвращает байты."""
     async with aiohttp.ClientSession() as session:
         async with session.get(url) as resp:
             if resp.status == 200:
@@ -48,18 +59,16 @@ async def download_image_bytes(url):
                 raise Exception(f"Failed to download image: {resp.status}")
 
 async def get_tg_image_bytes(bot, file_id):
-    """Скачивает изображение из Telegram по file_id."""
     file_info = await bot.get_file(file_id)
     file_path = file_info.file_path
     url = f"https://api.telegram.org/file/bot{TG_TOKEN}/{file_path}"
     return await download_image_bytes(url)
 
 def image_bytes_to_base64(image_bytes, mime_type="image/jpeg"):
-    """Преобразует байты изображения в base64 строку для Gemini."""
     encoded = base64.b64encode(image_bytes).decode('utf-8')
     return encoded, mime_type
 
-# --- МОЗГ (GEMINI) С ПОДДЕРЖКОЙ ИЗОБРАЖЕНИЙ ---
+# --- МОЗГ (GEMINI) ---
 async def ask_ai_async(prompt, context_type="default", history=None, image_bytes=None, image_mime="image/jpeg"):
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemma-3-4b-it:generateContent?key={AI_KEY}"
     
@@ -80,19 +89,10 @@ async def ask_ai_async(prompt, context_type="default", history=None, image_bytes
     else:
         final_prompt = f"{base_context}{history_str}\n\nТекущий запрос: {prompt}"
 
-    parts = []
-    # Текстовая часть
-    parts.append({"text": final_prompt})
-    
-    # Изображение, если передано
+    parts = [{"text": final_prompt}]
     if image_bytes:
         encoded_image, mime = image_bytes_to_base64(image_bytes, image_mime)
-        parts.append({
-            "inline_data": {
-                "mime_type": mime,
-                "data": encoded_image
-            }
-        })
+        parts.append({"inline_data": {"mime_type": mime, "data": encoded_image}})
 
     payload = {"contents": [{"parts": parts}]}
     
@@ -121,24 +121,110 @@ def wants_photo(text):
 
 # --- ЛОГИКА ГОЛОСА (TTS) ---
 async def say_in_voice(voice_client, text):
-    if not VOICE_ENABLED:
-        print("Голос отключен из-за отсутствия библиотек")
+    if not VOICE_ENABLED or not voice_client:
         return
     try:
         communicate = edge_tts.Communicate(text, "uk-UA-OstapNeural")
         await communicate.save("temp_voice.mp3")
-        
         if voice_client.is_playing():
             voice_client.stop()
-            
         voice_client.play(FFmpegPCMAudio("temp_voice.mp3"))
     except Exception as e:
         print(f"Ошибка TTS: {e}")
 
+# --- РАСПОЗНАВАНИЕ РЕЧИ (STT) ---
+class SpeechSink(discord.AudioSink):
+    def __init__(self, bot, guild, text_channel):
+        self.bot = bot
+        self.guild = guild
+        self.text_channel = text_channel
+        self.buffers = {}
+        self.silence_timers = {}
+        self.recognizer = sr.Recognizer()
+        self.lock = asyncio.Lock()
+
+    def write(self, data, user):
+        if user.bot:
+            return
+        if user.id not in self.buffers:
+            self.buffers[user.id] = bytearray()
+        self.buffers[user.id].extend(data)
+
+        if user.id in self.silence_timers:
+            self.silence_timers[user.id].cancel()
+        self.silence_timers[user.id] = asyncio.create_task(self.process_after_silence(user))
+
+    async def process_after_silence(self, user):
+        await asyncio.sleep(1.5)
+        async with self.lock:
+            if user.id in self.buffers:
+                pcm_data = bytes(self.buffers.pop(user.id))
+                del self.silence_timers[user.id]
+                text = await self.recognize_pcm(pcm_data)
+                if text and re.search(r'\bкульш\b', text, re.IGNORECASE):
+                    await self.handle_voice_command(user, text)
+
+    async def recognize_pcm(self, pcm_data):
+        """Конвертирует PCM (стерео 48kHz 16bit) в WAV и распознаёт."""
+        try:
+            # pydub конвертация
+            audio = AudioSegment(
+                data=pcm_data,
+                sample_width=2,
+                frame_rate=48000,
+                channels=2
+            )
+            audio = audio.set_channels(1).set_frame_rate(16000)
+            wav_io = io.BytesIO()
+            audio.export(wav_io, format="wav")
+            wav_io.seek(0)
+
+            with sr.AudioFile(wav_io) as source:
+                audio_data = self.recognizer.record(source)
+            return self.recognizer.recognize_google(audio_data, language="ru-RU")
+        except sr.UnknownValueError:
+            return None
+        except Exception as e:
+            print(f"Ошибка распознавания: {e}")
+            return None
+
+    async def handle_voice_command(self, user, text):
+        """Обрабатывает голосовую команду, содержащую 'Кульш'."""
+        clean_text = re.sub(r'(?i)[,.\s]*кульш[,.\s]*', ' ', text).strip() or "че надо?"
+        memory = get_chat_memory(f"ds_guild_{self.guild.id}")
+        memory.append(f"{user.name} (голос): {clean_text}")
+
+        answer = await ask_ai_async(clean_text, history=list(memory))
+        memory.append(f"Кульш: {answer}")
+
+        # Отправляем ответ в текстовый канал
+        if self.text_channel:
+            await self.text_channel.send(f"{user.mention}, {answer}")
+
+        # Озвучиваем в голосовом канале
+        voice_client = self.guild.voice_client
+        if voice_client:
+            await say_in_voice(voice_client, answer)
+
+    def cleanup(self):
+        for task in self.silence_timers.values():
+            task.cancel()
+
+async def start_voice_listening(guild, text_channel):
+    """Запускает прослушивание голосового канала."""
+    if not VOICE_RECOGNITION_ENABLED:
+        return
+    voice_client = guild.voice_client
+    if not voice_client:
+        return
+
+    sink = SpeechSink(ds_bot, guild, text_channel)
+    voice_client.listen(sink)
+    voice_listening_tasks[guild.id] = sink
+
 # --- TELEGRAM ---
 tg_bot = AsyncTeleBot(TG_TOKEN)
 
-# Текстовые сообщения
 @tg_bot.message_handler(func=lambda m: m.text)
 async def handle_tg_text(message):
     chat_id = f"tg_{message.chat.id}"
@@ -147,7 +233,6 @@ async def handle_tg_text(message):
 
     if re.search(r'(?i)\bкульш\b', text):
         await tg_bot.send_chat_action(message.chat.id, 'typing')
-        
         if wants_photo(text):
             photo_url = await get_random_photo_url()
             caption = await ask_ai_async(None, context_type="caption")
@@ -161,7 +246,6 @@ async def handle_tg_text(message):
     else:
         memory.append(f"Пользователь: {text}")
 
-# Фото в Telegram
 @tg_bot.message_handler(content_types=['photo'])
 async def handle_tg_photo(message):
     chat_id = f"tg_{message.chat.id}"
@@ -169,29 +253,18 @@ async def handle_tg_photo(message):
     caption = message.caption or ""
     
     if not re.search(r'(?i)\bкульш\b', caption):
-        # Если в подписи нет "Кульш", просто запоминаем для контекста
         memory.append(f"Пользователь: [изображение] {caption}")
         return
     
     await tg_bot.send_chat_action(message.chat.id, 'typing')
-    
-    # Получаем самое большое фото (последнее в массиве)
     photo = message.photo[-1]
     file_id = photo.file_id
     
     try:
         image_bytes = await get_tg_image_bytes(tg_bot, file_id)
-        # Определяем mime type (Telegram обычно JPEG)
         mime_type = "image/jpeg"
-        
         clean_text = re.sub(r'(?i)[,.\s]*кульш[,.\s]*', ' ', caption).strip() or "че на фото?"
-        answer = await ask_ai_async(
-            clean_text, 
-            history=list(memory), 
-            image_bytes=image_bytes, 
-            image_mime=mime_type
-        )
-        
+        answer = await ask_ai_async(clean_text, history=list(memory), image_bytes=image_bytes, image_mime=mime_type)
         memory.append(f"Пользователь: [изображение] {clean_text}")
         memory.append(f"Кульш: {answer}")
         await tg_bot.reply_to(message, answer)
@@ -219,7 +292,7 @@ async def on_message(message):
     memory = get_chat_memory(chat_id)
     content_lower = message.content.lower()
 
-    # --- ГОЛОСОВЫЕ КОМАНДЫ (без изменений) ---
+    # --- ГОЛОСОВЫЕ КОМАНДЫ ---
     if "кульш зайди в войс" in content_lower:
         voice_id_match = re.search(r'войс\s+(\d+)', content_lower)
         if voice_id_match:
@@ -234,11 +307,15 @@ async def on_message(message):
                 except Exception as e:
                     await message.reply("чето поломалось бля")
                     print(f"fetch_channel error: {e}")
+                    return
 
             if isinstance(channel, discord.VoiceChannel):
                 try:
-                    await channel.connect()
+                    voice_client = await channel.connect()
+                    voice_text_channels[message.guild.id] = message.channel
                     await message.reply(f"залетел в {channel.name} 🍷🗿")
+                    # Запускаем распознавание речи
+                    await start_voice_listening(message.guild, message.channel)
                 except Exception as e:
                     print(f"КРИТИЧЕСКАЯ ОШИБКА ВОЙСА: {e}")
                     await message.reply(f"не могу зайти, консоль пишет ошибку: `{e}`")
@@ -262,46 +339,39 @@ async def on_message(message):
 
     if "кульш выйди из войса" in content_lower:
         if message.guild.voice_client:
+            # Останавливаем прослушивание, если есть
+            if message.guild.id in voice_listening_tasks:
+                sink = voice_listening_tasks.pop(message.guild.id)
+                sink.cleanup()
             await message.guild.voice_client.disconnect()
             await message.reply("пока кенты")
         else:
             await message.reply("так я и так не там")
         return
 
-    # Проверяем, есть ли изображения во вложениях
+    # Обработка изображений
     has_image = any(att.content_type and att.content_type.startswith('image/') for att in message.attachments)
     text_contains_kulsh = re.search(r'(?i)\bкульш\b', message.content)
     
     if has_image and text_contains_kulsh:
-        # Обработка изображения с упоминанием Кульша
         async with message.channel.typing():
-            # Берем первое изображение
             image_att = next(att for att in message.attachments if att.content_type.startswith('image/'))
             try:
                 image_bytes = await download_image_bytes(image_att.url)
                 mime_type = image_att.content_type or "image/jpeg"
-                
                 clean_text = re.sub(r'(?i)[,.\s]*кульш[,.\s]*', ' ', message.content).strip() or "че на фото?"
-                answer = await ask_ai_async(
-                    clean_text, 
-                    history=list(memory), 
-                    image_bytes=image_bytes, 
-                    image_mime=mime_type
-                )
-                
+                answer = await ask_ai_async(clean_text, history=list(memory), image_bytes=image_bytes, image_mime=mime_type)
                 memory.append(f"{message.author.name}: [изображение] {clean_text}")
                 memory.append(f"Кульш: {answer}")
-                
                 if message.guild.voice_client:
                     await say_in_voice(message.guild.voice_client, answer)
-                    
                 await message.reply(answer)
             except Exception as e:
                 print(f"Ошибка обработки изображения в DS: {e}")
                 await message.reply("не могу глянуть фотку, сломалась")
         return
 
-    # Обычное текстовое общение (как раньше)
+    # Обычное текстовое общение
     if text_contains_kulsh:
         if wants_photo(message.content):
             async with message.channel.typing():
@@ -314,13 +384,10 @@ async def on_message(message):
                 answer = await ask_ai_async(clean_text or "че?", history=list(memory))
                 memory.append(f"{message.author.name}: {clean_text}")
                 memory.append(f"Кульш: {answer}")
-                
                 if message.guild.voice_client:
                     await say_in_voice(message.guild.voice_client, answer)
-                    
                 await message.reply(answer)
     else:
-        # Запоминаем сообщение без упоминания для контекста
         memory.append(f"{message.author.name}: {message.content}")
 
 # --- LOOP & MAIN ---
