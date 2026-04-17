@@ -4,3 +4,5 @@ discord
 dotenv
 edge-tts
 ffmpeg
+pynacl
+davey
