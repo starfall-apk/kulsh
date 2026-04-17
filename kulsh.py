@@ -139,7 +139,8 @@ async def say_in_voice(voice_client, text):
         print(f"Ошибка TTS: {e}")
 
 # --- НОВОЕ: РАСПОЗНАВАНИЕ РЕЧИ ЧЕРЕЗ discord-ext-voice-receive ---
-if VOICE_RECOGNITION_ENABLED:
+
+                    if VOICE_RECOGNITION_ENABLED:
     class RecognitionSink(voice_recv.AudioSink):
         def __init__(self, bot, guild, text_channel):
             super().__init__()
@@ -148,60 +149,59 @@ if VOICE_RECOGNITION_ENABLED:
             self.text_channel = text_channel
             self.buffers = {}
             self.recognizer = sr.Recognizer()
-            self.processing_tasks = {} # Вместо таймеров используем задачи asyncio
+            self.processing_tasks = {}
 
         def wants_opus(self) -> bool:
-            return False # Мы хотим PCM (декодированное аудио)
+            return False # Мы хотим получать уже разжатый PCM-звук
 
-        def write(self, user: discord.User, data: voice_recv.VoiceData):
-            if user.bot:
+        def write(self, user, data):
+            if user is None or user.bot:
                 return
-            
+
+            # ТЕСТ: Если это печатается — бот слышит пакеты
+            # print(f"[DEBUG] Пакет от {user.name}, размер: {len(data.pcm)}")
+
             user_id = user.id
             if user_id not in self.buffers:
                 self.buffers[user_id] = bytearray()
             
             self.buffers[user_id].extend(data.pcm)
 
-            # Если уже есть задача ожидания конца речи, отменяем её
+            # Перезапускаем таймер ожидания конца фразы
             if user_id in self.processing_tasks:
                 self.processing_tasks[user_id].cancel()
 
-            # Запускаем новую задачу: подождать 1.2 сек и обработать
             self.processing_tasks[user_id] = asyncio.run_coroutine_threadsafe(
                 self.wait_and_process(user), self.bot.loop
             )
 
         async def wait_and_process(self, user):
             try:
-                await asyncio.sleep(1.2) # Пауза после последнего пакета
+                await asyncio.sleep(1.2) # Ждем секунду тишины
                 if user.id in self.buffers:
                     pcm_data = bytes(self.buffers.pop(user.id))
                     text = await self.recognize_pcm(pcm_data)
                     
                     if text:
-                        print(f"Кульш услышал ({user.name}): {text}")
-                        # Более гибкая проверка имени
-                        if any(name in text.lower() for name in ["кульш", "кулш", "куль", "кулиш", "куш", "Кульша"]):
+                        print(f"Кульш распознал от {user.name}: {text}")
+                        # Расширенный список имен, на которые Кульш откликнется
+                        trigger_names = ["кульш", "кулш", "куль", "кулиш", "Кульша", "куш"]
+                        if any(name in text.lower() for name in trigger_names):
                             await self.handle_voice_command(user, text)
             except asyncio.CancelledError:
                 pass
             except Exception as e:
-                print(f"Ошибка в wait_and_process: {e}")
+                print(f"Ошибка обработки голоса: {e}")
 
-        async def recognize_pcm(self, pcm_data: bytes) -> str | None:
+        async def recognize_pcm(self, pcm_data: bytes):
             try:
-                # Discord шлет 48000Hz, Stereo, 16-bit
+                # Конвертируем сырые данные Discord (48kHz, Stereo) в моно для распознавания
                 audio = AudioSegment(
                     data=pcm_data,
                     sample_width=2,
                     frame_rate=48000,
                     channels=2
-                )
-                audio = audio.set_channels(1).set_frame_rate(16000)
-                
-                # Если запись слишком короткая (меньше 0.5 сек), Google не поймет
-                if len(audio) < 500: return None
+                ).set_channels(1).set_frame_rate(16000)
 
                 wav_io = BytesIO()
                 audio.export(wav_io, format="wav")
@@ -209,15 +209,13 @@ if VOICE_RECOGNITION_ENABLED:
 
                 with sr.AudioFile(wav_io) as source:
                     audio_data = self.recognizer.record(source)
-                
-                # Используем ключ API если есть, или стандартный (лимитированный)
                 return self.recognizer.recognize_google(audio_data, language="ru-RU")
             except Exception:
                 return None
 
-        async def handle_voice_command(self, user: discord.User, text: str):
-            # Чистим текст от обращения
-            clean_text = re.sub(r'(?i)(кульш|кулш|куль)', '', text).strip() or "ты тут?"
+        async def handle_voice_command(self, user, text):
+            # Вырезаем имя бота из запроса
+            clean_text = re.sub(r'(?i)(кульш|кулш|куль|гуль|куш)', '', text).strip() or "че надо?"
             
             memory = get_chat_memory(f"ds_guild_{self.guild.id}")
             memory.append(f"{user.name} (голос): {clean_text}")
@@ -228,6 +226,7 @@ if VOICE_RECOGNITION_ENABLED:
             if self.text_channel:
                 await self.text_channel.send(f"**{user.display_name}**, {answer}")
 
+            # Если бот в войсе — отвечаем голосом
             vc = self.guild.voice_client
             if vc:
                 await say_in_voice(vc, answer)
@@ -236,6 +235,7 @@ if VOICE_RECOGNITION_ENABLED:
             for task in self.processing_tasks.values():
                 task.cancel()
             self.buffers.clear()
+
 else:
     # Заглушка, если распознавание отключено
     class RecognitionSink:
