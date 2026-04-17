@@ -3,7 +3,6 @@ import aiohttp
 import telebot
 from telebot.async_telebot import AsyncTeleBot
 import discord
-from discord.ext import tasks
 import re
 import random
 from collections import deque
@@ -13,8 +12,18 @@ import os
 from dotenv import load_dotenv
 import threading
 import time
+import logging
 
-# --- КОНФИГУРАЦИЯ ---
+# --- НОВЫЕ ИМПОРТЫ ДЛЯ ГОЛОСА ---
+# Основной клиент для приема голоса из библиотеки discord-ext-voice-recv
+from discord.ext import voice_recv
+# Встроенный Sink для распознавания речи (требует установки с [extras])
+from discord.ext.voice_recv.extras import SpeechRecognitionSink
+
+# Настройка логирования
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# --- КОНФИГУРАЦИЯ (БЕЗ ИЗМЕНЕНИЙ) ---
 load_dotenv()
 TG_TOKEN = os.getenv('TG_TOKEN')
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
@@ -22,15 +31,7 @@ AI_KEY = os.getenv('AI_KEY')
 TG_TARGET_CHAT = int(os.getenv('TG_TARGET_CHAT'))
 DS_ALLOWED_GUILD_ID = int(os.getenv('DS_ALLOWED_GUILD_ID'))
 
-# --- ПРОВЕРКА ВЕРСИИ DISCORD.PY ---
-DISCORD_VERSION = tuple(map(int, discord.__version__.split('.')))
-if DISCORD_VERSION < (2, 0, 0):
-    print(f"⚠️ У вас discord.py {discord.__version__}. Для распознавания голоса нужна версия 2.0+. Голосовое распознавание будет отключено.")
-    VOICE_RECOGNITION_ENABLED = False
-else:
-    VOICE_RECOGNITION_ENABLED = True
-
-# Опциональные импорты
+# --- ПРОВЕРКА НАЛИЧИЯ БИБЛИОТЕК (ОБНОВЛЕНО) ---
 try:
     import edge_tts
     from discord import FFmpegPCMAudio
@@ -39,25 +40,26 @@ except ImportError:
     VOICE_ENABLED = False
     print("⚠️ edge_tts или FFmpeg не найдены, синтез речи отключен")
 
-if VOICE_RECOGNITION_ENABLED:
-    try:
-        import speech_recognition as sr
-        from pydub import AudioSegment
-    except ImportError:
-        VOICE_RECOGNITION_ENABLED = False
-        print("⚠️ speech_recognition или pydub не найдены, распознавание речи отключено")
+try:
+    import speech_recognition as sr
+    VOICE_RECOGNITION_ENABLED = True
+except ImportError:
+    VOICE_RECOGNITION_ENABLED = False
+    print("⚠️ speech_recognition не найдена, распознавание речи отключено")
 
 # Хранилища
 chat_memories = {}
+# Хранилище для привязки текстового канала к голосовому, чтобы отвечать текстом на голосовые команды
 voice_text_channels = {}
-voice_sinks = {}
+# Хранилище активных клиентов голосовых подключений
+voice_clients = {}
 
 def get_chat_memory(chat_id):
     if chat_id not in chat_memories:
         chat_memories[chat_id] = deque(maxlen=5)
     return chat_memories[chat_id]
 
-# --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ ИЗОБРАЖЕНИЙ ---
+# --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ ИЗОБРАЖЕНИЙ (БЕЗ ИЗМЕНЕНИЙ) ---
 async def download_image_bytes(url):
     async with aiohttp.ClientSession() as session:
         async with session.get(url) as resp:
@@ -76,7 +78,7 @@ def image_bytes_to_base64(image_bytes, mime_type="image/jpeg"):
     encoded = base64.b64encode(image_bytes).decode('utf-8')
     return encoded, mime_type
 
-# --- МОЗГ (GEMINI) ---
+# --- МОЗГ (GEMINI) (БЕЗ ИЗМЕНЕНИЙ) ---
 async def ask_ai_async(prompt, context_type="default", history=None, image_bytes=None, image_mime="image/jpeg"):
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemma-3-4b-it:generateContent?key={AI_KEY}"
     
@@ -111,13 +113,13 @@ async def ask_ai_async(prompt, context_type="default", history=None, image_bytes
                 if 'candidates' in data and data['candidates']:
                     return data['candidates'][0]['content']['parts'][0]['text']
                 else:
-                    print(f"Gemini API error: {data}")
+                    logging.error(f"Gemini API error: {data}")
                     return "не шарю че на картинке, мутная какая-то 🍷🗿"
     except Exception as e:
-        print(f"Ошибка API: {e}")
+        logging.error(f"Ошибка API: {e}")
         return "пошел в пизду🍷🗿"
 
-# --- ЛОГИКА ФОТО ---
+# --- ЛОГИКА ФОТО (БЕЗ ИЗМЕНЕНИЙ) ---
 async def get_random_photo_url():
     topics = ['cyberpunk', 'abstract', 'nature', 'city', 'tech', 'dark']
     topic = random.choice(topics)
@@ -127,7 +129,7 @@ def wants_photo(text):
     patterns = [r'(?i)скинь (фото|пикчу|картинку)', r'(?i)покажи что-то', r'(?i)дай (картинку|фото)']
     return any(re.search(p, text) for p in patterns)
 
-# --- ЛОГИКА ГОЛОСА (TTS) ---
+# --- ЛОГИКА ГОЛОСА (TTS) (БЕЗ ИЗМЕНЕНИЙ) ---
 async def say_in_voice(voice_client, text):
     if not VOICE_ENABLED or not voice_client:
         return
@@ -138,89 +140,32 @@ async def say_in_voice(voice_client, text):
             voice_client.stop()
         voice_client.play(FFmpegPCMAudio("temp_voice.mp3"))
     except Exception as e:
-        print(f"Ошибка TTS: {e}")
+        logging.error(f"Ошибка TTS: {e}")
 
-# --- РАСПОЗНАВАНИЕ РЕЧИ (ТОЛЬКО ДЛЯ DISCORD.PY 2.0+) ---
-if VOICE_RECOGNITION_ENABLED:
-    class SpeechSink(discord.AudioSink):
-        def __init__(self, bot, guild, text_channel):
-            self.bot = bot
-            self.guild = guild
-            self.text_channel = text_channel
-            self.buffers = {}
-            self.recognizer = sr.Recognizer()
-            self.lock = asyncio.Lock()
+# --- НОВАЯ ФУНКЦИЯ ДЛЯ ОБРАБОТКИ РАСПОЗНАННОГО ТЕКСТА ---
+async def handle_recognized_speech(user, text, guild, text_channel):
+    """Обрабатывает распознанную речь, отправляет в AI и озвучивает ответ."""
+    logging.info(f"🎤 {user.name} сказал (распознано): {text}")
+    
+    # Ищем команду для Кульша
+    if re.search(r'(?i)\bкульш\b', text):
+        clean_text = re.sub(r'(?i)[,.\s]*кульш[,.\s]*', ' ', text).strip() or "че надо?"
+        memory = get_chat_memory(f"ds_guild_{guild.id}")
+        memory.append(f"{user.name} (голос): {clean_text}")
 
-        def write(self, data, user):
-            if user.bot:
-                return
-            # data – это bytes объект PCM (стерео 48kHz 16bit)
-            if user.id not in self.buffers:
-                self.buffers[user.id] = bytearray()
-            self.buffers[user.id].extend(data)
+        answer = await ask_ai_async(clean_text, history=list(memory))
+        memory.append(f"Кульш: {answer}")
 
-            # Отменяем старый таймер
-            if hasattr(self, f'timer_{user.id}'):
-                getattr(self, f'timer_{user.id}').cancel()
-            # Создаём новый таймер на 1.5 секунды тишины
-            timer = threading.Timer(1.5, lambda: asyncio.run_coroutine_threadsafe(
-                self.process_user_audio(user), self.bot.loop
-            ))
-            setattr(self, f'timer_{user.id}', timer)
-            timer.start()
+        # Отвечаем текстом в привязанный текстовый канал
+        if text_channel:
+            await text_channel.send(f"{user.mention}, {answer}")
 
-        async def process_user_audio(self, user):
-            async with self.lock:
-                if user.id in self.buffers:
-                    pcm_data = bytes(self.buffers.pop(user.id))
-                    delattr(self, f'timer_{user.id}')
-                    text = await self.recognize_pcm(pcm_data)
-                    if text and re.search(r'\bкульш\b', text, re.IGNORECASE):
-                        await self.handle_voice_command(user, text)
+        # Озвучиваем ответ
+        voice_client = voice_clients.get(guild.id)
+        if voice_client:
+            await say_in_voice(voice_client, answer)
 
-        async def recognize_pcm(self, pcm_data):
-            try:
-                audio = AudioSegment(
-                    data=pcm_data,
-                    sample_width=2,
-                    frame_rate=48000,
-                    channels=2
-                )
-                audio = audio.set_channels(1).set_frame_rate(16000)
-                wav_io = BytesIO()
-                audio.export(wav_io, format="wav")
-                wav_io.seek(0)
-
-                with sr.AudioFile(wav_io) as source:
-                    audio_data = self.recognizer.record(source)
-                return self.recognizer.recognize_google(audio_data, language="ru-RU")
-            except sr.UnknownValueError:
-                return None
-            except Exception as e:
-                print(f"Ошибка распознавания: {e}")
-                return None
-
-        async def handle_voice_command(self, user, text):
-            clean_text = re.sub(r'(?i)[,.\s]*кульш[,.\s]*', ' ', text).strip() or "че надо?"
-            memory = get_chat_memory(f"ds_guild_{self.guild.id}")
-            memory.append(f"{user.name} (голос): {clean_text}")
-
-            answer = await ask_ai_async(clean_text, history=list(memory))
-            memory.append(f"Кульш: {answer}")
-
-            if self.text_channel:
-                await self.text_channel.send(f"{user.mention}, {answer}")
-
-            voice_client = self.guild.voice_client
-            if voice_client:
-                await say_in_voice(voice_client, answer)
-
-        def cleanup(self):
-            for attr in list(self.__dict__.keys()):
-                if attr.startswith('timer_'):
-                    getattr(self, attr).cancel()
-
-# --- TELEGRAM ---
+# --- TELEGRAM (БЕЗ ИЗМЕНЕНИЙ) ---
 tg_bot = AsyncTeleBot(TG_TOKEN)
 
 @tg_bot.message_handler(func=lambda m: m.text)
@@ -267,20 +212,19 @@ async def handle_tg_photo(message):
         memory.append(f"Кульш: {answer}")
         await tg_bot.reply_to(message, answer)
     except Exception as e:
-        print(f"Ошибка обработки фото в TG: {e}")
+        logging.error(f"Ошибка обработки фото в TG: {e}")
         await tg_bot.reply_to(message, "не вижу фотку, битая чтоли")
 
-# --- DISCORD ---
+# --- DISCORD (ОБНОВЛЕНО) ---
 intents = discord.Intents.default()
 intents.message_content = True
 ds_bot = discord.Client(intents=intents)
 
 @ds_bot.event
 async def on_ready():
-    print(f'Discord бот {ds_bot.user} запущен')
-    print(f'Версия discord.py: {discord.__version__}')
+    logging.info(f'Discord бот {ds_bot.user} запущен')
     if not VOICE_RECOGNITION_ENABLED:
-        print("ℹ️ Распознавание голоса отключено (необходима версия 2.0+ и библиотеки)")
+        logging.warning("⚠️ Распознавание речи отключено (не установлена библиотека speech_recognition).")
 
 @ds_bot.event
 async def on_message(message):
@@ -293,7 +237,7 @@ async def on_message(message):
     memory = get_chat_memory(chat_id)
     content_lower = message.content.lower()
 
-    # --- ГОЛОСОВЫЕ КОМАНДЫ ---
+    # --- ОБНОВЛЕННЫЕ ГОЛОСОВЫЕ КОМАНДЫ ---
     if "кульш зайди в войс" in content_lower:
         voice_id_match = re.search(r'войс\s+(\d+)', content_lower)
         if voice_id_match:
@@ -307,23 +251,33 @@ async def on_message(message):
                     return
                 except Exception as e:
                     await message.reply("чето поломалось бля")
-                    print(f"fetch_channel error: {e}")
+                    logging.error(f"fetch_channel error: {e}")
                     return
 
             if isinstance(channel, discord.VoiceChannel):
                 try:
-                    voice_client = await channel.connect()
+                    # !!! КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: Используем VoiceRecvClient из новой библиотеки !!!
+                    voice_client = await channel.connect(cls=voice_recv.VoiceRecvClient)
+                    voice_clients[message.guild.id] = voice_client
                     voice_text_channels[message.guild.id] = message.channel
                     await message.reply(f"залетел в {channel.name} 🍷🗿")
-                    
+
                     if VOICE_RECOGNITION_ENABLED:
-                        sink = SpeechSink(ds_bot, message.guild, message.channel)
+                        # !!! КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: Используем SpeechRecognitionSink !!!
+                        sink = SpeechRecognitionSink(
+                            # Функция обратного вызова, которая будет вызвана при распознавании текста
+                            text_cb=lambda user, text, *args: asyncio.create_task(
+                                handle_recognized_speech(user, text, message.guild, message.channel)
+                            ),
+                            # Язык распознавания
+                            language="ru-RU"
+                        )
                         voice_client.listen(sink)
-                        voice_sinks[message.guild.id] = sink
+                        await message.reply("🎤 Распознавание речи активировано.")
                     else:
-                        await message.reply("⚠️ Распознавание речи отключено (обнови discord.py до 2.0+)")
+                        await message.reply("⚠️ Распознавание речи отключено (установи speech_recognition).")
                 except Exception as e:
-                    print(f"КРИТИЧЕСКАЯ ОШИБКА ВОЙСА: {e}")
+                    logging.error(f"КРИТИЧЕСКАЯ ОШИБКА ВОЙСА: {e}")
                     await message.reply(f"не могу зайти, консоль пишет ошибку: `{e}`")
             else:
                 await message.reply("это текстовый канал или трибуна, мне туда нельзя")
@@ -332,10 +286,11 @@ async def on_message(message):
         return
 
     if "кульш скажи в войсе" in content_lower:
-        if message.guild.voice_client:
+        voice_client = voice_clients.get(message.guild.id)
+        if voice_client:
             phrase = content_lower.split("войсе", 1)[-1].strip()
             if phrase:
-                await say_in_voice(message.guild.voice_client, phrase)
+                await say_in_voice(voice_client, phrase)
                 await message.add_reaction("🗣️")
             else:
                 await message.reply("че сказать то?")
@@ -344,11 +299,12 @@ async def on_message(message):
         return
 
     if "кульш выйди из войса" in content_lower:
-        if message.guild.voice_client:
-            if message.guild.id in voice_sinks:
-                voice_sinks[message.guild.id].cleanup()
-                del voice_sinks[message.guild.id]
-            await message.guild.voice_client.disconnect()
+        voice_client = voice_clients.get(message.guild.id)
+        if voice_client:
+            await voice_client.disconnect()
+            del voice_clients[message.guild.id]
+            if message.guild.id in voice_text_channels:
+                del voice_text_channels[message.guild.id]
             await message.reply("пока кенты")
         else:
             await message.reply("так я и так не там")
@@ -372,7 +328,7 @@ async def on_message(message):
                     await say_in_voice(message.guild.voice_client, answer)
                 await message.reply(answer)
             except Exception as e:
-                print(f"Ошибка обработки изображения в DS: {e}")
+                logging.error(f"Ошибка обработки изображения в DS: {e}")
                 await message.reply("не могу глянуть фотку, сломалась")
         return
 
@@ -395,7 +351,7 @@ async def on_message(message):
     else:
         memory.append(f"{message.author.name}: {message.content}")
 
-# --- LOOP & MAIN ---
+# --- LOOP & MAIN (БЕЗ ИЗМЕНЕНИЙ) ---
 async def random_post_loop():
     while True:
         await asyncio.sleep(random.randint(3600, 14400))
@@ -403,7 +359,7 @@ async def random_post_loop():
         try: 
             await tg_bot.send_message(TG_TARGET_CHAT, answer)
         except Exception as e:
-            print(f"Ошибка рандомного поста: {e}")
+            logging.error(f"Ошибка рандомного поста: {e}")
 
 async def main():
     asyncio.create_task(random_post_loop())
