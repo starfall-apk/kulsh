@@ -1,0 +1,6 @@
+aiohttp
+telebot
+discord
+dotenv
+edge-tts
+ffmpeg
