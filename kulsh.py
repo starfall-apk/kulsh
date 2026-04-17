@@ -11,6 +11,10 @@ import base64
 from io import BytesIO
 import os
 from dotenv import load_dotenv
+import threading
+import wave
+import struct
+import time
 
 # --- КОНФИГУРАЦИЯ ---
 load_dotenv()
@@ -33,16 +37,24 @@ except ImportError:
 try:
     import speech_recognition as sr
     from pydub import AudioSegment
-    import io
-    import struct
     VOICE_RECOGNITION_ENABLED = True
 except ImportError:
     VOICE_RECOGNITION_ENABLED = False
     print("⚠️ speech_recognition или pydub не найдены, распознавание речи отключено")
 
+# Импорты для работы с аудио в Discord
+try:
+    import nacl
+    from nacl.encoding import RawEncoder
+    HAS_NACL = True
+except ImportError:
+    HAS_NACL = False
+    print("⚠️ PyNaCl не установлен, голосовые функции Discord будут ограничены")
+
 chat_memories = {}
-voice_text_channels = {}  # guild_id -> text_channel для ответов
-voice_listening_tasks = {}  # guild_id -> asyncio.Task
+voice_text_channels = {}
+voice_listening_tasks = {}
+voice_sinks = {}
 
 def get_chat_memory(chat_id):
     if chat_id not in chat_memories:
@@ -132,95 +144,136 @@ async def say_in_voice(voice_client, text):
     except Exception as e:
         print(f"Ошибка TTS: {e}")
 
-# --- РАСПОЗНАВАНИЕ РЕЧИ (STT) ---
-class SpeechSink(discord.AudioSink):
-    def __init__(self, bot, guild, text_channel):
-        self.bot = bot
+# --- РАСПОЗНАВАНИЕ РЕЧИ (СТАРАЯ ВЕРСИЯ DISCORD.PY) ---
+class VoiceRecognitionSink:
+    def __init__(self, guild, text_channel):
         self.guild = guild
         self.text_channel = text_channel
         self.buffers = {}
-        self.silence_timers = {}
         self.recognizer = sr.Recognizer()
-        self.lock = asyncio.Lock()
-
+        self.running = True
+        self.loop = asyncio.get_event_loop()
+        
     def write(self, data, user):
-        if user.bot:
+        if not self.running or user.bot:
             return
+            
+        # Добавляем данные в буфер пользователя
         if user.id not in self.buffers:
-            self.buffers[user.id] = bytearray()
-        self.buffers[user.id].extend(data)
-
-        if user.id in self.silence_timers:
-            self.silence_timers[user.id].cancel()
-        self.silence_timers[user.id] = asyncio.create_task(self.process_after_silence(user))
-
-    async def process_after_silence(self, user):
-        await asyncio.sleep(1.5)
-        async with self.lock:
-            if user.id in self.buffers:
-                pcm_data = bytes(self.buffers.pop(user.id))
-                del self.silence_timers[user.id]
-                text = await self.recognize_pcm(pcm_data)
-                if text and re.search(r'\bкульш\b', text, re.IGNORECASE):
-                    await self.handle_voice_command(user, text)
-
-    async def recognize_pcm(self, pcm_data):
-        """Конвертирует PCM (стерео 48kHz 16bit) в WAV и распознаёт."""
+            self.buffers[user.id] = {
+                'data': bytearray(),
+                'last_update': time.time(),
+                'timer': None
+            }
+        
+        self.buffers[user.id]['data'].extend(data)
+        self.buffers[user.id]['last_update'] = time.time()
+        
+        # Отменяем старый таймер
+        if self.buffers[user.id]['timer']:
+            self.buffers[user.id]['timer'].cancel()
+        
+        # Создаем новый таймер для обработки после паузы
+        self.buffers[user.id]['timer'] = threading.Timer(
+            1.5, 
+            lambda: self.loop.call_soon_threadsafe(
+                self.process_user_audio, user
+            )
+        )
+        self.buffers[user.id]['timer'].start()
+    
+    def process_user_audio(self, user):
+        """Обрабатывает аудио пользователя после паузы"""
+        if user.id not in self.buffers:
+            return
+            
+        buffer = self.buffers[user.id]
+        pcm_data = bytes(buffer['data'])
+        del self.buffers[user.id]
+        
+        # Запускаем распознавание в отдельном потоке
+        asyncio.create_task(self.recognize_and_respond(user, pcm_data))
+    
+    async def recognize_and_respond(self, user, pcm_data):
+        """Распознает PCM и отвечает если есть 'кульш'"""
         try:
-            # pydub конвертация
+            # Конвертируем PCM в WAV через pydub
             audio = AudioSegment(
                 data=pcm_data,
-                sample_width=2,
-                frame_rate=48000,
-                channels=2
+                sample_width=2,  # 16-bit
+                frame_rate=48000,  # Discord частота
+                channels=2  # стерео
             )
+            
+            # Конвертируем в моно 16kHz для распознавания
             audio = audio.set_channels(1).set_frame_rate(16000)
-            wav_io = io.BytesIO()
+            
+            # Сохраняем в BytesIO
+            wav_io = BytesIO()
             audio.export(wav_io, format="wav")
             wav_io.seek(0)
-
+            
+            # Распознаем через Google Speech Recognition
             with sr.AudioFile(wav_io) as source:
                 audio_data = self.recognizer.record(source)
-            return self.recognizer.recognize_google(audio_data, language="ru-RU")
+            
+            text = self.recognizer.recognize_google(audio_data, language="ru-RU")
+            
+            # Проверяем наличие "кульш"
+            if re.search(r'\bкульш\b', text, re.IGNORECASE):
+                await self.handle_voice_command(user, text)
+                
         except sr.UnknownValueError:
-            return None
+            pass  # Ничего не распознано
         except Exception as e:
-            print(f"Ошибка распознавания: {e}")
-            return None
-
+            print(f"Ошибка распознавания речи: {e}")
+    
     async def handle_voice_command(self, user, text):
-        """Обрабатывает голосовую команду, содержащую 'Кульш'."""
+        """Обрабатывает голосовую команду с 'Кульш'"""
         clean_text = re.sub(r'(?i)[,.\s]*кульш[,.\s]*', ' ', text).strip() or "че надо?"
         memory = get_chat_memory(f"ds_guild_{self.guild.id}")
         memory.append(f"{user.name} (голос): {clean_text}")
-
+        
         answer = await ask_ai_async(clean_text, history=list(memory))
         memory.append(f"Кульш: {answer}")
-
-        # Отправляем ответ в текстовый канал
+        
+        # Отправляем в текстовый канал
         if self.text_channel:
             await self.text_channel.send(f"{user.mention}, {answer}")
-
+        
         # Озвучиваем в голосовом канале
         voice_client = self.guild.voice_client
         if voice_client:
             await say_in_voice(voice_client, answer)
-
-    def cleanup(self):
-        for task in self.silence_timers.values():
-            task.cancel()
+    
+    def stop(self):
+        """Останавливает прослушивание"""
+        self.running = False
+        for user_id, buffer in self.buffers.items():
+            if buffer['timer']:
+                buffer['timer'].cancel()
+        self.buffers.clear()
 
 async def start_voice_listening(guild, text_channel):
-    """Запускает прослушивание голосового канала."""
+    """Запускает прослушивание голосового канала для discord.py < 2.0"""
     if not VOICE_RECOGNITION_ENABLED:
         return
+        
     voice_client = guild.voice_client
     if not voice_client:
         return
-
-    sink = SpeechSink(ds_bot, guild, text_channel)
-    voice_client.listen(sink)
-    voice_listening_tasks[guild.id] = sink
+    
+    # Создаем sink и подключаем его
+    sink = VoiceRecognitionSink(guild, text_channel)
+    voice_sinks[guild.id] = sink
+    
+    # Для старых версий discord.py используем listen с sink
+    if hasattr(voice_client, 'listen'):
+        voice_client.listen(sink)
+    else:
+        # Альтернативный метод через create_udp_socket (для совсем старых версий)
+        print("⚠️ Ваша версия discord.py не поддерживает voice_client.listen()")
+        print("⚠️ Распознавание речи может не работать. Обновите discord.py до 1.7+")
 
 # --- TELEGRAM ---
 tg_bot = AsyncTeleBot(TG_TOKEN)
@@ -339,10 +392,10 @@ async def on_message(message):
 
     if "кульш выйди из войса" in content_lower:
         if message.guild.voice_client:
-            # Останавливаем прослушивание, если есть
-            if message.guild.id in voice_listening_tasks:
-                sink = voice_listening_tasks.pop(message.guild.id)
-                sink.cleanup()
+            # Останавливаем прослушивание
+            if message.guild.id in voice_sinks:
+                voice_sinks[message.guild.id].stop()
+                del voice_sinks[message.guild.id]
             await message.guild.voice_client.disconnect()
             await message.reply("пока кенты")
         else:
@@ -409,4 +462,9 @@ async def main():
 
 if __name__ == "__main__":
     print(">>> Кульш в эфире. Врубай микрофоны.")
+    
+    # Проверка версии discord.py
+    if not HAS_NACL:
+        print("⚠️ Установите PyNaCl: pip install PyNaCl")
+    
     asyncio.run(main())
