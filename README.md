@@ -45,5 +45,5 @@ Powered by Google's Gemini API and a generous dose of post‑Soviet humor.
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/yourusername/kulsh-bot.git
-cd kulsh-bot
+git clone https://github.com/starfall-apk/kulsh.git
+cd kulsh
