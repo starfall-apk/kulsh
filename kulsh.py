@@ -56,7 +56,7 @@ async def ask_ai_async(prompt, context_type="default", history=None):
     
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.post(url, json=payload, timeout=10) as resp:
+            async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                 data = await resp.json()
                 return data['candidates'][0]['content']['parts'][0]['text']
     except Exception as e:
