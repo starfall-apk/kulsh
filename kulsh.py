@@ -125,7 +125,7 @@ async def say_in_voice(voice_client, text):
         print("Голос отключен из-за отсутствия библиотек")
         return
     try:
-        communicate = edge_tts.Communicate(text, "ru-RU-DmitryNeural")
+        communicate = edge_tts.Communicate(text, "uk-UA-OstapNeural")
         await communicate.save("temp_voice.mp3")
         
         if voice_client.is_playing():
