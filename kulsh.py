@@ -370,7 +370,9 @@ async def on_message(message):
     # === КОМАНДА ДЛЯ ЛОГОВ ===
     if "кульш логи" in content_lower:
         # Можешь добавить проверку на свой ID, чтобы кто попало не читал логи
-        # if message.author.id != ТВОЙ_ID: return 
+        if message.author.id not in [735217033867821098, 1193627300797878362]:
+			await message.reply("ты кто бля")
+		    return 
         
         try:
             with open('bot.log', 'r', encoding='utf-8') as f:
@@ -507,4 +509,7 @@ async def main():
 
 if __name__ == "__main__":
     logger.info(">>> Кульш в эфире. Врубай микрофоны.")
-    asyncio.run(main())
+    try:
+		asyncio.run(main())
+    except KeyboardInterrupt:
+		pass
