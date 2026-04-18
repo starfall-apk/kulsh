@@ -242,7 +242,7 @@ if VOICE_RECOGNITION_ENABLED:
             else:
                 logger.info(f"DEBUG: Recognition returned EMPTY text (maybe just noise).")
 
-            def _sync_recognize(self, pcm_data: bytes):
+        def _sync_recognize(self, pcm_data: bytes):
             """Синхронная функция, которая работает в отдельном потоке"""
             try:
                 audio = AudioSegment(
