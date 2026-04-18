@@ -185,7 +185,7 @@ if VOICE_RECOGNITION_ENABLED:
                     if text:
                         print(f"Кульш распознал от {user.name}: {text}")
                         # Расширенный список имен, на которые Кульш откликнется
-                        trigger_names = ["кульш", "кулш", "куль", "кулиш", "Кульша", "куш"]
+                        trigger_names = ["кульш", "кулш", "куль", "кулиш", "Кульша", "привет", "куш"]
                         if any(name in text.lower() for name in trigger_names):
                             await self.handle_voice_command(user, text)
             except asyncio.CancelledError:
