@@ -371,8 +371,8 @@ async def on_message(message):
     if "кульш логи" in content_lower:
         # Можешь добавить проверку на свой ID, чтобы кто попало не читал логи
         if message.author.id not in [735217033867821098, 1193627300797878362]:
-			await message.reply("ты кто бля")
-		    return 
+            await message.reply("ты кто бля")
+            return 
         
         try:
             with open('bot.log', 'r', encoding='utf-8') as f:
