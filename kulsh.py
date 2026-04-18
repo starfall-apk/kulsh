@@ -152,14 +152,15 @@ if VOICE_RECOGNITION_ENABLED:
             self.processing_tasks = {}
 
         def wants_opus(self) -> bool:
-            return False # Мы хотим получать уже разжатый PCM-звук
-
+            return False # Мы хотим получать уже разжатый
+        
         def write(self, user, data):
             if user is None or user.bot:
                 return
 
-            # ТЕСТ: Если это печатается — бот слышит пакеты
-            # print(f"[DEBUG] Пакет от {user.name}, размер: {len(data.pcm)}")
+            # ПРИНТ ДЛЯ ПРОВЕРКИ: Идут ли пакеты вообще?
+            # Если в консоли НЕ бегут цифры, когда ты говоришь — бот тебя не слышит на уровне Discord
+            print(f"DEBUG: Receiving data from {user.name}, len: {len(data.pcm)}")
 
             user_id = user.id
             if user_id not in self.buffers:
@@ -167,13 +168,41 @@ if VOICE_RECOGNITION_ENABLED:
             
             self.buffers[user_id].extend(data.pcm)
 
-            # Перезапускаем таймер ожидания конца фразы
             if user_id in self.processing_tasks:
                 self.processing_tasks[user_id].cancel()
 
             self.processing_tasks[user_id] = asyncio.run_coroutine_threadsafe(
                 self.wait_and_process(user), self.bot.loop
             )
+
+        async def recognize_pcm(self, pcm_data: bytes):
+            try:
+                # ВАЖНО: На Линуксе pydub ТРЕБУЕТ ffmpeg в системе
+                audio = AudioSegment(
+                    data=pcm_data,
+                    sample_width=2,
+                    frame_rate=48000,
+                    channels=2
+                ).set_channels(1).set_frame_rate(16000)
+
+                wav_io = BytesIO()
+                audio.export(wav_io, format="wav")
+                wav_io.seek(0)
+
+                with sr.AudioFile(wav_io) as source:
+                    audio_data = self.recognizer.record(source)
+                
+                # Используем Google
+                text = self.recognizer.recognize_google(audio_data, language="ru-RU")
+                return text
+            except sr.UnknownValueError:
+                # Google не распознал речь (тишина или шум)
+                return None
+            except Exception as e:
+                # ВОТ ТУТ может выскочить ошибка про отсутствие ffmpeg
+                print(f"CRITICAL ERROR in recognize_pcm: {e}")
+                return None
+
 
         async def wait_and_process(self, user):
             try:
