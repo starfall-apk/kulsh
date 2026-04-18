@@ -2,14 +2,14 @@
 
 [![Python](https://img.shields.io/badge/Python-3.9%2B-blue)](https://python.org)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![Discord](https://img.shields.io/badge/Discord-Bot-5865F2)](https://discord.com)
-[![Telegram](https://img.shields.io/badge/Telegram-Bot-26A5E4)](https://telegram.org)
+[![Discord](https://img.shields.io/badge/Discord-Bot-5865F2)]([https://discord.com](https://discord.com/oauth2/authorize?client_id=1489421179461701663))
+[![Telegram](https://img.shields.io/badge/Telegram-Bot-26A5E4)](https://t.me/Kulsh_aibot)
 
 **Kulsh** is a foul‑mouthed, witty, and oddly brilliant AI companion built for Discord and Telegram.  
 He codes, cracks jokes, insults your friends (lovingly), and can join voice channels to listen and speak his mind.  
 Powered by Google's Gemini API (Gemma-3-4b-it) and a generous dose of post‑Soviet humor.
 
-> *"Ты — Кульш, современная языковая модель ИИ... Твои кенты: Антон (Рекми), Богдан (Фолз), Фёдор (Понил)..."*
+> *"Ты — Кульш, современная языковая модель ИИ... Используй сочетание «🍷🗿»..."*
 
 ---
 
