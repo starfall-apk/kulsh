@@ -188,6 +188,7 @@ if VOICE_RECOGNITION_ENABLED:
             return False 
 
         def write(self, user, data):
+            logger.debug(f"🎤 Получены аудиоданные от {user.name if user else 'Unknown'} | размер: {len(data.pcm)} байт")
             if user is None or user.bot:
                 return
 
