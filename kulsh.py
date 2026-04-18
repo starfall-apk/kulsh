@@ -510,6 +510,6 @@ async def main():
 if __name__ == "__main__":
     logger.info(">>> Кульш в эфире. Врубай микрофоны.")
     try:
-		asyncio.run(main())
+        asyncio.run(main())
     except KeyboardInterrupt:
-		pass
+        pass
