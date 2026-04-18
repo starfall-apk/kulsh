@@ -177,21 +177,47 @@ if VOICE_RECOGNITION_ENABLED:
 
         async def wait_and_process(self, user):
             try:
-                await asyncio.sleep(1.2) # Ждем секунду тишины
+                await asyncio.sleep(1.2) # Ждем секунду тишины после фразы
                 if user.id in self.buffers:
                     pcm_data = bytes(self.buffers.pop(user.id))
                     text = await self.recognize_pcm(pcm_data)
                     
-                    if text:
-                        print(f"Кульш распознал от {user.name}: {text}")
-                        # Расширенный список имен, на которые Кульш откликнется
-                        trigger_names = ["кульш", "кулш", "куль", "hello", "_____", "кулиш", "Кульша", "привет", "куш"]
-                        if any(name in text.lower() for name in trigger_names):
+                    if text and len(text.strip()) > 1: # Если распознано хоть что-то осмысленное
+                        # Теперь мы не ищем слово "кульш", а просто кидаем кубик
+                        chance = random.random() # Число от 0.0 до 1.0
+                        
+                        print(f"Кульш услышал: {text} | Шанс: {chance:.2f}")
+
+                        if chance <= 0.65: # 65% вероятности
+                            print(f"ОТВЕЧАЕМ (шанс выпал)")
                             await self.handle_voice_command(user, text)
+                        else:
+                            print(f"ИГНОРИМ (шанс не выпал)")
+                            
             except asyncio.CancelledError:
                 pass
             except Exception as e:
                 print(f"Ошибка обработки голоса: {e}")
+
+        async def handle_voice_command(self, user, text):
+            # Больше не вырезаем имя, просто берем текст как есть
+            clean_text = text.strip()
+            
+            memory = get_chat_memory(f"ds_guild_{self.guild.id}")
+            memory.append(f"{user.name} (голос): {clean_text}")
+
+            # Отправляем в Gemini
+            answer = await ask_ai_async(clean_text, history=list(memory))
+            memory.append(f"Кульш: {answer}")
+
+            # Пишем в текстовый канал, чтобы было видно, что он ответил
+            if self.text_channel:
+                await self.text_channel.send(f"**{user.display_name}**, {answer}")
+
+            # И проговариваем голосом
+            vc = self.guild.voice_client
+            if vc:
+                await say_in_voice(vc, answer)
 
         async def recognize_pcm(self, pcm_data: bytes):
             try:
@@ -215,7 +241,7 @@ if VOICE_RECOGNITION_ENABLED:
 
         async def handle_voice_command(self, user, text):
             # Вырезаем имя бота из запроса
-            clean_text = re.sub(r'(?i)(кульш|кулш|куль|гуль|куш)', '', text).strip() or "че надо?"
+            clean_text = re.sub(r'(?i)(кульш|кулш)', '', text).strip() or "че надо?"
             
             memory = get_chat_memory(f"ds_guild_{self.guild.id}")
             memory.append(f"{user.name} (голос): {clean_text}")
