@@ -92,4 +92,4 @@ If you have any technical questions, suggestions, or just want to chat about the
 
 Project Link: [https://github.com/starfall-apk/kulsh](https://github.com/starfall-apk/kulsh)
 ## 📜 License
-This project is licensed under the MIT License - see the LICENSE file for details.
+This project is licensed under the MIT License - see the [LICENSE file](LICENSE) for details.
