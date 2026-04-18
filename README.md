@@ -6,44 +6,82 @@
 [![Telegram](https://img.shields.io/badge/Telegram-Bot-26A5E4)](https://telegram.org)
 
 **Kulsh** is a foul‑mouthed, witty, and oddly brilliant AI companion built for Discord and Telegram.  
-He codes, cracks jokes, insults your friends (lovingly), and can even join voice channels to speak his mind.  
-Powered by Google's Gemini API and a generous dose of post‑Soviet humor.
+He codes, cracks jokes, insults your friends (lovingly), and can join voice channels to listen and speak his mind.  
+Powered by Google's Gemini API (Gemma-3-4b-it) and a generous dose of post‑Soviet humor.
 
-> *"Ты — Кульш, современная ядыковая модель ИИ... Твои кенты: Антон (Рекми), Богдан (Фолз), Фёдор (Понил)..."*
+> *"Ты — Кульш, современная языковая модель ИИ... Твои кенты: Антон (Рекми), Богдан (Фолз), Фёдор (Понил)..."*
 
 ---
 
 ## ✨ Features
 
-- **Dual Platform** – Works simultaneously in **Telegram** groups and **Discord** servers.
-- **Contextual Memory** – Remembers the last 5 interactions *per chat/channel*.
-- **AI Personality** – Speaks like a sarcastic Russian dude from your homies' chat.
-- **Image Generation (Random)** – Sends a random themed image with a custom AI‑generated caption when asked for a "photo".
-- **Discord Voice Integration**  
-  - `кульш зайди в войс <channel_id>` – Joins your voice channel.  
-  - `кульш скажи в войсе <text>` – Speaks the text aloud using neural TTS.  
-  - `кульш выйди из войса` – Leaves the channel.
-- **Auto‑Posting** – Every 1–4 hours, Kulsh drops a random thought or meme into the configured Telegram chat.
-- **Fully Async** – Built with `asyncio`, `aiohttp`, and `discord.py` 2.x for smooth performance.
+- **Dual Platform** – Fully asynchronous operation across **Telegram** and **Discord** simultaneously.
+- **Advanced Voice Interaction (Discord Exclusive)** - **Speech Recognition:** Uses a custom `AudioSink` to listen to users. It has a **65% probability** to respond to any detected speech.
+  - **Neural TTS:** High-fidelity voice synthesis via `edge-tts` (Microsoft Neural voices).
+  - **Silence Detection:** Intelligent buffering that waits for a pause in speech before processing.
+- **Contextual Memory** – Maintains a rolling context window (last 10 interactions) per chat to ensure coherent long-term conversations.
+- **Vision Support** – Capable of analyzing images and providing sarcastic captions or technical descriptions.
+- **AI Personality** – Custom-tuned system prompt for a unique "homie" persona that bypasses standard AI formalisms.
+- **Remote Administration** – Built-in logging system that allows owners to retrieve `bot.log` files and live stdout directly via chat commands.
+- **Automated Engagement** – Periodic auto-posting of "random thoughts" to keep the chat alive.
 
 ---
 
 ## 🛠️ Tech Stack
 
-- **Python 3.9+**
-- `aiogram` / `pyTelegramBotAPI` (async) – Telegram interface
-- `discord.py` – Discord interface
-- `aiohttp` – Async HTTP requests
-- `edge-tts` – Text‑to‑speech (Microsoft Edge voices)
-- `FFmpeg` – Audio playback in Discord
-- **Gemini API** (Google Generative Language) – The brain
+- **Core:** Python 3.9+
+- **AI Engine:** Google Generative AI (Gemma 3 Flash)
+- **Frameworks:** `pyTelegramBotAPI` (Async), `discord.py` 2.x
+- **Voice Processing:** `discord-ext-voice-receive`, `SpeechRecognition`, `pydub`
+- **Audio/Networking:** `FFmpeg`, `aiohttp`, `edge-tts`
+- **Logging:** `RotatingFileHandler` for automated log management.
 
 ---
 
-## 📦 Installation
+## 📦 Installation & Setup
 
 ### 1. Clone the repository
-
 ```bash
-git clone https://github.com/starfall-apk/kulsh.git
+git clone [https://github.com/starfall-apk/kulsh.git](https://github.com/starfall-apk/kulsh.git)
 cd kulsh
+
+```
+### 2. Install Dependencies
+Ensure you have **FFmpeg** installed on your host system (Linux: sudo apt install ffmpeg).
+```bash
+pip install -r requirements.txt
+
+```
+### 3. Environment Configuration
+The bot requires a .env file to function. Create a file named .env in the root folder and populate it:
+```env
+# API Keys
+TG_TOKEN=your_telegram_bot_token
+DISCORD_TOKEN=your_discord_bot_token
+AI_KEY=your_google_gemini_api_key
+
+# IDs & Configuration
+TG_TARGET_CHAT=your_target_group_id
+DS_ALLOWED_GUILD_ID=your_discord_server_id
+OWNER_IDS=12345678,87654321  # Comma-separated user IDs for log access
+
+```
+### 4. Launch
+```bash
+python kulsh.py
+
+```
+## 🎮 Commands
+ * кульш [текст] — General interaction.
+ * кульш зайди в войс — Summons the bot to your voice channel (starts listening).
+ * кульш выйди — Disconnects the bot from voice.
+ * кульш логи — (Authorized only) Sends the current bot.log file to the chat.
+## 👥 Credits & Special Thanks
+### Development Team
+ * **starfall-apk (st6rf9ll)** — Lead Author, Creator & AI Logic Architect (formerly *downfalls2920*).
+ * **pomidorka1515 (pomi)** — Co-author & Infrastructure (Bot Hosting & Linux Optimization).
+### Special Thanks
+ * **"Секретный чат"** — The legendary Discord server where Kulsh was born, tested, and raised.
+ * **Kulsh** — My close friend whose name and personality inspired the creation of this bot.
+## 📜 License
+This project is licensed under the MIT License - see the LICENSE file for details.
