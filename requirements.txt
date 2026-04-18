@@ -1,8 +1,22 @@
-aiohttp
-telebot
-discord
-dotenv
-edge-tts
-ffmpeg
-pynacl
+# --- Core & Async I/O ---
+aiohttp>=3.9.0
+python-dotenv>=1.0.0
+
+# --- Telegram API ---
+# Используется для AsyncTeleBot
+pyTelegramBotAPI>=4.15.0
+
+# --- Discord API & Voice ---
+discord.py>=2.3.0
+PyNaCl>=1.5.0
 davey
+# Специальное расширение для прослушивания голосовых каналов
+discord-ext-voice-recv>=0.3.0
+
+# --- Voice Recognition & Audio Processing ---
+SpeechRecognition>=3.10.0
+pydub>=0.25.1
+FFmpeg
+
+# --- Text-to-Speech (Neural Voice) ---
+edge-tts>=7.0.0
