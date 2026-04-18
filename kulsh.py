@@ -365,7 +365,8 @@ async def on_message(message):
     chat_id = f"ds_guild_{message.guild.id}"
     memory = get_chat_memory(chat_id)
     content_lower = message.content.lower()
-        # === КОМАНДА ДЛЯ ЛОГОВ ===
+    
+    # === КОМАНДА ДЛЯ ЛОГОВ ===
     if "кульш логи" in content_lower:
         # Можешь добавить проверку на свой ID, чтобы кто попало не читал логи
         # if message.author.id != ТВОЙ_ID: return 
@@ -416,50 +417,6 @@ async def on_message(message):
             logger.error(f"Ошибка подключения к войсу: {e}")
             await message.reply("не могу зайти, консоль пишет ошибку.")
         return
-
-    # --- ГОЛОСОВЫЕ КОМАНДЫ (обновлены под voice_recv) ---
-#    if "кульш зайди в войс" in content_lower:
-        # Попытка найти голосовой канал автора сообщения
-#        voice_channel = None
-#        if message.author.voice and message.author.voice.channel:
-#            voice_channel = message.author.voice.channel
-#        else:
-            # Проверяем, не указан ли ID канала в сообщении
-#            voice_id_match = re.search(r'войс\s+(\d+)', content_lower)
-#            if voice_id_match:
-#                channel_id = int(voice_id_match.group(1))
-#                voice_channel = ds_bot.get_channel(channel_id)
-#                if voice_channel is None:
-#                    try:
-#                        voice_channel = await ds_bot.fetch_channel(channel_id)
-#                    except discord.NotFound:
-#                        await message.reply("вообще не вижу такого канала. ты точно айди ВОЙСА скинул, а не чата?")
-#                        return
-#            else:
-#                await message.reply("ты не в войсе, и айди канала не указал. куда заходить?")
-#                return
-
-#        if not isinstance(voice_channel, discord.VoiceChannel):
-#            await message.reply("это не голосовой канал, я туда не пойду")
-#            return
-
-        # Подключаемся с поддержкой приёма аудио
-#        try:
-#            vc = await voice_channel.connect(cls=voice_recv.VoiceRecvClient)
-#            voice_text_channels[message.guild.id] = message.channel
-#            await message.reply(f"залетел в {voice_channel.name} 🍷🗿")
-
-#            if VOICE_RECOGNITION_ENABLED:
-#                sink = RecognitionSink(ds_bot, message.guild, message.channel)
-#                vc.listen(sink)
-                # Сохраняем sink для последующей очистки при выходе
-#                setattr(vc, "_recognition_sink", sink)
-#            else:
-#                await message.reply("⚠️ Распознавание речи отключено (обнови discord.py до 2.0+)")
-#        except Exception as e:
-#            logger.info(f"Ошибка подключения к голосовому каналу: {e}")
-#            await message.reply(f"не могу зайти, консоль пишет ошибку: `{e}`")
-#        return
 
     if "кульш скажи в войсе" in content_lower:
         vc = message.guild.voice_client
