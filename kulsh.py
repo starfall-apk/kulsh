@@ -1,10 +1,17 @@
+# Kulsh GPT | v2.11.5
+# by (main author):
+	# starfall-apk
+# coauthor & bot hosting:
+	# pomidorka1515
+
+
 import asyncio
 import aiohttp
 import telebot
 from telebot.async_telebot import AsyncTeleBot
 import discord
 from discord.ext import tasks
-from discord.ext import voice_recv  # <-- НОВОЕ: discord-ext-voice-receive
+from discord.ext import voice_recv
 import re
 import random
 from collections import deque
@@ -14,6 +21,29 @@ import os
 from dotenv import load_dotenv
 import threading
 import time
+
+import logging
+from logging.handlers import RotatingFileHandler
+
+# Создаем логгер
+logger = logging.getLogger('KulshBot')
+logger.setLevel(logging.DEBUG)
+
+# Формат логов: [Время] | [Уровень] | Сообщение
+log_formatter = logging.Formatter('%(asctime)s | %(levelname)s | %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+
+# Пишем в файл (максимум 5 МБ, храним 1 старый бэкап)
+file_handler = RotatingFileHandler('bot.log', maxBytes=5*1024*1024, backupCount=1, encoding='utf-8')
+file_handler.setFormatter(log_formatter)
+
+# Выводим в консоль
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(log_formatter)
+
+logger.addHandler(file_handler)
+logger.addHandler(console_handler)
+
+# Теперь вместо logger.info() используем logger.info(), logger.warning() или logger.error()
 
 # --- КОНФИГУРАЦИЯ ---
 load_dotenv()
@@ -33,7 +63,7 @@ try:
     VOICE_ENABLED = True
 except ImportError:
     VOICE_ENABLED = False
-    print("⚠️ edge_tts или FFmpeg не найдены, синтез речи отключен")
+    logger.info("⚠️ edge_tts или FFmpeg не найдены, синтез речи отключен")
 
 if VOICE_RECOGNITION_ENABLED:
     try:
@@ -41,9 +71,9 @@ if VOICE_RECOGNITION_ENABLED:
         from pydub import AudioSegment
     except ImportError:
         VOICE_RECOGNITION_ENABLED = False
-        print("⚠️ speech_recognition или pydub не найдены, распознавание речи отключено")
+        logger.info("⚠️ speech_recognition или pydub не найдены, распознавание речи отключено")
 else:
-    print(f"⚠️ У вас discord.py {discord.__version__}. Для распознавания голоса нужна версия 2.0+. Голосовое распознавание будет отключено.")
+    logger.info(f"⚠️ У вас discord.py {discord.__version__}. Для распознавания голоса нужна версия 2.0+. Голосовое распознавание будет отключено.")
 
 # Хранилища
 chat_memories = {}
@@ -108,10 +138,10 @@ async def ask_ai_async(prompt, context_type="default", history=None, image_bytes
                 if 'candidates' in data and data['candidates']:
                     return data['candidates'][0]['content']['parts'][0]['text']
                 else:
-                    print(f"Gemini API error: {data}")
+                    logger.info(f"Gemini API error: {data}")
                     return "не шарю че на картинке, мутная какая-то 🍷🗿"
     except Exception as e:
-        print(f"Ошибка API: {e}")
+        logger.info(f"Ошибка API: {e}")
         return "пошел в пизду🍷🗿"
 
 # --- ЛОГИКА ФОТО ---
@@ -129,14 +159,17 @@ async def say_in_voice(voice_client, text):
     if not VOICE_ENABLED or not voice_client:
         return
     try:
+        # Уникальное имя файла для каждого сервера
+        filename = f"temp_voice_{voice_client.guild.id}.mp3"
         communicate = edge_tts.Communicate(text, "uk-UA-OstapNeural")
-        await communicate.save("temp_voice.mp3")
+        await communicate.save(filename)
+        
         if voice_client.is_playing():
             voice_client.stop()
-        # Используем FFmpegPCMAudio из discord.py
-        voice_client.play(discord.FFmpegPCMAudio("temp_voice.mp3"))
+            
+        voice_client.play(discord.FFmpegPCMAudio(filename))
     except Exception as e:
-        print(f"Ошибка TTS: {e}")
+        logger.error(f"Ошибка TTS: {e}")
 
 # --- НОВОЕ: РАСПОЗНАВАНИЕ РЕЧИ ЧЕРЕЗ discord-ext-voice-receive ---
 
@@ -194,22 +227,23 @@ if VOICE_RECOGNITION_ENABLED:
                 return
                 
             pcm_data = bytes(self.buffers.pop(user.id))
-            print(f"DEBUG: Starting recognition for {user.name}...")
+            logger.info(f"DEBUG: Starting recognition for {user.name}...")
             
             text = await self.recognize_pcm(pcm_data)
             
             if text:
-                print(f"DEBUG: Recognized text: {text}")
+                logger.info(f"DEBUG: Recognized text: {text}")
                 chance = random.random()
                 if chance <= 0.65:
-                    print(f"DEBUG: 65% Chance HIT ({chance:.2f}). Responding...")
+                    logger.info(f"DEBUG: 65% Chance HIT ({chance:.2f}). Responding...")
                     await self.handle_voice_command(user, text)
                 else:
-                    print(f"DEBUG: 65% Chance MISS ({chance:.2f}). Ignoring.")
+                    logger.info(f"DEBUG: 65% Chance MISS ({chance:.2f}). Ignoring.")
             else:
-                print(f"DEBUG: Recognition returned EMPTY text (maybe just noise).")
+                logger.info(f"DEBUG: Recognition returned EMPTY text (maybe just noise).")
 
-        async def recognize_pcm(self, pcm_data: bytes):
+            def _sync_recognize(self, pcm_data: bytes):
+            """Синхронная функция, которая работает в отдельном потоке"""
             try:
                 audio = AudioSegment(
                     data=pcm_data,
@@ -225,11 +259,16 @@ if VOICE_RECOGNITION_ENABLED:
                 with sr.AudioFile(wav_io) as source:
                     audio_data = self.recognizer.record(source)
                 
-                # Попробуем распознать
                 return self.recognizer.recognize_google(audio_data, language="ru-RU")
-            except Exception as e:
-                print(f"ERROR during recognition: {e}")
+            except sr.UnknownValueError:
                 return None
+            except Exception as e:
+                logger.error(f"Ошибка во время распознавания аудио: {e}")
+                return None
+
+        async def recognize_pcm(self, pcm_data: bytes):
+            # Отправляем тяжелую задачу в отдельный поток, чтобы не вешать бота
+            return await asyncio.to_thread(self._sync_recognize, pcm_data)
 
         async def handle_voice_command(self, user, text):
             memory = get_chat_memory(f"ds_guild_{self.guild.id}")
@@ -301,7 +340,7 @@ async def handle_tg_photo(message):
         memory.append(f"Кульш: {answer}")
         await tg_bot.reply_to(message, answer)
     except Exception as e:
-        print(f"Ошибка обработки фото в TG: {e}")
+        logger.info(f"Ошибка обработки фото в TG: {e}")
         await tg_bot.reply_to(message, "не вижу фотку, битая чтоли")
 
 # --- DISCORD ---
@@ -311,10 +350,10 @@ ds_bot = discord.Client(intents=intents)
 
 @ds_bot.event
 async def on_ready():
-    print(f'Discord бот {ds_bot.user} запущен')
-    print(f'Версия discord.py: {discord.__version__}')
+    logger.info(f'Discord бот {ds_bot.user} запущен')
+    logger.info(f'Версия discord.py: {discord.__version__}')
     if not VOICE_RECOGNITION_ENABLED:
-        print("ℹ️ Распознавание голоса отключено (требуется discord.py 2.0+ и библиотеки)")
+        logger.info("ℹ️ Распознавание голоса отключено (требуется discord.py 2.0+ и библиотеки)")
 
 @ds_bot.event
 async def on_message(message):
@@ -326,50 +365,101 @@ async def on_message(message):
     chat_id = f"ds_guild_{message.guild.id}"
     memory = get_chat_memory(chat_id)
     content_lower = message.content.lower()
+        # === КОМАНДА ДЛЯ ЛОГОВ ===
+    if "кульш логи" in content_lower:
+        # Можешь добавить проверку на свой ID, чтобы кто попало не читал логи
+        # if message.author.id != ТВОЙ_ID: return 
+        
+        try:
+            with open('bot.log', 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+            
+            # Берем последние 20 строк
+            tail = "".join(lines[-20:])
+            if not tail.strip():
+                tail = "Логи пусты."
+                
+            msg = f"Вот логи сервера, босс:\n```text\n{tail}\n```"
+            await message.reply(msg, file=discord.File('bot.log'))
+            logger.info(f"Пользователь {message.author.name} запросил логи.")
+        except Exception as e:
+            await message.reply(f"Не смог прочитать файл логов. Ошибка: `{e}`")
+        return
 
-    # --- ГОЛОСОВЫЕ КОМАНДЫ (обновлены под voice_recv) ---
+    # === БЕЗОПАСНЫЙ ВХОД В ВОЙС ===
     if "кульш зайди в войс" in content_lower:
-        # Попытка найти голосовой канал автора сообщения
         voice_channel = None
         if message.author.voice and message.author.voice.channel:
             voice_channel = message.author.voice.channel
         else:
-            # Проверяем, не указан ли ID канала в сообщении
-            voice_id_match = re.search(r'войс\s+(\d+)', content_lower)
-            if voice_id_match:
-                channel_id = int(voice_id_match.group(1))
-                voice_channel = ds_bot.get_channel(channel_id)
-                if voice_channel is None:
-                    try:
-                        voice_channel = await ds_bot.fetch_channel(channel_id)
-                    except discord.NotFound:
-                        await message.reply("вообще не вижу такого канала. ты точно айди ВОЙСА скинул, а не чата?")
-                        return
-            else:
-                await message.reply("ты не в войсе, и айди канала не указал. куда заходить?")
-                return
-
-        if not isinstance(voice_channel, discord.VoiceChannel):
-            await message.reply("это не голосовой канал, я туда не пойду")
+            await message.reply("ты не в войсе, куда заходить?")
             return
 
-        # Подключаемся с поддержкой приёма аудио
         try:
-            vc = await voice_channel.connect(cls=voice_recv.VoiceRecvClient)
+            # Проверяем, не сидит ли бот уже в каком-то войсе на этом сервере
+            vc = message.guild.voice_client
+            if vc and vc.is_connected():
+                await vc.move_to(voice_channel)
+                logger.info(f"Переместился в канал {voice_channel.name}")
+            else:
+                vc = await voice_channel.connect(cls=voice_recv.VoiceRecvClient)
+                logger.info(f"Подключился к каналу {voice_channel.name}")
+
             voice_text_channels[message.guild.id] = message.channel
             await message.reply(f"залетел в {voice_channel.name} 🍷🗿")
 
             if VOICE_RECOGNITION_ENABLED:
                 sink = RecognitionSink(ds_bot, message.guild, message.channel)
                 vc.listen(sink)
-                # Сохраняем sink для последующей очистки при выходе
                 setattr(vc, "_recognition_sink", sink)
-            else:
-                await message.reply("⚠️ Распознавание речи отключено (обнови discord.py до 2.0+)")
         except Exception as e:
-            print(f"Ошибка подключения к голосовому каналу: {e}")
-            await message.reply(f"не могу зайти, консоль пишет ошибку: `{e}`")
+            logger.error(f"Ошибка подключения к войсу: {e}")
+            await message.reply("не могу зайти, консоль пишет ошибку.")
         return
+
+    # --- ГОЛОСОВЫЕ КОМАНДЫ (обновлены под voice_recv) ---
+#    if "кульш зайди в войс" in content_lower:
+        # Попытка найти голосовой канал автора сообщения
+#        voice_channel = None
+#        if message.author.voice and message.author.voice.channel:
+#            voice_channel = message.author.voice.channel
+#        else:
+            # Проверяем, не указан ли ID канала в сообщении
+#            voice_id_match = re.search(r'войс\s+(\d+)', content_lower)
+#            if voice_id_match:
+#                channel_id = int(voice_id_match.group(1))
+#                voice_channel = ds_bot.get_channel(channel_id)
+#                if voice_channel is None:
+#                    try:
+#                        voice_channel = await ds_bot.fetch_channel(channel_id)
+#                    except discord.NotFound:
+#                        await message.reply("вообще не вижу такого канала. ты точно айди ВОЙСА скинул, а не чата?")
+#                        return
+#            else:
+#                await message.reply("ты не в войсе, и айди канала не указал. куда заходить?")
+#                return
+
+#        if not isinstance(voice_channel, discord.VoiceChannel):
+#            await message.reply("это не голосовой канал, я туда не пойду")
+#            return
+
+        # Подключаемся с поддержкой приёма аудио
+#        try:
+#            vc = await voice_channel.connect(cls=voice_recv.VoiceRecvClient)
+#            voice_text_channels[message.guild.id] = message.channel
+#            await message.reply(f"залетел в {voice_channel.name} 🍷🗿")
+
+#            if VOICE_RECOGNITION_ENABLED:
+#                sink = RecognitionSink(ds_bot, message.guild, message.channel)
+#                vc.listen(sink)
+                # Сохраняем sink для последующей очистки при выходе
+#                setattr(vc, "_recognition_sink", sink)
+#            else:
+#                await message.reply("⚠️ Распознавание речи отключено (обнови discord.py до 2.0+)")
+#        except Exception as e:
+#            logger.info(f"Ошибка подключения к голосовому каналу: {e}")
+#            await message.reply(f"не могу зайти, консоль пишет ошибку: `{e}`")
+#        return
 
     if "кульш скажи в войсе" in content_lower:
         vc = message.guild.voice_client
@@ -417,7 +507,7 @@ async def on_message(message):
                     await say_in_voice(message.guild.voice_client, answer)
                 await message.reply(answer)
             except Exception as e:
-                print(f"Ошибка обработки изображения в DS: {e}")
+                logger.info(f"Ошибка обработки изображения в DS: {e}")
                 await message.reply("не могу глянуть фотку, сломалась")
         return
 
@@ -448,7 +538,7 @@ async def random_post_loop():
         try: 
             await tg_bot.send_message(TG_TARGET_CHAT, answer)
         except Exception as e:
-            print(f"Ошибка рандомного поста: {e}")
+            logger.info(f"Ошибка рандомного поста: {e}")
 
 async def main():
     asyncio.create_task(random_post_loop())
@@ -458,5 +548,5 @@ async def main():
     )
 
 if __name__ == "__main__":
-    print(">>> Кульш в эфире. Врубай микрофоны.")
+    logger.info(">>> Кульш в эфире. Врубай микрофоны.")
     asyncio.run(main())
