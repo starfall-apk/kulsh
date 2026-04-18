@@ -83,5 +83,13 @@ python kulsh.py
 ### Special Thanks
  * **"Секретный чат"** — The legendary Discord server where Kulsh was born, tested, and raised.
  * **Kulsh** — My close friend whose name and personality inspired the creation of this bot.
+## 📞 Contact & Support
+
+If you have any technical questions, suggestions, or just want to chat about the project:
+
+* **starfall-apk (Lead Dev):** [Telegram](https://t.me/wf9ll) | Discord: `st6rf9ll`
+* **pomidorka1515 (Hosting):** [Telegram](https://t.me/pomidorka_1515) | Discord: `pomidorka1515`
+
+Project Link: [https://github.com/starfall-apk/kulsh](https://github.com/starfall-apk/kulsh)
 ## 📜 License
 This project is licensed under the MIT License - see the LICENSE file for details.
