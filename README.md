@@ -42,7 +42,7 @@ Powered by Google's Gemini API (Gemma-3-4b-it) and a generous dose of post‑Sov
 
 ### 1. Clone the repository
 ```bash
-git clone [https://github.com/starfall-apk/kulsh.git](https://github.com/starfall-apk/kulsh.git)
+git clone https://github.com/starfall-apk/kulsh.git
 cd kulsh
 
 ```
