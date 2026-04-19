@@ -91,5 +91,6 @@ If you have any technical questions, suggestions, or just want to chat about the
 * **pomidorka1515 (Hosting):** [Telegram](https://t.me/pomidorka_1515) | Discord: `pomidorka1515`
 
 Project Link: [https://github.com/starfall-apk/kulsh](https://github.com/starfall-apk/kulsh)
+Web Version: [https://kulsh-ai.web.app/](https://kulsh-ai.web.app/)
 ## 📜 License
 This project is licensed under the MIT License - see the [LICENSE file](LICENSE) for details.
