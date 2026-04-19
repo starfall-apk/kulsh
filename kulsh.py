@@ -216,13 +216,6 @@ if VOICE_RECOGNITION_ENABLED:
                 self.processing_tasks[user.id].cancel()
             asyncio.run_coroutine_threadsafe(self.process_now(user), self.bot.loop)
 
-        async def wait_and_process(self, user):
-            try:
-                await asyncio.sleep(1.5) # Ждем 1.5 секунды ТИШИНЫ
-                await self.process_now(user)
-            except asyncio.CancelledError:
-                pass
-
         async def process_now(self, user):
             if user.id not in self.buffers or len(self.buffers[user.id]) < 1000:
                 return
@@ -243,29 +236,43 @@ if VOICE_RECOGNITION_ENABLED:
             else:
                 logger.info(f"DEBUG: Recognition returned EMPTY text (maybe just noise).")
 
-        def _sync_recognize(self, pcm_data: bytes):
-            """Синхронная функция, которая работает в отдельном потоке"""
+                def _sync_recognize(self, pcm_data):
             try:
-                audio = AudioSegment(
-                    data=pcm_data,
-                    sample_width=2,
-                    frame_rate=48000,
-                    channels=2
-                ).set_channels(1).set_frame_rate(16000)
-
+                audio = AudioSegment(data=pcm_data, sample_width=2, frame_rate=48000, channels=2).set_channels(1).set_frame_rate(16000)
                 wav_io = BytesIO()
                 audio.export(wav_io, format="wav")
                 wav_io.seek(0)
-
                 with sr.AudioFile(wav_io) as source:
-                    audio_data = self.recognizer.record(source)
-                
-                return self.recognizer.recognize_google(audio_data, language="ru-RU")
+                    return self.recognizer.recognize_google(self.recognizer.record(source), language="ru-RU")
             except sr.UnknownValueError:
+                logger.debug("Google не разобрал ни слова (тишина или шум).")
                 return None
             except Exception as e:
-                logger.error(f"Ошибка во время распознавания аудио: {e}")
+                # ТЕПЕРЬ МЫ УВИДИМ РЕАЛЬНУЮ ОШИБКУ
+                logger.error(f"КРИТИЧЕСКАЯ ОШИБКА РАСПОЗНАВАНИЯ: {e}")
                 return None
+
+        async def wait_and_process(self, user):
+            try:
+                await asyncio.sleep(1.5)
+                if user.id in self.buffers:
+                    pcm_data = bytes(self.buffers.pop(user.id))
+                    logger.debug(f"Тишина 1.5 сек. Отправляем {len(pcm_data)} байт на распознавание...")
+                    
+                    text = await asyncio.to_thread(self._sync_recognize, pcm_data)
+                    
+                    if text:
+                        logger.info(f"🎤 Распознано от {user.name}: '{text}'")
+                        if random.random() <= 0.65:
+                            logger.info("Шанс прокнул. Кульш думает над ответом...")
+                            await self.handle_voice_command(user, text)
+                        else:
+                            logger.info("Шанс НЕ прокнул. Кульш решил промолчать 🍷🗿")
+                    else:
+                        logger.debug("Распознанный текст пуст.")
+            except asyncio.CancelledError: 
+                pass
+
 
         async def recognize_pcm(self, pcm_data: bytes):
             # Отправляем тяжелую задачу в отдельный поток, чтобы не вешать бота
