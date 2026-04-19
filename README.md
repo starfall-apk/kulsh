@@ -1,7 +1,7 @@
 # Kulsh AI Bot 🍷🗿
 
 [![Python](https://img.shields.io/badge/Python-3.9%2B-blue)](https://python.org)
-[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![License](https://img.shields.io/badge/license-AGNU-3.0-green)](LICENSE)
 [![Discord](https://img.shields.io/badge/Discord-Bot-5865F2)]([https://discord.com](https://discord.com/oauth2/authorize?client_id=1489421179461701663))
 [![Telegram](https://img.shields.io/badge/Telegram-Bot-26A5E4)](https://t.me/Kulsh_aibot)
 
