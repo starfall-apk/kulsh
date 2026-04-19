@@ -92,5 +92,6 @@ If you have any technical questions, suggestions, or just want to chat about the
 
 Project Link: [https://github.com/starfall-apk/kulsh](https://github.com/starfall-apk/kulsh)
 Web Version: [https://kulsh-ai.web.app/](https://kulsh-ai.web.app/)
+
 ## 📜 License
 This project is licensed under the MIT License - see the [LICENSE file](LICENSE) for details.
