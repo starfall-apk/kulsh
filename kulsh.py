@@ -188,28 +188,29 @@ if VOICE_RECOGNITION_ENABLED:
             return False
 
         def write(self, user, data):
-            logger.debug(f"🎤 Получены аудиоданные от {user.name if user else 'Unknown'} | размер: {len(data.pcm)} байт")
-            if user is None or user.bot:
-                return
+            # Если юзер не определен сразу, пробуем всё равно записать данные
+            # Часто первые пакеты приходят как Unknown, пока Discord не пришлет SSRC-маппинг
+            user_id = user.id if user else "unknown_session"
+            user_name = user.name if user else "Аноним"
 
-            user_id = user.id
-            if user_id not in self.buffers:
+            if user and user.bot: return
+
+            if user_id not in self.buffers: 
                 self.buffers[user_id] = bytearray()
+                logger.debug(f"Начинаю запись потока от {user_name}")
 
             self.buffers[user_id].extend(data.pcm)
 
-            # Если накопили больше 15 секунд звука, принудительно обрабатываем
-            if len(self.buffers[user_id]) > 48000 * 2 * 2 * 15:
-                self.trigger_processing(user)
-                return
+            # Если накопили достаточно (например, больше 2 секунд)
+            # 48000 (частота) * 2 (байта) * 2 (канала) * 2 (секунды) = 384000 байт
+            if len(self.buffers[user_id]) > 380000:
+                if user_id in self.processing_tasks:
+                    self.processing_tasks[user_id].cancel()
+                
+                self.processing_tasks[user_id] = asyncio.run_coroutine_threadsafe(
+                    self.wait_and_process(user_id, user_name), self.bot.loop
+                )
 
-            # Перезапуск ожидания паузы
-            if user_id in self.processing_tasks:
-                self.processing_tasks[user_id].cancel()
-
-            self.processing_tasks[user_id] = asyncio.run_coroutine_threadsafe(
-                self.wait_and_process(user), self.bot.loop
-            )
 
         def trigger_processing(self, user):
             if user.id in self.processing_tasks:
