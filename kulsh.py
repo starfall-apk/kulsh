@@ -189,8 +189,6 @@ if VOICE_RECOGNITION_ENABLED:
             return False
 
         def write(self, user, data):
-            # Если юзер не определен сразу, пробуем всё равно записать данные
-            # Часто первые пакеты приходят как Unknown, пока Discord не пришлет SSRC-маппинг
             user_id = user.id if user else "unknown_session"
             user_name = user.name if user else "Аноним"
 
@@ -202,8 +200,6 @@ if VOICE_RECOGNITION_ENABLED:
 
             self.buffers[user_id].extend(data.pcm)
 
-            # Если накопили достаточно (например, больше 2 секунд)
-            # 48000 (частота) * 2 (байта) * 2 (канала) * 2 (секунды) = 384000 байт
             if len(self.buffers[user_id]) > 380000:
                 if user_id in self.processing_tasks:
                     self.processing_tasks[user_id].cancel()
@@ -211,7 +207,6 @@ if VOICE_RECOGNITION_ENABLED:
                 self.processing_tasks[user_id] = asyncio.run_coroutine_threadsafe(
                     self.wait_and_process(user_id, user_name), self.bot.loop
                 )
-
 
         def trigger_processing(self, user):
             if user.id in self.processing_tasks:
@@ -283,7 +278,6 @@ if VOICE_RECOGNITION_ENABLED:
                 pass
 
         async def recognize_pcm(self, pcm_data: bytes):
-            # Отправляем тяжелую задачу в отдельный поток, чтобы не вешать бота
             return await asyncio.to_thread(self._sync_recognize, pcm_data)
 
         async def handle_voice_command(self, user, text):
@@ -305,7 +299,6 @@ if VOICE_RECOGNITION_ENABLED:
                 task.cancel()
             self.buffers.clear()
 else:
-    # Заглушка, если распознавание отключено
     class RecognitionSink:
         pass
 
@@ -318,16 +311,22 @@ async def handle_tg_text(message):
     memory = get_chat_memory(chat_id)
     text = message.text
 
-    if re.search(r'(?i)\bкульш\b', text):
+    # Проверка, является ли сообщение ответом на сообщение бота
+    is_reply_to_bot = (message.reply_to_message and 
+                       message.reply_to_message.from_user.id == tg_bot.user.id)
+
+    # Если это ответ боту ИЛИ содержит обращение "кульш"
+    if is_reply_to_bot or re.search(r'(?i)\bкульш\b', text):
         await tg_bot.send_chat_action(message.chat.id, 'typing')
         if wants_photo(text):
             photo_url = await get_random_photo_url()
             caption = await ask_ai_async(None, context_type="caption")
             await tg_bot.send_photo(message.chat.id, photo_url, caption=caption, reply_to_message_id=message.message_id)
         else:
-            clean_text = re.sub(r'(?i)[,.\s]*кульш[,.\s]*', ' ', text).strip()
-            answer = await ask_ai_async(clean_text or "че надо?", history=list(memory))
-            memory.append(f"Пользователь: {clean_text}")
+            # Передаём текст БЕЗ удаления "кульш", чтобы сохранить контекст
+            prompt = text.strip() or "че надо?"
+            answer = await ask_ai_async(prompt, history=list(memory))
+            memory.append(f"Пользователь: {text}")
             memory.append(f"Кульш: {answer}")
             await tg_bot.reply_to(message, answer)
     else:
@@ -339,7 +338,11 @@ async def handle_tg_photo(message):
     memory = get_chat_memory(chat_id)
     caption = message.caption or ""
 
-    if not re.search(r'(?i)\bкульш\b', caption):
+    is_reply_to_bot = (message.reply_to_message and 
+                       message.reply_to_message.from_user.id == tg_bot.user.id)
+
+    # Обрабатываем, если ответ боту ИЛИ в подписи есть "кульш"
+    if not (is_reply_to_bot or re.search(r'(?i)\bкульш\b', caption)):
         memory.append(f"Пользователь: [изображение] {caption}")
         return
 
@@ -350,9 +353,10 @@ async def handle_tg_photo(message):
     try:
         image_bytes = await get_tg_image_bytes(tg_bot, file_id)
         mime_type = "image/jpeg"
-        clean_text = re.sub(r'(?i)[,.\s]*кульш[,.\s]*', ' ', caption).strip() or "че на фото?"
-        answer = await ask_ai_async(clean_text, history=list(memory), image_bytes=image_bytes, image_mime=mime_type)
-        memory.append(f"Пользователь: [изображение] {clean_text}")
+        # Передаём caption как есть, без вырезания
+        prompt = caption.strip() or "че на фото?"
+        answer = await ask_ai_async(prompt, history=list(memory), image_bytes=image_bytes, image_mime=mime_type)
+        memory.append(f"Пользователь: [изображение] {caption}")
         memory.append(f"Кульш: {answer}")
         await tg_bot.reply_to(message, answer)
     except Exception as e:
@@ -382,30 +386,29 @@ async def on_message(message):
     memory = get_chat_memory(chat_id)
     content_lower = message.content.lower()
 
-    # === КОМАНДА ДЛЯ ЛОГОВ ===
+    # Проверка, является ли сообщение ответом на сообщение бота
+    is_reply_to_bot = False
+    if message.reference and message.reference.resolved:
+        if isinstance(message.reference.resolved, discord.Message) and message.reference.resolved.author == ds_bot.user:
+            is_reply_to_bot = True
+
+    # === КОМАНДЫ (всегда требуют "кульш", даже если ответ) ===
     if "кульш логи" in content_lower:
-        # Можешь добавить проверку на свой ID, чтобы кто попало не читал логи
         if message.author.id not in [735217033867821098, 1193627300797878362]:
             await message.reply("ты кто бля")
             return
-
         try:
             with open('bot.log', 'r', encoding='utf-8') as f:
                 lines = f.readlines()
-
-            # Берем последние 20 строк
             tail = "".join(lines[-20:])
             if not tail.strip():
                 tail = "Логи пусты."
-
-            msg = f"Вот логи сервера, босс:\n```text\n{tail}\n```"
-            await message.reply(msg, file=discord.File('bot.log'))
+            await message.reply(f"Вот логи сервера, босс:\n```text\n{tail}\n```", file=discord.File('bot.log'))
             logger.info(f"Пользователь {message.author.name} запросил логи.")
         except Exception as e:
             await message.reply(f"Не смог прочитать файл логов. Ошибка: `{e}`")
         return
 
-    # === БЕЗОПАСНЫЙ ВХОД В ВОЙС ===
     if "кульш зайди в войс" in content_lower:
         voice_channel = None
         if message.author.voice and message.author.voice.channel:
@@ -413,9 +416,7 @@ async def on_message(message):
         else:
             await message.reply("ты не в войсе, куда заходить?")
             return
-
         try:
-            # Проверяем, не сидит ли бот уже в каком-то войсе на этом сервере
             vc = message.guild.voice_client
             if vc and vc.is_connected():
                 await vc.move_to(voice_channel)
@@ -423,10 +424,8 @@ async def on_message(message):
             else:
                 vc = await voice_channel.connect(cls=voice_recv.VoiceRecvClient)
                 logger.info(f"Подключился к каналу {voice_channel.name}")
-
             voice_text_channels[message.guild.id] = message.channel
             await message.reply(f"залетел в {voice_channel.name} 🍷🗿")
-
             if VOICE_RECOGNITION_ENABLED:
                 sink = RecognitionSink(ds_bot, message.guild, message.channel)
                 vc.listen(sink)
@@ -452,7 +451,6 @@ async def on_message(message):
     if "кульш выйди из войса" in content_lower:
         vc = message.guild.voice_client
         if vc:
-            # Очищаем sink, если он есть
             if hasattr(vc, "_recognition_sink"):
                 sink = getattr(vc, "_recognition_sink")
                 sink.cleanup()
@@ -464,19 +462,20 @@ async def on_message(message):
             await message.reply("так я и так не там")
         return
 
-    # Обработка изображений
+    # --- ОБРАБОТКА ИЗОБРАЖЕНИЙ И ТЕКСТА С УЧЁТОМ REPLY ---
     has_image = any(att.content_type and att.content_type.startswith('image/') for att in message.attachments)
     text_contains_kulsh = re.search(r'(?i)\bкульш\b', message.content)
 
-    if has_image and text_contains_kulsh:
+    # Изображения: отвечаем, если это ответ боту ИЛИ есть "кульш"
+    if has_image and (is_reply_to_bot or text_contains_kulsh):
         async with message.channel.typing():
             image_att = next(att for att in message.attachments if att.content_type.startswith('image/'))
             try:
                 image_bytes = await download_image_bytes(image_att.url)
                 mime_type = image_att.content_type or "image/jpeg"
-                clean_text = re.sub(r'(?i)[,.\s]*кульш[,.\s]*', ' ', message.content).strip() or "че на фото?"
-                answer = await ask_ai_async(clean_text, history=list(memory), image_bytes=image_bytes, image_mime=mime_type)
-                memory.append(f"{message.author.name}: [изображение] {clean_text}")
+                prompt = message.content.strip() or "че на фото?"
+                answer = await ask_ai_async(prompt, history=list(memory), image_bytes=image_bytes, image_mime=mime_type)
+                memory.append(f"{message.author.name}: [изображение] {message.content}")
                 memory.append(f"Кульш: {answer}")
                 if message.guild.voice_client:
                     await say_in_voice(message.guild.voice_client, answer)
@@ -486,23 +485,23 @@ async def on_message(message):
                 await message.reply("не могу глянуть фотку, сломалась")
         return
 
-    # Обычное текстовое общение
-    if text_contains_kulsh:
-        if wants_photo(message.content):
-            async with message.channel.typing():
+    # Текстовые сообщения: реагируем на reply или обращение "кульш"
+    if is_reply_to_bot or text_contains_kulsh:
+        async with message.channel.typing():
+            if wants_photo(message.content):
                 photo_url = await get_random_photo_url()
                 caption = await ask_ai_async(None, context_type="caption")
                 await message.reply(f"{caption}\n{photo_url}")
-        else:
-            async with message.channel.typing():
-                clean_text = re.sub(r'(?i)[,.\s]*кульш[,.\s]*', ' ', message.content).strip()
-                answer = await ask_ai_async(clean_text or "че?", history=list(memory))
-                memory.append(f"{message.author.name}: {clean_text}")
+            else:
+                prompt = message.content.strip() or "че?"
+                answer = await ask_ai_async(prompt, history=list(memory))
+                memory.append(f"{message.author.name}: {message.content}")
                 memory.append(f"Кульш: {answer}")
                 if message.guild.voice_client:
                     await say_in_voice(message.guild.voice_client, answer)
                 await message.reply(answer)
     else:
+        # Обычное сообщение – просто запоминаем для контекста
         memory.append(f"{message.author.name}: {message.content}")
 
 # --- LOOP & MAIN ---
