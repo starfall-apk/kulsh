@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.11.6
+# Kulsh GPT | v2.11.7
 # by (main author):
     # starfall-apk
 # coauthor & bot hosting:
@@ -600,7 +600,7 @@ async def series_reminder_loop():
         return
     while True:
         try:
-            prompt = "Попроси пользователя @1364588699589021890 отправить Фолзу сообщение в приложении TikTok чтобы продлить серию. Напиши одно короткое сообщение в стиле Кульша."
+            prompt = "Попроси Антона отправить Фолзу сообщение в приложении TikTok чтобы продлить серию. Напиши одно короткое сообщение в стиле Кульша."
             answer = await ask_ai_async(prompt=prompt, context_type="default")
             full_message = f"<@{DS_SERIES_TARGET_USER_ID}> {answer}"
             await channel.send(full_message)
@@ -610,12 +610,14 @@ async def series_reminder_loop():
         await asyncio.sleep(86400)  # 24 часа
 
 async def main():
+    # Рандомные посты в Телеграм можно запускать сразу
     asyncio.create_task(random_post_loop())
-    asyncio.create_task(series_reminder_loop())
-    await asyncio.gather(
-        tg_bot.polling(non_stop=True),
-        ds_bot.start(DISCORD_TOKEN)
-    )
+    
+    # Discord-бот должен быть запущен до того, как мы начнём ждать его готовности
+    async with ds_bot:
+        # Теперь wait_until_ready() внутри series_reminder_loop сработает корректно
+        asyncio.create_task(series_reminder_loop())
+        await tg_bot.polling(non_stop=True)
 
 if __name__ == "__main__":
     logger.info(">>> Кульш в эфире. Врубай микрофоны.")
