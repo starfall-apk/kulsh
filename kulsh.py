@@ -1,9 +1,8 @@
-# Kulsh GPT | v2.11.5
+# Kulsh GPT | v2.11.6
 # by (main author):
     # starfall-apk
 # coauthor & bot hosting:
     # pomidorka1515
-
 
 import asyncio
 import aiohttp
@@ -50,6 +49,11 @@ DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 AI_KEY = os.getenv('AI_KEY')
 TG_TARGET_CHAT = int(os.getenv('TG_TARGET_CHAT'))
 DS_ALLOWED_GUILD_ID = int(os.getenv('DS_ALLOWED_GUILD_ID'))
+
+# ID для серийного напоминания
+DS_SERIES_GUILD_ID = 1403828466075304036
+DS_SERIES_CHANNEL_ID = 1403828467014832270
+DS_SERIES_TARGET_USER_ID = 1364588699589021890
 
 # --- СПИСОК МОДЕЛЕЙ ДЛЯ АВТОМАТИЧЕСКОГО ПЕРЕКЛЮЧЕНИЯ ---
 MODEL_LIST = [
@@ -165,7 +169,7 @@ async def ask_ai_async(prompt=None, context_type="default", messages=None, image
     }
 
     # Цикл перебора моделей с экспоненциальной задержкой
-    max_attempts = 10  # максимум попыток
+    max_attempts = 10
     for attempt in range(max_attempts):
         model_name = MODEL_LIST[attempt % len(MODEL_LIST)]
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={AI_KEY}"
@@ -185,7 +189,6 @@ async def ask_ai_async(prompt=None, context_type="default", messages=None, image
                         await asyncio.sleep(2 ** attempt)
                         continue
                     elif status != 200:
-                        # Ошибка клиента или другая непредвиденная — не переключаем модели, сразу выход
                         text = await resp.text()
                         logger.error(f"Модель {model_name} вернула {status}: {text}. Прерываю попытки.")
                         return "Ошибка API. Попробуйте позже."
@@ -206,7 +209,6 @@ async def ask_ai_async(prompt=None, context_type="default", messages=None, image
             logger.error(f"Непредвиденная ошибка для {model_name}: {e}. Прерываю попытки.")
             return "Ошибка. Что-то пошло не так."
 
-    # Если все попытки исчерпаны
     return "Все модели недоступны, попробуй позже 🍷🗿"
 
 # --- ЛОГИКА ФОТО ---
@@ -346,7 +348,6 @@ if VOICE_RECOGNITION_ENABLED:
             memory = get_chat_memory(f"ds_guild_{self.guild.id}")
             memory.append(f"{user.name}: {text}")
 
-            # Передаём всю историю как messages
             messages = memory_to_messages(memory)
             answer = await ask_ai_async(messages=messages)
             memory.append(f"Кульш: {answer}")
@@ -451,6 +452,24 @@ async def on_message(message):
     if message.reference and message.reference.resolved:
         if isinstance(message.reference.resolved, discord.Message) and message.reference.resolved.author == ds_bot.user:
             is_reply_to_bot = True
+
+    # === КОМАНДА "Кульш серия" (ручная активация) ===
+    if "кульш серия" in content_lower:
+        async with message.channel.typing():
+            try:
+                prompt = "Попроси пользователя @1364588699589021890 отправить Фолзу сообщение в приложении TikTok чтобы продлить серию. Напиши одно короткое сообщение в стиле Кульша."
+                answer = await ask_ai_async(prompt=prompt, context_type="default")
+                target_channel = ds_bot.get_channel(DS_SERIES_CHANNEL_ID)
+                if target_channel:
+                    full_message = f"<@{DS_SERIES_TARGET_USER_ID}> {answer}"
+                    await target_channel.send(full_message)
+                    await message.reply("Напоминание отправлено в целевой канал 🍷🗿")
+                else:
+                    await message.reply("Целевой канал не найден, проверь ID.")
+            except Exception as e:
+                logger.error(f"Ошибка ручной отправки серии: {e}")
+                await message.reply(f"Ошибка: {e}")
+        return
 
     # === КОМАНДЫ ===
     if "кульш логи" in content_lower:
@@ -573,8 +592,26 @@ async def random_post_loop():
         except Exception as e:
             logger.info(f"Ошибка рандомного поста: {e}")
 
+async def series_reminder_loop():
+    await ds_bot.wait_until_ready()
+    channel = ds_bot.get_channel(DS_SERIES_CHANNEL_ID)
+    if not channel:
+        logger.error("Канал для напоминаний о серии не найден")
+        return
+    while True:
+        try:
+            prompt = "Попроси пользователя @1364588699589021890 отправить Фолзу сообщение в приложении TikTok чтобы продлить серию. Напиши одно короткое сообщение в стиле Кульша."
+            answer = await ask_ai_async(prompt=prompt, context_type="default")
+            full_message = f"<@{DS_SERIES_TARGET_USER_ID}> {answer}"
+            await channel.send(full_message)
+            logger.info("Ежедневное напоминание о серии отправлено")
+        except Exception as e:
+            logger.error(f"Ошибка отправки серийного напоминания: {e}")
+        await asyncio.sleep(86400)  # 24 часа
+
 async def main():
     asyncio.create_task(random_post_loop())
+    asyncio.create_task(series_reminder_loop())
     await asyncio.gather(
         tg_bot.polling(non_stop=True),
         ds_bot.start(DISCORD_TOKEN)
