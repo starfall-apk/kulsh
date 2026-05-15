@@ -609,15 +609,49 @@ async def series_reminder_loop():
             logger.error(f"Ошибка отправки серийного напоминания: {e}")
         await asyncio.sleep(86400)  # 24 часа
 
+# --- LOOP & MAIN ---
+async def random_post_loop():
+    while True:
+        await asyncio.sleep(random.randint(3600, 14400))
+        answer = await ask_ai_async(prompt=None, context_type="random")
+        try:
+            await tg_bot.send_message(TG_TARGET_CHAT, answer)
+        except Exception as e:
+            logger.info(f"Ошибка рандомного поста: {e}")
+
+async def series_reminder_loop():
+    # wait_until_ready() уже гарантированно выполнится, потому что вызовем после старта бота
+    channel = ds_bot.get_channel(DS_SERIES_CHANNEL_ID)
+    if not channel:
+        logger.error("Канал для напоминаний о серии не найден")
+        return
+    while True:
+        try:
+            prompt = "Попроси Антона отправить Фолзу сообщение в приложении TikTok чтобы продлить серию. Напиши одно короткое сообщение в стиле Кульша."
+            answer = await ask_ai_async(prompt=prompt, context_type="default")
+            full_message = f"<@{DS_SERIES_TARGET_USER_ID}> {answer}"
+            await channel.send(full_message)
+            logger.info("Ежедневное напоминание о серии отправлено")
+        except Exception as e:
+            logger.error(f"Ошибка отправки серийного напоминания: {e}")
+        await asyncio.sleep(86400)  # 24 часа
+
 async def main():
-    # Рандомные посты в Телеграм можно запускать сразу
+    # Рандомные посты можно запустить сразу
     asyncio.create_task(random_post_loop())
-    
-    # Discord-бот должен быть запущен до того, как мы начнём ждать его готовности
-    async with ds_bot:
-        # Теперь wait_until_ready() внутри series_reminder_loop сработает корректно
-        asyncio.create_task(series_reminder_loop())
-        await tg_bot.polling(non_stop=True)
+
+    # Запускаем Discord-бота
+    ds_task = asyncio.create_task(ds_bot.start(DISCORD_TOKEN))
+
+    # Ждём, когда Discord-бот полностью подключится (это нужно для series_reminder_loop)
+    await ds_bot.wait_until_ready()
+    asyncio.create_task(series_reminder_loop())
+
+    # Параллельно запускаем Telegram-бота
+    tg_task = asyncio.create_task(tg_bot.polling(non_stop=True))
+
+    # Держим оба бота активными
+    await asyncio.gather(ds_task, tg_task)
 
 if __name__ == "__main__":
     logger.info(">>> Кульш в эфире. Врубай микрофоны.")
