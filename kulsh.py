@@ -1341,6 +1341,7 @@ async def random_post_loop():
             logger.info(f"Ошибка рандомного поста: {e}")
 
 async def series_reminder_loop():
+    """Дождётся готовности Discord и будет слать напоминания раз в сутки."""
     await ds_bot.wait_until_ready()
     channel = ds_bot.get_channel(DS_SERIES_CHANNEL_ID)
     if not channel:
@@ -1358,13 +1359,24 @@ async def series_reminder_loop():
         await asyncio.sleep(86400)
 
 async def main():
-    asyncio.create_task(random_post_loop())
+    # 1. Запускаем Discord бота (он будет коннектиться)
+    ds_task = asyncio.create_task(ds_bot.start(DISCORD_TOKEN))
+
+    # 2. Ждём, пока Discord бот полностью подключится
+    await ds_bot.wait_until_ready()
+    logger.info("Discord бот готов, запускаю фоновые задачи")
+
+    # 3. Запускаем фоновые задачи, которым нужен готовый ds_bot
     asyncio.create_task(series_reminder_loop())
-    # Запускаем слушатель DonationAlerts, если есть токен
     if DONATIONALERTS_TOKEN:
         asyncio.create_task(donation_alerts_listener())
-    ds_task = asyncio.create_task(ds_bot.start(DISCORD_TOKEN))
+
+    # 4. Запускаем random_post_loop (ему ds_bot не нужен)
+    asyncio.create_task(random_post_loop())
+
+    # 5. Запускаем Telegram polling
     tg_task = asyncio.create_task(tg_bot.polling(non_stop=True))
+
     await asyncio.gather(ds_task, tg_task)
 
 if __name__ == "__main__":
