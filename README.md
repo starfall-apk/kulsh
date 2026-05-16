@@ -7,7 +7,7 @@
 
 **Kulsh** is a foul‑mouthed, witty, and oddly brilliant AI companion built for Discord and Telegram.  
 He codes, cracks jokes, insults your friends (lovingly), and can join voice channels to listen and speak his mind.  
-Powered by Google's Gemini API (Gemma-3-4b-it) and a generous dose of post‑Soviet humor.
+Powered by Google's Gemini API (Gemini-2.5-Flash-Lite and other) and a generous dose of post‑Soviet humor.
 Now also a brutally honest **looksmaxxing analyst** – upload a face photo and get a full PSL rating, tier, and stylish infographic.
 
 > *"Ты — Кульш, современная языковая модель ИИ... Используй сочетание «🍷🗿»..."*
