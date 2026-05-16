@@ -637,7 +637,7 @@ async def get_looksmaxxing_data(photo_bytes: bytes, include_advice: bool, lang: 
         prompt = (
             "Ты — чрезвычайно строгий и объективный AI-аналитик по looksmaxxing. Оцени лицо на фото критически и честно, "
             "укажи все недостатки и достоинства без прикрас, максимум строгости и объективности. Определи пол, состояние кожи, волос, костную структуру, челюсть, "
-            "тип глаз (например, охотничьи глаза, жертвенные глаза), подкожный жир/одутловатость, симметрию, кантальный наклон. Максимадьно кратко, пару слов в каждом поле JSON. "
+            "тип глаз (например, охотничьи глаза, жертвенные глаза), подкожный жир/одутловатость, симметрию, кантальный наклон. Максимадьно кратко, пару недлинных слов в каждом поле JSON. "
             "Рассчитай PSL рейтинг от 1.0 до 8.0 по шкале тру-луксмаксинга (где 4.0 — средний). "
             "Назначь тир строго в зависимости от пола:\n"
             "Мужской: SUB 3, SUB 5, LTN, MTN, HTN, CHADLITE, CHAD, TRUE ADAM.\n"
@@ -666,7 +666,7 @@ async def get_looksmaxxing_data(photo_bytes: bytes, include_advice: bool, lang: 
         prompt = (
             "You are an extremely strict and objective AI looksmaxxing analyst. Evaluate the face in the photo critically and honestly, "
             "pointing out all flaws and strengths without sugarcoating, as strictly and objectively as possible. Determine gender, skin condition, hair, bone structure, jawline, "
-            "eye type (e.g. hunter eyes, prey eyes), subcutaneous fat/bloating, symmetry, canthal tilt. Fill in each field in JSON as briefly as possible, in a couple of words. Calculate a PSL rating from 1.0 to 8.0 "
+            "eye type (e.g. hunter eyes, prey eyes), subcutaneous fat/bloating, symmetry, canthal tilt. Fill in each field in JSON as briefly as possible, in a couple of short words. Calculate a PSL rating from 1.0 to 8.0 "
             "using the true looksmaxxing scale (where 4.0 is average). Assign a tier strictly based on gender:\n"
             "Male: SUB 3, SUB 5, LTN, MTN, HTN, CHADLITE, CHAD, TRUE ADAM.\n"
             "Female: SUB 3, SUB 5, LTB, MTB, HTB, STACYLITE, STACY, TRUE EVE.\n\n"
