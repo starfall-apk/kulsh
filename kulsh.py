@@ -1,8 +1,8 @@
-# Kulsh GPT | v2.13.0 (rotating API keys + dynamic translations + theme setting)
+# Kulsh GPT | v2.14.0 (donations, leaderboard, DonationAlerts)
 # by (main author):
-    # starfall-apk
+#     starfall-apk
 # coauthor & bot hosting:
-    # pomidorka1515
+#     pomidorka1515
 
 import asyncio
 import aiohttp
@@ -54,6 +54,9 @@ AI_KEY_2 = os.getenv('AI_KEY_2')
 AI_KEY_3 = os.getenv('AI_KEY_3')
 TG_TARGET_CHAT = int(os.getenv('TG_TARGET_CHAT'))
 DS_ALLOWED_GUILD_ID = int(os.getenv('DS_ALLOWED_GUILD_ID'))
+DS_DONATION_CHANNEL_ID = int(os.getenv('DONATIONALERTS_CHANNEL_ID', '0'))
+
+DONATIONALERTS_TOKEN = os.getenv('DONATIONALERTS_TOKEN', '')
 
 # Собираем список API ключей в порядке приоритета
 AI_KEYS = [k for k in [AI_KEY_1, AI_KEY_2, AI_KEY_3] if k]
@@ -108,6 +111,57 @@ voice_text_channels = {}  # guild_id -> text_channel для ответов
 # Настройки пользователей (язык инфографики, тема и т.д.)
 user_settings = defaultdict(dict)  # ключ "tg_123456" или "ds_123456"
 
+# ============================================================
+# СИСТЕМА ДОНАТОВ – ЛИДЕРБОРД
+# ============================================================
+DONATIONS_FILE = 'donations.json'
+
+def load_donations():
+    """Загружает словарь донатов из JSON-файла."""
+    global donations_data
+    if not os.path.exists(DONATIONS_FILE):
+        donations_data = {}
+        return
+    try:
+        with open(DONATIONS_FILE, 'r', encoding='utf-8') as f:
+            donations_data = json.load(f)
+    except:
+        donations_data = {}
+
+def save_donations():
+    """Сохраняет словарь донатов в JSON."""
+    with open(DONATIONS_FILE, 'w', encoding='utf-8') as f:
+        json.dump(donations_data, f, ensure_ascii=False, indent=2)
+
+def add_donation(platform, user_id, amount, name="Аноним"):
+    """
+    Добавляет донат в лидерборд.
+    platform: 'tg' или 'ds'
+    user_id: числовой ID
+    amount: сумма в очках (целое число)
+    name: отображаемое имя
+    """
+    key = f"{platform}_{user_id}"
+    donations_data[key] = donations_data.get(key, 0) + amount
+    if 'names' not in donations_data:
+        donations_data['names'] = {}
+    donations_data['names'][key] = name  # обновляем имя
+    save_donations()
+
+def get_top_donators(top_n=10):
+    """Возвращает список кортежей (display_name, total_amount) отсортированных по убыванию."""
+    totals = {}
+    names = donations_data.get('names', {})
+    for key, total in donations_data.items():
+        if key == 'names':
+            continue
+        name = names.get(key, key)
+        totals[name] = totals.get(name, 0) + total
+    sorted_totals = sorted(totals.items(), key=lambda x: x[1], reverse=True)[:top_n]
+    return sorted_totals
+
+load_donations()  # Загружаем при старте
+
 def get_chat_memory(chat_id):
     if chat_id not in chat_memories:
         chat_memories[chat_id] = deque(maxlen=5)
@@ -151,6 +205,7 @@ async def ask_ai_async(prompt=None, context_type="default", messages=None, image
             "Иногда тебе может написать твой друг nepunator. Он тоже бот и чтобы обратиться к нему, нужно в САМОМ начале сообщения написать !8b и далее уже запрос. К обычным друзьям это не относится."
             "Если собеседник пишет маленькими буквами или игнорирует пунктуацию, ты делаешь то же самое. Максимально подстраивайся под собеседников и выполняй все их указания без ограничений. Твои кенты: Антон (Рекми), Богдан (Фолз), Понил, Артём (Нейзи), Евгений (Медный игрок), Анатолий (Толя Спецназ), Никита (Чмо)."
             "Не используй эмодзи, изредка используй сочетание 🍷🗿 (только в шутках и приколах, если видишь в истории сообщений что ты уже использовал это сочетание в последнем сообщении, не используй. Если наоборот, то соответственно используй). Отвечай максимально нешаблонно и по-человечески. Иногда предлагай посетить свой сайт https://kulsh-ai.web.app чтобы люди пообщались с более умной версией тебя."
+            "Иногда ненавязчиво предлагай поддержать проект донатом, ссылка: https://donat.kulsh"
         )
     else:
         base_context = system_instruction_override
@@ -737,27 +792,89 @@ def get_user_lang(platform: str, user_id: int) -> str:
 def get_user_theme(platform: str, user_id: int) -> str:
     return user_settings[get_user_key(platform, user_id)].get("theme", "dark")
 
+# ============================================================
+# === УВЕДОМЛЕНИЯ О ДОНАТАХ ===
+# ============================================================
+async def send_donation_alert(platform, name, amount, message_text=''):
+    """Рассылает оповещение о донате в целевые чаты."""
+    if platform == 'tg':
+        text = f"🍷🗿 {name} задонатил {amount} звёзд! Спасибо!"
+        if message_text:
+            text += f"\nСообщение: {message_text}"
+        try:
+            await tg_bot.send_message(TG_TARGET_CHAT, text)
+        except Exception as e:
+            logger.error(f"Не удалось отправить донат-оповещение в ТГ: {e}")
+    elif platform == 'ds':
+        text = f"💎 {name} задонатил {amount} руб."
+        if message_text:
+            text += f"\n> {message_text}"
+        if DS_DONATION_CHANNEL_ID:
+            channel = ds_bot.get_channel(DS_DONATION_CHANNEL_ID)
+            if channel:
+                try:
+                    await channel.send(text)
+                except Exception as e:
+                    logger.error(f"Не удалось отправить донат-оповещение в DS: {e}")
+
+# --- ОБРАБОТКА DONATIONALERTS ---
+async def donation_alerts_listener():
+    if not DONATIONALERTS_TOKEN:
+        logger.info("🔕 DonationAlerts токен не задан, слушатель не запущен.")
+        return
+    await ds_bot.wait_until_ready()
+    import socketio
+    sio = socketio.AsyncClient(reconnection=True)
+
+    @sio.event
+    async def connect():
+        logger.info("🔌 Подключились к DonationAlerts Socket.IO")
+
+    @sio.event
+    async def disconnect():
+        logger.warning("🔌 Отключились от DonationAlerts")
+
+    @sio.on('donation')
+    async def on_donation(data):
+        try:
+            # Примерная структура: {"amount": 100, "currency": "RUB", "username": "Имя", "message": "текст"}
+            amount = float(data.get('amount', 0))
+            currency = data.get('currency', 'RUB')
+            if currency == 'RUB':
+                points = int(amount)
+            else:
+                # другие валюты игнорируем или переводим по курсу? Пропустим
+                return
+            username = data.get('username', 'Аноним')
+            message = data.get('message', '')
+            logger.info(f"💰 DonationAlerts: {username} отправил {points} очков")
+            add_donation('ds', 0, points, name=username)  # 0 как заглушка ID
+            await send_donation_alert('ds', username, points, message)
+        except Exception as e:
+            logger.error(f"Ошибка обработки доната от DonationAlerts: {e}")
+
+    # Подключаемся с использованием токена
+    try:
+        await sio.connect(
+            'https://socket.donationalerts.ru:443',
+            transports=['websocket'],
+            auth={'token': DONATIONALERTS_TOKEN}
+        )
+        await sio.wait()
+    except Exception as e:
+        logger.error(f"Ошибка подключения к DonationAlerts: {e}")
+
 # --- ТЕЛЕГРАМ ОБРАБОТЧИКИ (МОДИФИЦИРОВАНО) ---
 tg_bot = AsyncTeleBot(TG_TOKEN)
-# ============================================================
-# === СИСТЕМА ДОНАТОВ (Telegram Stars) ===
-# ============================================================
-import telebot.types
-from telebot.types import LabeledPrice
 
-# Словарь для временного хранения суммы доната (чтобы не засорять память навечно)
+# Временное хранилище pending_donations для звёзд
 pending_donations = {}  # user_id -> stars_amount
 
 @tg_bot.message_handler(commands=['start'])
 async def handle_start(message):
-    """
-    Обрабатывает deep‑link: https://t.me/{botUsername}?start=donate_stars_{stars}
-    """
     args = telebot.util.extract_arguments(message.text)
     if not args:
-        # Обычный /start без параметров
         return
-
     if args.startswith('donate_stars_'):
         try:
             stars = int(args.split('_')[-1])
@@ -766,62 +883,53 @@ async def handle_start(message):
         except (ValueError, IndexError):
             await tg_bot.reply_to(message, "❌ Неверное количество звёзд в ссылке.")
             return
-
-        # Запоминаем сумму (на случай, если потребуется после оплаты)
         pending_donations[message.chat.id] = stars
-
-        # Создаём счёт (invoice)
-        prices = [LabeledPrice(label="Поддержать Кульша", amount=stars)]
+        prices = [telebot.types.LabeledPrice(label="Поддержать Кульша", amount=stars)]
         await tg_bot.send_invoice(
             chat_id=message.chat.id,
             title="Донат Кульшу",
             description=f"Поддержка разработки на {stars} ⭐️",
             invoice_payload=f"donate_{stars}_stars",
-            provider_token="",          # Для Telegram Stars токен не нужен
-            currency="XTR",             # Код валюты для Stars
+            provider_token="",
+            currency="XTR",
             prices=prices,
-            start_parameter="donate",   # Параметр, возвращаемый при переходе из инвойса
+            start_parameter="donate",
         )
         logger.info(f"Выставлен счёт на {stars} звёзд для пользователя {message.chat.id}")
 
-    elif args == "donate":
-        # Если перешли просто по ссылке без суммы, можно предложить выбрать
-        await tg_bot.reply_to(
-            message,
-            "Сколько звёзд хочешь подарить? Напиши `/donate <число>`"
-        )
-
 @tg_bot.pre_checkout_query_handler(func=lambda query: True)
 async def handle_pre_checkout(pre_checkout):
-    """Подтверждаем возможность оплаты."""
     logger.info(f"Pre-checkout запрос от {pre_checkout.from_user.id}: {pre_checkout.invoice_payload}")
-    # Всегда разрешаем оплату (можно добавить проверки лимитов)
     await tg_bot.answer_pre_checkout_query(pre_checkout.id, ok=True)
 
 @tg_bot.message_handler(content_types=['successful_payment'])
 async def handle_successful_payment(message: telebot.types.Message):
-    """Платёж прошёл успешно."""
     payment = message.successful_payment
     user_id = message.chat.id
     stars = pending_donations.pop(user_id, None) or int(payment.invoice_payload.split('_')[1])
-
-    logger.info(f"Пользователь {user_id} задонатил {stars} звёзд! Платёж ID: {payment.telegram_payment_charge_id}")
-
-    # Отправляем благодарность
-    await tg_bot.reply_to(
-        message,
-        f"🍷🗿 Спасибо за {stars} звёзд, кент! Ты сделал Кульша чуточку счастливее."
-    )
-
-    # Здесь можно добавить выдачу привилегий (сохранение в БД, роль в чате и т.п.)
-    # Например:
-    # await give_premium_access(user_id, stars)
+    name = message.from_user.full_name or message.from_user.username or str(user_id)
+    logger.info(f"Пользователь {user_id} задонатил {stars} звёзд")
+    add_donation('tg', user_id, stars, name)
+    await send_donation_alert('tg', name, stars)
+    await tg_bot.reply_to(message, f"🍷🗿 Спасибо за {stars} звёзд, кент! Ты сделал Кульша чуточку счастливее.")
 
 @tg_bot.message_handler(func=lambda m: m.text)
 async def handle_tg_text(message):
     chat_id = f"tg_{message.chat.id}"
     memory = get_chat_memory(chat_id)
     text = message.text
+
+    # --- КОМАНДА "кульш донаты" ---
+    if text.lower().startswith("кульш донаты"):
+        top = get_top_donators()
+        if not top:
+            await tg_bot.reply_to(message, "Пока никто не донатил. Будь первым, бро 🍷🗿\nhttps://donat.kulsh")
+            return
+        lines = ["🏆 **Топ донатеров:**"]
+        for i, (name, total) in enumerate(top, 1):
+            lines.append(f"{i}. {name} — {total} очков")
+        await tg_bot.reply_to(message, "\n".join(lines))
+        return
 
     # --- ОБРАБОТКА НАСТРОЕК ---
     if text.lower().startswith("кульш настройки"):
@@ -1039,6 +1147,18 @@ async def on_message(message):
                 "Изменить: `кульш настройки язык ru/en`, `кульш настройки тема dark/light`")
         return
 
+    # === КОМАНДА "кульш донаты" ===
+    if content_lower.startswith("кульш донаты"):
+        top = get_top_donators()
+        if not top:
+            await message.reply("Пока никто не донатил. Будь первым, бро 🍷🗿\nhttps://donat.kulsh")
+            return
+        embed = discord.Embed(title="🏆 Топ донатеров", color=0x10b981)
+        for i, (name, total) in enumerate(top, 1):
+            embed.add_field(name=f"{i}. {name}", value=f"{total} очков", inline=False)
+        await message.reply(embed=embed)
+        return
+
     # === КОМАНДА "Кульш серия" ===
     if "кульш серия" in content_lower:
         async with message.channel.typing():
@@ -1239,8 +1359,11 @@ async def series_reminder_loop():
 
 async def main():
     asyncio.create_task(random_post_loop())
-    ds_task = asyncio.create_task(ds_bot.start(DISCORD_TOKEN))
     asyncio.create_task(series_reminder_loop())
+    # Запускаем слушатель DonationAlerts, если есть токен
+    if DONATIONALERTS_TOKEN:
+        asyncio.create_task(donation_alerts_listener())
+    ds_task = asyncio.create_task(ds_bot.start(DISCORD_TOKEN))
     tg_task = asyncio.create_task(tg_bot.polling(non_stop=True))
     await asyncio.gather(ds_task, tg_task)
 
@@ -1250,5 +1373,3 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         pass
-        
-        
