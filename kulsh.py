@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.12.2 (integrated Looksmaxxing + dynamic translations + theme setting)
+# Kulsh GPT | v2.13.0 (rotating API keys + dynamic translations + theme setting)
 # by (main author):
     # starfall-apk
 # coauthor & bot hosting:
@@ -48,16 +48,28 @@ logger.addHandler(console_handler)
 load_dotenv()
 TG_TOKEN = os.getenv('TG_TOKEN')
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
-AI_KEY = os.getenv('AI_KEY')
+AI_KEY = os.getenv('AI_KEY')  # fallback (старый ключ)
+AI_KEY_1 = os.getenv('AI_KEY_1')
+AI_KEY_2 = os.getenv('AI_KEY_2')
+AI_KEY_3 = os.getenv('AI_KEY_3')
 TG_TARGET_CHAT = int(os.getenv('TG_TARGET_CHAT'))
 DS_ALLOWED_GUILD_ID = int(os.getenv('DS_ALLOWED_GUILD_ID'))
+
+# Собираем список API ключей в порядке приоритета
+AI_KEYS = [k for k in [AI_KEY_1, AI_KEY_2, AI_KEY_3] if k]
+if not AI_KEYS and AI_KEY:  # если новых нет, используем старый
+    AI_KEYS.append(AI_KEY)
+
+if not AI_KEYS:
+    logger.critical("❌ Не найден ни один API ключ Gemini! Проверьте .env (AI_KEY_1, AI_KEY_2, AI_KEY_3 или AI_KEY).")
+    exit(1)
 
 # ID для серийного напоминания
 DS_SERIES_GUILD_ID = 1403828466075304036
 DS_SERIES_CHANNEL_ID = 1403828467014832270
 DS_SERIES_TARGET_USER_ID = 1364588699589021890
 
-# --- СПИСОК МОДЕЛЕЙ ДЛЯ АВТОМАТИЧЕСКОГО ПЕРЕКЛЮЧЕНИЯ ---
+# --- СПИСОК МОДЕЛЕЙ ---
 MODEL_LIST = [
     "gemini-2.5-flash",
     "gemini-2.5-flash-lite",
@@ -133,7 +145,7 @@ def image_bytes_to_base64(image_bytes, mime_type="image/jpeg"):
     encoded = base64.b64encode(image_bytes).decode('utf-8')
     return encoded, mime_type
 
-# --- МОЗГ (GEMINI) С АВТОМАТИЧЕСКИМ ПЕРЕКЛЮЧЕНИЕМ МОДЕЛЕЙ ---
+# --- МОЗГ (GEMINI) С АВТОМАТИЧЕСКИМ ПЕРЕКЛЮЧЕНИЕМ МОДЕЛЕЙ И КЛЮЧЕЙ ---
 async def ask_ai_async(prompt=None, context_type="default", messages=None, image_bytes=None, image_mime="image/jpeg", system_instruction_override=None):
     # Системный промпт (неизменный), если не переопределён
     if system_instruction_override is None:
@@ -146,19 +158,18 @@ async def ask_ai_async(prompt=None, context_type="default", messages=None, image
     else:
         base_context = system_instruction_override
 
-    # Определяем пользовательский промпт в зависимости от контекста (для старой логики)
+    # Определяем пользовательский промпт в зависимости от контекста
     if context_type == "random":
         prompt = "Напиши рандомную мысль или шутку в чат, которую ты ранее не придумывал. Например, шутек про одного из твоих кентов. Добавь окак 67 мемы."
     elif context_type == "caption":
         prompt = "Пользователь попросил фото. Придумай короткую подпись к картинке в своем стиле."
 
-    # Строим историю сообщений с ролями
+    # Строим содержимое запроса
     contents = []
     if messages:
         for i, msg in enumerate(messages):
             role = msg["role"] if msg["role"] in ("user", "model") else "user"
             parts = [{"text": msg["text"]}]
-            # Изображение добавляем к последнему сообщению пользователя
             if image_bytes and i == len(messages) - 1 and role == "user":
                 encoded, mime = image_bytes_to_base64(image_bytes, image_mime)
                 parts.append({"inline_data": {"mime_type": mime, "data": encoded}})
@@ -177,48 +188,48 @@ async def ask_ai_async(prompt=None, context_type="default", messages=None, image
         "contents": contents
     }
 
-    # Цикл перебора моделей с экспоненциальной задержкой
-    max_attempts = 10
-    for attempt in range(max_attempts):
-        model_name = MODEL_LIST[attempt % len(MODEL_LIST)]
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={AI_KEY}"
+    # Готовим все комбинации (модель, ключ) в нужном порядке: сначала все ключи для первой модели, потом для следующей...
+    combinations = [(model, key) for model in MODEL_LIST for key in AI_KEYS]
+    max_attempts = len(combinations)  # Пробуем все комбинации без ограничения
 
-        logger.info(f"Попытка {attempt+1}/{max_attempts}: модель {model_name}")
+    for attempt, (model_name, api_key) in enumerate(combinations):
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+        logger.info(f"🔄 Попытка {attempt+1}/{max_attempts}: модель {model_name}, ключ {api_key[:4]}...")
 
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.post(url, json=payload_base, timeout=30) as resp:
                     status = resp.status
                     if status == 429:
-                        logger.warning(f"Модель {model_name} вернула 429 (Rate Limit). Пробую следующую...")
-                        await asyncio.sleep(2 ** attempt)
+                        logger.warning(f"Модель {model_name} ключ {api_key[:4]}... вернула 429. Пробую следующую комбинацию...")
+                        await asyncio.sleep(2 ** (attempt // len(AI_KEYS)))  # задержка увеличивается с каждой новой моделью
                         continue
                     elif status == 503 or status >= 500:
-                        logger.warning(f"Модель {model_name} вернула {status} (Server Error). Пробую следующую...")
-                        await asyncio.sleep(2 ** attempt)
+                        logger.warning(f"Модель {model_name} ключ {api_key[:4]}... вернула {status}. Пробую следующую...")
+                        await asyncio.sleep(2 ** (attempt // len(AI_KEYS)))
                         continue
                     elif status != 200:
                         text = await resp.text()
-                        logger.error(f"Модель {model_name} вернула {status}: {text}. Прерываю попытки.")
+                        logger.error(f"Модель {model_name} ключ {api_key[:4]}... вернула {status}: {text}. Прерываю попытки.")
                         return "Ошибка API. Попробуйте позже."
 
                     data = await resp.json()
                     if 'candidates' in data and data['candidates']:
                         return data['candidates'][0]['content']['parts'][0]['text']
                     else:
-                        logger.warning(f"Модель {model_name} ответила без candidates: {data}. Пробую следующую...")
-                        await asyncio.sleep(2 ** attempt)
+                        logger.warning(f"Модель {model_name} ключ {api_key[:4]}... ответила без candidates. Пробую следующую...")
+                        await asyncio.sleep(2 ** (attempt // len(AI_KEYS)))
                         continue
 
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-            logger.warning(f"Сетевая ошибка при использовании {model_name}: {e}. Пробую следующую...")
-            await asyncio.sleep(2 ** attempt)
+            logger.warning(f"Сетевая ошибка для {model_name} ключ {api_key[:4]}...: {e}. Пробую следующую...")
+            await asyncio.sleep(2 ** (attempt // len(AI_KEYS)))
             continue
         except Exception as e:
             logger.error(f"Непредвиденная ошибка для {model_name}: {e}. Прерываю попытки.")
             return "Ошибка. Что-то пошло не так."
 
-    return "Все модели недоступны, попробуй позже 🍷🗿"
+    return "Все модели и ключи недоступны, попробуй позже 🍷🗿"
 
 # --- ЛОГИКА ФОТО ---
 async def get_random_photo_url():
@@ -676,7 +687,6 @@ async def get_looksmaxxing_data(photo_bytes: bytes, include_advice: bool) -> dic
     else:
         prompt += '- "advice": leave empty.\n'
 
-    # Передаём кастомную system_instruction, чтобы Кульш не вмешивался
     raw = await ask_ai_async(
         prompt=prompt,
         context_type="default",
@@ -695,7 +705,7 @@ async def get_looksmaxxing_data(photo_bytes: bytes, include_advice: bool) -> dic
         return data
     except json.JSONDecodeError:
         logger.error(f"Looksmaxxing JSON decode failed: {raw[:200]}")
-        # Fallback: попробуем ещё раз с более жёсткой инструкцией
+        # Fallback
         raw2 = await ask_ai_async(
             prompt="Return ONLY the JSON object as specified. Do not include any other text.",
             context_type="default",
@@ -811,7 +821,6 @@ async def handle_tg_photo(message):
     memory = get_chat_memory(chat_id)
     caption = message.caption or ""
 
-    # Проверка looksmaxxing: либо в подписи, либо это ответ на приглашение, либо состояние
     is_looksmaxxing = (
         any(kw in caption.lower() for kw in LOOKSMAXXING_KEYWORDS) or
         (message.reply_to_message and message.reply_to_message.from_user.id == tg_bot.user.id and 
@@ -820,7 +829,7 @@ async def handle_tg_photo(message):
         user_looksmaxxing_state.get(message.chat.id, False)
     )
     if is_looksmaxxing:
-        user_looksmaxxing_state[message.chat.id] = False  # сброс
+        user_looksmaxxing_state[message.chat.id] = False
         status_msg = await tg_bot.send_message(message.chat.id, "⏳ Анализирую внешность...")
         try:
             photo = message.photo[-1]
@@ -852,7 +861,7 @@ async def handle_tg_photo(message):
             await tg_bot.send_message(chat_id, f"🌋 Ошибка: {e}")
         return
 
-    # Обычная обработка фото (старая логика)
+    # Обычная обработка фото
     is_reply_to_bot = (message.reply_to_message and 
                        message.reply_to_message.from_user.id == tg_bot.user.id)
     if not (is_reply_to_bot or re.search(r'(?i)\bкульш\b', caption)):
@@ -876,7 +885,7 @@ async def handle_tg_photo(message):
         logger.info(f"Ошибка обработки фото в TG: {e}")
         await tg_bot.reply_to(message, "не вижу фотку, битая чтоли")
 
-# --- DISCORD ОБРАБОТЧИКИ (МОДИФИЦИРОВАНО) ---
+# --- DISCORD ОБРАБОТЧИКИ ---
 intents = discord.Intents.default()
 intents.message_content = True
 ds_bot = discord.Client(intents=intents)
@@ -950,7 +959,7 @@ async def on_message(message):
                 "Изменить: `кульш настройки язык ru/en`, `кульш настройки тема dark/light`")
         return
 
-    # === КОМАНДА "Кульш серия" (ручная активация) ===
+    # === КОМАНДА "Кульш серия" ===
     if "кульш серия" in content_lower:
         async with message.channel.typing():
             try:
@@ -1038,8 +1047,7 @@ async def on_message(message):
             await message.reply("так я и так не там")
         return
 
-    # --- LOOKSMAXXING КОМАНДА В ДИСКОРДЕ ---
-    # Проверяем, содержит ли сообщение ключевые слова looksmaxxing И есть ли вложение с изображением
+    # --- LOOKSMAXXING В ДИСКОРДЕ ---
     has_looksmaxxing_cmd = any(kw in content_lower for kw in LOOKSMAXXING_KEYWORDS)
     has_image_att = any(att.content_type and att.content_type.startswith('image/') for att in message.attachments)
 
@@ -1077,12 +1085,11 @@ async def on_message(message):
         return
 
     if has_looksmaxxing_cmd and not has_image_att:
-        # Просто текстовый запрос looksmaxxing без фото – просим фото
         await message.reply("📸 Пришли фото с командой `кульш looksmaxxing` (или просто прикрепи картинку).")
         memory.append(f"{message.author.name}: {message.content}")
         return
 
-    # --- ОБРАБОТКА ИЗОБРАЖЕНИЙ И ТЕКСТА С УЧЁТОМ REPLY (старая логика) ---
+    # --- ОБРАБОТКА ИЗОБРАЖЕНИЙ И ТЕКСТА ---
     has_image = any(att.content_type and att.content_type.startswith('image/') for att in message.attachments)
     text_contains_kulsh = re.search(r'(?i)\bкульш\b', message.content)
 
@@ -1151,15 +1158,10 @@ async def series_reminder_loop():
         await asyncio.sleep(86400)
 
 async def main():
-    # Рандомные посты в Телеграм запускаем сразу
     asyncio.create_task(random_post_loop())
-    # Discord-бот стартует в фоне
     ds_task = asyncio.create_task(ds_bot.start(DISCORD_TOKEN))
-    # Задача напоминаний запустится и будет ждать готовности Discord самостоятельно
     asyncio.create_task(series_reminder_loop())
-    # Telegram-бот работает параллельно
     tg_task = asyncio.create_task(tg_bot.polling(non_stop=True))
-    # Ждём завершения обоих клиентов (они висят бесконечно)
     await asyncio.gather(ds_task, tg_task)
 
 if __name__ == "__main__":
