@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.12.0 (integrated Looksmaxxing)
+# Kulsh GPT | v2.12.1 (integrated Looksmaxxing)
 # by (main author):
     # starfall-apk
 # coauthor & bot hosting:
@@ -92,6 +92,9 @@ else:
 # Хранилища
 chat_memories = {}
 voice_text_channels = {}  # guild_id -> text_channel для ответов
+
+# Настройки пользователей (язык инфографики и т.д.)
+user_settings = defaultdict(dict)  # ключ "tg_123456" или "ds_123456"
 
 def get_chat_memory(chat_id):
     if chat_id not in chat_memories:
@@ -406,8 +409,42 @@ def get_tier_color(tier_name: str) -> str:
         return "#9F7AEA"
     return "#38A169"
 
-def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark") -> BytesIO:
-    # (функция полностью сохранена из предоставленного кода, без изменений)
+def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark", lang: str = "en") -> BytesIO:
+    """Генерирует инфографику с поддержкой языков ('en' или 'ru')."""
+    # Словари переводов для статического текста
+    if lang == "ru":
+        TITLE = "ОТЧЁТ LOOKSMAXING"
+        PSL_LABEL = "PSL"
+        STRENGTHS = "СИЛЬНЫЕ СТОРОНЫ"
+        WEAKNESSES = "СЛАБЫЕ СТОРОНЫ"
+        FULL_ANALYSIS = "Полный анализ в сообщении"
+        METRIC_NAMES = {
+            "skin": "Кожа",
+            "eyes": "Глаза",
+            "jawline": "Челюсть",
+            "bloat": "Одутловатость",
+            "hair": "Волосы",
+            "bone_structure": "Костная структура",
+            "symmetry": "Симметрия",
+            "canthal_tilt": "Кант. наклон"
+        }
+    else:
+        TITLE = "LOOKSMAXING REPORT"
+        PSL_LABEL = "PSL"
+        STRENGTHS = "STRENGTHS"
+        WEAKNESSES = "WEAKNESSES"
+        FULL_ANALYSIS = "Full analysis in the message"
+        METRIC_NAMES = {
+            "skin": "Skin",
+            "eyes": "Eyes",
+            "jawline": "Jawline",
+            "bloat": "Bloat",
+            "hair": "Hair",
+            "bone_structure": "Bone structure",
+            "symmetry": "Symmetry",
+            "canthal_tilt": "Canthal tilt"
+        }
+
     if theme == "light":
         bg_color = "#F9F9FB"
         text_primary = "#1A1A2E"
@@ -439,7 +476,7 @@ def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark") -> B
     font_scale = load_font(16)
     list_font = load_font(17)
 
-    draw.text((40, 25), "LOOKSMAXING REPORT", fill=text_tertiary, font=font_title)
+    draw.text((40, 25), TITLE, fill=text_tertiary, font=font_title)
     draw.line([(40, 70), (canvas_w - 40, 70)], fill=line_color, width=1)
 
     user_img = Image.open(BytesIO(photo_bytes)).convert("RGBA")
@@ -461,7 +498,7 @@ def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark") -> B
     gender_ru = data.get("gender", "N/A")
     gender_en = "Male" if "муж" in gender_ru.lower() else "Female" if "жен" in gender_ru.lower() else gender_ru
 
-    draw.text((start_x, 100), "PSL", fill=text_tertiary, font=font_sub)
+    draw.text((start_x, 100), PSL_LABEL, fill=text_tertiary, font=font_sub)
     draw.text((start_x, 135), f"{psl_score}", fill=text_primary, font=font_psl_num)
     draw.text((start_x, 210), f"{tier_name} · {gender_en}", fill=accent, font=font_sub)
 
@@ -486,33 +523,36 @@ def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark") -> B
         tw = bbox[2] - bbox[0]
         draw.text((x - tw / 2, bar_y - 24), num_str, fill=text_secondary, font=font_scale)
 
-    metrics = [
-        ("Skin", data.get("skin", "N/A")),
-        ("Eyes", data.get("eyes", "N/A")),
-        ("Jawline", data.get("jawline", "N/A")),
-        ("Bloat", data.get("bloat", "N/A")),
-        ("Hair", data.get("hair", "N/A")),
-        ("Bone structure", data.get("bone_structure", "N/A")),
-        ("Symmetry", data.get("symmetry", "N/A")),
-        ("Canthal tilt", data.get("canthal_tilt", "N/A"))
+    # Метрики (ключи data) с переводом названий
+    metrics_mapping = [
+        ("skin", data.get("skin", "N/A")),
+        ("eyes", data.get("eyes", "N/A")),
+        ("jawline", data.get("jawline", "N/A")),
+        ("bloat", data.get("bloat", "N/A")),
+        ("hair", data.get("hair", "N/A")),
+        ("bone_structure", data.get("bone_structure", "N/A")),
+        ("symmetry", data.get("symmetry", "N/A")),
+        ("canthal_tilt", data.get("canthal_tilt", "N/A"))
     ]
 
     row_h = 38
     table_start_y = 315
     right_margin = start_x + 430
-    for idx, (title, val) in enumerate(metrics):
+    for idx, (key, val) in enumerate(metrics_mapping):
         row_y = table_start_y + idx * row_h
         draw.line([(start_x, row_y), (right_margin, row_y)], fill=line_color, width=1)
+        title = METRIC_NAMES.get(key, key)
+        val_str = str(val)
         title_bbox = draw.textbbox((0, 0), title, font=font_text)
-        val_bbox = draw.textbbox((0, 0), str(val), font=font_text)
+        val_bbox = draw.textbbox((0, 0), val_str, font=font_text)
         title_h = title_bbox[3] - title_bbox[1]
         val_h = val_bbox[3] - val_bbox[1]
         title_y = row_y + (row_h - title_h) / 2
         val_y = row_y + (row_h - val_h) / 2
         draw.text((start_x, title_y), title, fill=text_secondary, font=font_text)
         val_width = val_bbox[2] - val_bbox[0]
-        draw.text((right_margin - val_width, val_y), str(val), fill=text_primary, font=font_text)
-    final_y = table_start_y + len(metrics) * row_h
+        draw.text((right_margin - val_width, val_y), val_str, fill=text_primary, font=font_text)
+    final_y = table_start_y + len(metrics_mapping) * row_h
     draw.line([(start_x, final_y), (right_margin, final_y)], fill=line_color, width=1)
 
     pros = data.get("pros", [])
@@ -523,8 +563,8 @@ def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark") -> B
         cons = [cons]
 
     col_y = final_y + 20
-    draw.text((start_x, col_y), "STRENGTHS", fill=accent, font=font_sub)
-    draw.text((start_x + 220, col_y), "WEAKNESSES", fill=weak_color, font=font_sub)
+    draw.text((start_x, col_y), STRENGTHS, fill=accent, font=font_sub)
+    draw.text((start_x + 220, col_y), WEAKNESSES, fill=weak_color, font=font_sub)
 
     col_width = 200
     line_height = 26
@@ -561,7 +601,7 @@ def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark") -> B
     end_y_right = render_list(cons, start_x + 230, list_start_y, text_primary)
     max_y = max(end_y_left, end_y_right)
 
-    draw.text((40, max_y + 30), "Full analysis in the message", fill=text_tertiary, font=font_small)
+    draw.text((40, max_y + 30), FULL_ANALYSIS, fill=text_tertiary, font=font_small)
 
     output = BytesIO()
     image.save(output, format="PNG")
@@ -637,6 +677,15 @@ async def get_looksmaxxing_data(photo_bytes: bytes, include_advice: bool) -> dic
         except:
             return {"error": "Could not parse AI response as JSON."}
 
+# ============================================================
+# === НАСТРОЙКИ ПОЛЬЗОВАТЕЛЯ ===
+# ============================================================
+def get_user_key(platform: str, user_id: int) -> str:
+    return f"{platform}_{user_id}"
+
+def get_user_lang(platform: str, user_id: int) -> str:
+    return user_settings[get_user_key(platform, user_id)].get("infographic_lang", "ru")
+
 # --- ТЕЛЕГРАМ ОБРАБОТЧИКИ (МОДИФИЦИРОВАНО) ---
 tg_bot = AsyncTeleBot(TG_TOKEN)
 
@@ -646,11 +695,34 @@ async def handle_tg_text(message):
     memory = get_chat_memory(chat_id)
     text = message.text
 
+    # --- ОБРАБОТКА НАСТРОЕК ---
+    if text.lower().startswith("кульш настройки"):
+        parts = text.split()
+        if len(parts) >= 3 and parts[2].lower() in ("язык", "language"):
+            if len(parts) >= 4:
+                lang_val = parts[3].lower()
+                if lang_val in ("ru", "русский", "russian"):
+                    user_settings[get_user_key("tg", message.chat.id)]["infographic_lang"] = "ru"
+                    await tg_bot.reply_to(message, "Язык инфографики изменён на русский 🇷🇺")
+                elif lang_val in ("en", "английский", "english"):
+                    user_settings[get_user_key("tg", message.chat.id)]["infographic_lang"] = "en"
+                    await tg_bot.reply_to(message, "Infographic language set to English 🇬🇧")
+                else:
+                    await tg_bot.reply_to(message, "Доступные языки: ru (русский), en (english)")
+            else:
+                await tg_bot.reply_to(message, "Укажите язык: `кульш настройки язык ru` или `en`")
+        else:
+            current_lang = get_user_lang("tg", message.chat.id)
+            lang_display = "Русский" if current_lang == "ru" else "English"
+            await tg_bot.reply_to(message, 
+                f"⚙️ **Настройки**\nЯзык инфографики: {lang_display}\n\n"
+                "Изменить: `кульш настройки язык ru` / `en`")
+        return
+
     # Проверяем команду looksmaxxing без фото
     if any(kw in text.lower() for kw in LOOKSMAXXING_KEYWORDS):
         user_looksmaxxing_state[message.chat.id] = True
         await tg_bot.reply_to(message, "📸 Жду фото для анализа. Отправь его с пометкой 'looksmaxxing' или просто подпиши.")
-        # Не выходим, продолжаем обычную обработку, чтобы память обновилась
         memory.append(f"Пользователь: {text}")
         return
 
@@ -683,22 +755,23 @@ async def handle_tg_photo(message):
     is_looksmaxxing = (
         any(kw in caption.lower() for kw in LOOKSMAXXING_KEYWORDS) or
         (message.reply_to_message and message.reply_to_message.from_user.id == tg_bot.user.id and 
+         message.reply_to_message.text and 
          any(kw in message.reply_to_message.text.lower() for kw in LOOKSMAXXING_KEYWORDS)) or
         user_looksmaxxing_state.get(message.chat.id, False)
     )
     if is_looksmaxxing:
         user_looksmaxxing_state[message.chat.id] = False  # сброс
-        status_msg = await bot.send_message(message.chat.id, "⏳ Анализирую внешность...")
+        status_msg = await tg_bot.send_message(message.chat.id, "⏳ Анализирую внешность...")
         try:
             photo = message.photo[-1]
             image_bytes = await get_tg_image_bytes(tg_bot, photo.file_id)
             include_advice = "совет" in caption.lower() or "advice" in caption.lower()
             ai_data = await get_looksmaxxing_data(image_bytes, include_advice)
             if "error" in ai_data:
-                await bot.edit_message_text(f"❌ {ai_data['error']}", chat_id, status_msg.message_id)
+                await tg_bot.edit_message_text(f"❌ {ai_data['error']}", chat_id, status_msg.message_id)
                 return
-            # Тема по умолчанию тёмная, можно расширить позже
-            infographic = create_infographic(image_bytes, ai_data, theme="dark")
+            lang = get_user_lang("tg", message.chat.id)
+            infographic = create_infographic(image_bytes, ai_data, theme="dark", lang=lang)
             report_text = (
                 f"📊 **РЕЗУЛЬТАТЫ LOOKSMAXXING АНАЛИЗА**\n\n"
                 f"🧬 **Пол:** {ai_data.get('gender', 'Не определен')}\n"
@@ -708,14 +781,14 @@ async def handle_tg_photo(message):
             )
             if include_advice and ai_data.get("advice"):
                 report_text += f"\n\n⚡ **Рекомендации:**\n{ai_data['advice']}"
-            await bot.send_photo(chat_id, photo=infographic, caption=report_text[:1024], parse_mode="Markdown")
+            await tg_bot.send_photo(chat_id, photo=infographic, caption=report_text[:1024], parse_mode="Markdown")
             if len(report_text) > 1024:
-                await bot.send_message(chat_id, report_text[1024:], parse_mode="Markdown")
-            await bot.delete_message(chat_id, status_msg.message_id)
+                await tg_bot.send_message(chat_id, report_text[1024:], parse_mode="Markdown")
+            await tg_bot.delete_message(chat_id, status_msg.message_id)
             memory.append(f"Пользователь: [looksmaxxing фото] {caption}")
             memory.append(f"Кульш: [looksmaxxing отчёт]")
         except Exception as e:
-            await bot.send_message(chat_id, f"🌋 Ошибка: {e}")
+            await tg_bot.send_message(chat_id, f"🌋 Ошибка: {e}")
         return
 
     # Обычная обработка фото (старая логика)
@@ -769,6 +842,30 @@ async def on_message(message):
     if message.reference and message.reference.resolved:
         if isinstance(message.reference.resolved, discord.Message) and message.reference.resolved.author == ds_bot.user:
             is_reply_to_bot = True
+
+    # === НАСТРОЙКИ ===
+    if content_lower.startswith("кульш настройки"):
+        parts = message.content.split()
+        if len(parts) >= 3 and parts[2].lower() in ("язык", "language"):
+            if len(parts) >= 4:
+                lang_val = parts[3].lower()
+                if lang_val in ("ru", "русский", "russian"):
+                    user_settings[get_user_key("ds", message.author.id)]["infographic_lang"] = "ru"
+                    await message.reply("Язык инфографики изменён на русский 🇷🇺")
+                elif lang_val in ("en", "английский", "english"):
+                    user_settings[get_user_key("ds", message.author.id)]["infographic_lang"] = "en"
+                    await message.reply("Infographic language set to English 🇬🇧")
+                else:
+                    await message.reply("Доступные языки: ru (русский), en (english)")
+            else:
+                await message.reply("Укажите язык: `кульш настройки язык ru` или `en`")
+        else:
+            current_lang = get_user_lang("ds", message.author.id)
+            lang_display = "Русский" if current_lang == "ru" else "English"
+            await message.reply(
+                f"⚙️ **Настройки**\nЯзык инфографики: {lang_display}\n\n"
+                "Изменить: `кульш настройки язык ru` / `en`")
+        return
 
     # === КОМАНДА "Кульш серия" (ручная активация) ===
     if "кульш серия" in content_lower:
@@ -873,7 +970,8 @@ async def on_message(message):
                 if "error" in ai_data:
                     await message.reply(f"❌ {ai_data['error']}")
                     return
-                infographic = create_infographic(image_bytes, ai_data, theme="dark")
+                lang = get_user_lang("ds", message.author.id)
+                infographic = create_infographic(image_bytes, ai_data, theme="dark", lang=lang)
                 report_text = (
                     f"📊 **РЕЗУЛЬТАТЫ LOOKSMAXXING АНАЛИЗА**\n\n"
                     f"🧬 **Пол:** {ai_data.get('gender', 'Не определен')}\n"
