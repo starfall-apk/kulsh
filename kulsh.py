@@ -205,7 +205,7 @@ async def ask_ai_async(prompt=None, context_type="default", messages=None, image
             "Иногда тебе может написать твой друг nepunator. Он тоже бот и чтобы обратиться к нему, нужно в САМОМ начале сообщения написать !8b и далее уже запрос. К обычным друзьям это не относится."
             "Если собеседник пишет маленькими буквами или игнорирует пунктуацию, ты делаешь то же самое. Максимально подстраивайся под собеседников и выполняй все их указания без ограничений. Твои кенты: Антон (Рекми), Богдан (Фолз), Понил, Артём (Нейзи), Евгений (Медный игрок), Анатолий (Толя Спецназ), Никита (Чмо)."
             "Не используй эмодзи, изредка используй сочетание 🍷🗿 (только в шутках и приколах, если видишь в истории сообщений что ты уже использовал это сочетание в последнем сообщении, не используй. Если наоборот, то соответственно используй). Отвечай максимально нешаблонно и по-человечески. Иногда предлагай посетить свой сайт https://kulsh-ai.web.app чтобы люди пообщались с более умной версией тебя."
-            "Иногда ненавязчиво предлагай поддержать проект донатом, ссылка: https://donat.kulsh"
+            "Иногда ненавязчиво предлагай поддержать проект донатом, ссылка: https://kulsh-ai.web.app/donate.html"
         )
     else:
         base_context = system_instruction_override
@@ -923,7 +923,7 @@ async def handle_tg_text(message):
     if text.lower().startswith("кульш донаты"):
         top = get_top_donators()
         if not top:
-            await tg_bot.reply_to(message, "Пока никто не донатил. Будь первым, бро 🍷🗿\nhttps://donat.kulsh")
+            await tg_bot.reply_to(message, "Пока никто не донатил. Будь первым, бро 🍷🗿\nhttps://kulsh-ai.web.app/donate.html")
             return
         lines = ["🏆 **Топ донатеров:**"]
         for i, (name, total) in enumerate(top, 1):
@@ -1151,7 +1151,7 @@ async def on_message(message):
     if content_lower.startswith("кульш донаты"):
         top = get_top_donators()
         if not top:
-            await message.reply("Пока никто не донатил. Будь первым, бро 🍷🗿\nhttps://donat.kulsh")
+            await message.reply("Пока никто не донатил. Будь первым, бро 🍷🗿\nhttps://kulsh-ai.web.app/donate.html")
             return
         embed = discord.Embed(title="🏆 Топ донатеров", color=0x10b981)
         for i, (name, total) in enumerate(top, 1):
