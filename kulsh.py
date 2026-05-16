@@ -638,7 +638,7 @@ async def get_looksmaxxing_data(photo_bytes: bytes, include_advice: bool, lang: 
             "Ты — чрезвычайно строгий и объективный AI-аналитик по looksmaxxing. Оцени лицо на фото критически и честно, "
             "укажи все недостатки и достоинства без прикрас, максимум строгости и объективности. Определи пол, состояние кожи, волос, костную структуру, челюсть, "
             "тип глаз (например, охотничьи глаза, жертвенные глаза), подкожный жир/одутловатость, симметрию, кантальный наклон. Максимадьно кратко, пару недлинных слов в каждом поле JSON. "
-            "Рассчитай PSL рейтинг от 1.0 до 8.0 по шкале тру-луксмаксинга (где 4.0 — средний). "
+            "Рассчитай PSL рейтинг от 1.0 до 8.0 по шкале тру-луксмаксинга (где 4.0 — средний LMTN). "
             "Назначь тир строго в зависимости от пола:\n"
             "Мужской: SUB 3, SUB 5, LTN, MTN, HTN, CHADLITE, CHAD, TRUE ADAM.\n"
             "Женский: SUB 3, SUB 5, LTB, MTB, HTB, STACYLITE, STACY, TRUE EVE.\n\n"
@@ -667,7 +667,7 @@ async def get_looksmaxxing_data(photo_bytes: bytes, include_advice: bool, lang: 
             "You are an extremely strict and objective AI looksmaxxing analyst. Evaluate the face in the photo critically and honestly, "
             "pointing out all flaws and strengths without sugarcoating, as strictly and objectively as possible. Determine gender, skin condition, hair, bone structure, jawline, "
             "eye type (e.g. hunter eyes, prey eyes), subcutaneous fat/bloating, symmetry, canthal tilt. Fill in each field in JSON as briefly as possible, in a couple of short words. Calculate a PSL rating from 1.0 to 8.0 "
-            "using the true looksmaxxing scale (where 4.0 is average). Assign a tier strictly based on gender:\n"
+            "using the true looksmaxxing scale (where 4.0 is average LMTN). Assign a tier strictly based on gender:\n"
             "Male: SUB 3, SUB 5, LTN, MTN, HTN, CHADLITE, CHAD, TRUE ADAM.\n"
             "Female: SUB 3, SUB 5, LTB, MTB, HTB, STACYLITE, STACY, TRUE EVE.\n\n"
             "Return ONLY a valid JSON object without markdown formatting. Fields:\n"
@@ -739,6 +739,83 @@ def get_user_theme(platform: str, user_id: int) -> str:
 
 # --- ТЕЛЕГРАМ ОБРАБОТЧИКИ (МОДИФИЦИРОВАНО) ---
 tg_bot = AsyncTeleBot(TG_TOKEN)
+# ============================================================
+# === СИСТЕМА ДОНАТОВ (Telegram Stars) ===
+# ============================================================
+import telebot.types
+from telebot.types import LabeledPrice
+
+# Словарь для временного хранения суммы доната (чтобы не засорять память навечно)
+pending_donations = {}  # user_id -> stars_amount
+
+@tg_bot.message_handler(commands=['start'])
+async def handle_start(message):
+    """
+    Обрабатывает deep‑link: https://t.me/{botUsername}?start=donate_stars_{stars}
+    """
+    args = telebot.util.extract_arguments(message.text)
+    if not args:
+        # Обычный /start без параметров
+        return
+
+    if args.startswith('donate_stars_'):
+        try:
+            stars = int(args.split('_')[-1])
+            if stars <= 0:
+                raise ValueError
+        except (ValueError, IndexError):
+            await tg_bot.reply_to(message, "❌ Неверное количество звёзд в ссылке.")
+            return
+
+        # Запоминаем сумму (на случай, если потребуется после оплаты)
+        pending_donations[message.chat.id] = stars
+
+        # Создаём счёт (invoice)
+        prices = [LabeledPrice(label="Поддержать Кульша", amount=stars)]
+        await tg_bot.send_invoice(
+            chat_id=message.chat.id,
+            title="Донат Кульшу",
+            description=f"Поддержка разработки на {stars} ⭐️",
+            invoice_payload=f"donate_{stars}_stars",
+            provider_token="",          # Для Telegram Stars токен не нужен
+            currency="XTR",             # Код валюты для Stars
+            prices=prices,
+            start_parameter="donate",   # Параметр, возвращаемый при переходе из инвойса
+        )
+        logger.info(f"Выставлен счёт на {stars} звёзд для пользователя {message.chat.id}")
+
+    elif args == "donate":
+        # Если перешли просто по ссылке без суммы, можно предложить выбрать
+        await tg_bot.reply_to(
+            message,
+            "Сколько звёзд хочешь подарить? Напиши `/donate <число>`"
+        )
+
+@tg_bot.pre_checkout_query_handler(func=lambda query: True)
+async def handle_pre_checkout(pre_checkout):
+    """Подтверждаем возможность оплаты."""
+    logger.info(f"Pre-checkout запрос от {pre_checkout.from_user.id}: {pre_checkout.invoice_payload}")
+    # Всегда разрешаем оплату (можно добавить проверки лимитов)
+    await tg_bot.answer_pre_checkout_query(pre_checkout.id, ok=True)
+
+@tg_bot.message_handler(content_types=['successful_payment'])
+async def handle_successful_payment(message: telebot.types.Message):
+    """Платёж прошёл успешно."""
+    payment = message.successful_payment
+    user_id = message.chat.id
+    stars = pending_donations.pop(user_id, None) or int(payment.invoice_payload.split('_')[1])
+
+    logger.info(f"Пользователь {user_id} задонатил {stars} звёзд! Платёж ID: {payment.telegram_payment_charge_id}")
+
+    # Отправляем благодарность
+    await tg_bot.reply_to(
+        message,
+        f"🍷🗿 Спасибо за {stars} звёзд, кент! Ты сделал Кульша чуточку счастливее."
+    )
+
+    # Здесь можно добавить выдачу привилегий (сохранение в БД, роль в чате и т.п.)
+    # Например:
+    # await give_premium_access(user_id, stars)
 
 @tg_bot.message_handler(func=lambda m: m.text)
 async def handle_tg_text(message):
@@ -1173,3 +1250,5 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         pass
+        
+        
