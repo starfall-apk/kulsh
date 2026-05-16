@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.12.2 (integrated Looksmaxxing)
+# Kulsh GPT | v2.12.2 (integrated Looksmaxxing + dynamic translations + theme setting)
 # by (main author):
     # starfall-apk
 # coauthor & bot hosting:
@@ -93,8 +93,11 @@ else:
 chat_memories = {}
 voice_text_channels = {}  # guild_id -> text_channel для ответов
 
-# Настройки пользователей (язык инфографики и т.д.)
+# Настройки пользователей (язык инфографики, тема и т.д.)
 user_settings = defaultdict(dict)  # ключ "tg_123456" или "ds_123456"
+
+# Импорт для динамического перевода
+from deep_translator import GoogleTranslator
 
 def get_chat_memory(chat_id):
     if chat_id not in chat_memories:
@@ -409,123 +412,29 @@ def get_tier_color(tier_name: str) -> str:
         return "#9F7AEA"
     return "#38A169"
 
-# Словари перевода значений метрик (английский -> русский)
-METRIC_VALUE_TRANSLATIONS = {
-    # Skin
-    "oily": "жирная",
-    "clear": "чистая",
-    "dry": "сухая",
-    "combination": "комбинированная",
-    "acne-prone": "склонная к акне",
-    "textured": "неровная",
-    "smooth": "гладкая",
-    "dull": "тусклая",
-    "glowing": "сияющая",
-    "blemished": "с пятнами",
-    "scarred": "со шрамами",
-    "freckled": "веснушчатая",
-    "pale": "бледная",
-    "tanned": "загорелая",
-    "flawless": "безупречная",
-    
-    # Eyes
-    "hunter eyes": "охотничьи глаза",
-    "prey eyes": "глаза жертвы",
-    "almond": "миндалевидные",
-    "round": "круглые",
-    "deep-set": "глубоко посаженные",
-    "wide-set": "широко расставленные",
-    "close-set": "близко посаженные",
-    "hooded": "с нависшим веком",
-    "monolid": "монолид",
-    "prominent": "выпуклые",
-    "small": "маленькие",
-    "large": "большие",
-    
-    # Jawline
-    "defined": "выраженная",
-    "weak": "слабая",
-    "strong": "сильная",
-    "sharp": "острая",
-    "square": "квадратная",
-    "round": "круглая",
-    "recessed": "запавшая",
-    "prominent": "выступающая",
-    "narrow": "узкая",
-    "wide": "широкая",
-    "average": "средняя",
-    
-    # Bloat
-    "low": "низкая",
-    "moderate": "умеренная",
-    "high": "высокая",
-    "none": "отсутствует",
-    "minimal": "минимальная",
-    "bloated": "одутловатое",
-    "lean": "сухое",
-    "puffy": "отёчное",
-    "defined": "чёткое",
-    
-    # Hair
-    "thick": "густые",
-    "thinning": "истончённые",
-    "balding": "лысеющий",
-    "dense": "плотные",
-    "fine": "тонкие",
-    "curly": "кудрявые",
-    "straight": "прямые",
-    "wavy": "волнистые",
-    "receding": "залысины",
-    "bald": "лысый",
-    "buzzcut": "ёжик",
-    "long": "длинные",
-    "short": "короткие",
-    "healthy": "здоровые",
-    "damaged": "повреждённые",
-    
-    # Bone structure
-    "prominent": "выступающая",
-    "gracile": "грацильная",
-    "strong": "крепкая",
-    "weak": "слабая",
-    "robust": "массивная",
-    "delicate": "тонкая",
-    "angular": "угловатая",
-    "rounded": "округлая",
-    "hollow cheeks": "впалые щёки",
-    "flat": "плоская",
-    "projected": "выдающаяся",
-    
-    # Symmetry
-    "high": "высокая",
-    "asymmetrical": "асимметричная",
-    "symmetrical": "симметричная",
-    "low": "низкая",
-    "moderate": "умеренная",
-    "perfect": "идеальная",
-    "slight asymmetry": "лёгкая асимметрия",
-    "notable asymmetry": "заметная асимметрия",
-    
-    # Canthal tilt
-    "positive": "положительный",
-    "negative": "отрицательный",
-    "neutral": "нейтральный",
-    "slightly positive": "слегка положительный",
-    "slightly negative": "слегка отрицательный",
-    "upturned": "приподнятый",
-    "downturned": "опущенный",
-    
-    # Дополнительно
-    "n/a": "н/д",
-    "average": "среднее",
-    "good": "хорошее",
-    "excellent": "отличное",
-    "poor": "плохое",
-    "fair": "удовлетворительное",
-}
+async def translate_text(text, target_lang='ru'):
+    """Переводит текст через Google Translate (deep-translator). Не переводит пустые/N/A строки."""
+    if not text or text.lower() == "n/a":
+        return text
+    try:
+        loop = asyncio.get_running_loop()
+        translated = await loop.run_in_executor(
+            None,
+            lambda: GoogleTranslator(source='auto', target=target_lang).translate(text)
+        )
+        return translated
+    except Exception as e:
+        logger.warning(f"Translation failed for '{text}': {e}")
+        return text  # возвращаем оригинал в случае ошибки
 
-def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark", lang: str = "en") -> BytesIO:
-    """Генерирует инфографику с поддержкой языков ('en' или 'ru')."""
+def add_bullet(text: str) -> str:
+    """Добавляет • в начало строки, если её ещё нет."""
+    if text.startswith("•") or text.startswith("-"):
+        return text
+    return f"• {text}"
+
+async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark", lang: str = "en") -> BytesIO:
+    """Генерирует инфографику с поддержкой языков и тем (асинхронно из-за переводов)."""
     # Словари переводов для статического текста
     if lang == "ru":
         TITLE = "ОТЧЁТ LOOKSMAXING"
@@ -660,7 +569,7 @@ def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark", lang
         # Перевод значения, если язык русский
         val_str = str(val)
         if lang == "ru":
-            val_str = METRIC_VALUE_TRANSLATIONS.get(val_str.lower(), val_str)
+            val_str = await translate_text(val_str, 'ru')
         title_bbox = draw.textbbox((0, 0), title, font=font_text)
         val_bbox = draw.textbbox((0, 0), val_str, font=font_text)
         title_h = title_bbox[3] - title_bbox[1]
@@ -679,6 +588,14 @@ def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark", lang
         pros = [pros]
     if isinstance(cons, str):
         cons = [cons]
+
+    # Переводим и добавляем буллиты
+    if lang == "ru":
+        pros = [add_bullet(await translate_text(item, 'ru')) for item in pros]
+        cons = [add_bullet(await translate_text(item, 'ru')) for item in cons]
+    else:
+        pros = [add_bullet(item) for item in pros]
+        cons = [add_bullet(item) for item in cons]
 
     col_y = final_y + 20
     draw.text((start_x, col_y), STRENGTHS, fill=accent, font=font_sub)
@@ -804,6 +721,9 @@ def get_user_key(platform: str, user_id: int) -> str:
 def get_user_lang(platform: str, user_id: int) -> str:
     return user_settings[get_user_key(platform, user_id)].get("infographic_lang", "ru")
 
+def get_user_theme(platform: str, user_id: int) -> str:
+    return user_settings[get_user_key(platform, user_id)].get("theme", "dark")
+
 # --- ТЕЛЕГРАМ ОБРАБОТЧИКИ (МОДИФИЦИРОВАНО) ---
 tg_bot = AsyncTeleBot(TG_TOKEN)
 
@@ -816,25 +736,47 @@ async def handle_tg_text(message):
     # --- ОБРАБОТКА НАСТРОЕК ---
     if text.lower().startswith("кульш настройки"):
         parts = text.split()
-        if len(parts) >= 3 and parts[2].lower() in ("язык", "language"):
-            if len(parts) >= 4:
-                lang_val = parts[3].lower()
-                if lang_val in ("ru", "русский", "russian"):
-                    user_settings[get_user_key("tg", message.chat.id)]["infographic_lang"] = "ru"
-                    await tg_bot.reply_to(message, "Язык инфографики изменён на русский 🇷🇺")
-                elif lang_val in ("en", "английский", "english"):
-                    user_settings[get_user_key("tg", message.chat.id)]["infographic_lang"] = "en"
-                    await tg_bot.reply_to(message, "Infographic language set to English 🇬🇧")
+        user_key = get_user_key("tg", message.chat.id)
+        if len(parts) >= 3:
+            setting = parts[2].lower()
+            if setting in ("язык", "language"):
+                if len(parts) >= 4:
+                    lang_val = parts[3].lower()
+                    if lang_val in ("ru", "русский", "russian"):
+                        user_settings[user_key]["infographic_lang"] = "ru"
+                        await tg_bot.reply_to(message, "Язык инфографики изменён на русский 🇷🇺")
+                    elif lang_val in ("en", "английский", "english"):
+                        user_settings[user_key]["infographic_lang"] = "en"
+                        await tg_bot.reply_to(message, "Infographic language set to English 🇬🇧")
+                    else:
+                        await tg_bot.reply_to(message, "Доступные языки: ru (русский), en (english)")
                 else:
-                    await tg_bot.reply_to(message, "Доступные языки: ru (русский), en (english)")
+                    await tg_bot.reply_to(message, "Укажите язык: `кульш настройки язык ru` или `en`")
+            elif setting in ("тема", "theme"):
+                if len(parts) >= 4:
+                    theme_val = parts[3].lower()
+                    if theme_val in ("dark", "тёмная", "темная"):
+                        user_settings[user_key]["theme"] = "dark"
+                        await tg_bot.reply_to(message, "Тема изменена на тёмную 🌑")
+                    elif theme_val in ("light", "светлая"):
+                        user_settings[user_key]["theme"] = "light"
+                        await tg_bot.reply_to(message, "Тема изменена на светлую ☀️")
+                    else:
+                        await tg_bot.reply_to(message, "Доступные темы: dark (тёмная), light (светлая)")
+                else:
+                    await tg_bot.reply_to(message, "Укажите тему: `кульш настройки тема dark` или `light`")
             else:
-                await tg_bot.reply_to(message, "Укажите язык: `кульш настройки язык ru` или `en`")
+                await tg_bot.reply_to(message, "Неизвестная настройка. Доступно: язык, тема")
         else:
             current_lang = get_user_lang("tg", message.chat.id)
             lang_display = "Русский" if current_lang == "ru" else "English"
-            await tg_bot.reply_to(message, 
-                f"⚙️ **Настройки**\nЯзык инфографики: {lang_display}\n\n"
-                "Изменить: `кульш настройки язык ru` / `en`")
+            current_theme = get_user_theme("tg", message.chat.id)
+            theme_display = "Тёмная" if current_theme == "dark" else "Светлая"
+            await tg_bot.reply_to(message,
+                f"⚙️ **Настройки**\n"
+                f"Язык инфографики: {lang_display}\n"
+                f"Тема: {theme_display}\n\n"
+                "Изменить: `кульш настройки язык ru/en`, `кульш настройки тема dark/light`")
         return
 
     # Проверяем команду looksmaxxing без фото
@@ -889,7 +831,8 @@ async def handle_tg_photo(message):
                 await tg_bot.edit_message_text(f"❌ {ai_data['error']}", chat_id, status_msg.message_id)
                 return
             lang = get_user_lang("tg", message.chat.id)
-            infographic = create_infographic(image_bytes, ai_data, theme="dark", lang=lang)
+            theme = get_user_theme("tg", message.chat.id)
+            infographic = await create_infographic(image_bytes, ai_data, theme=theme, lang=lang)
             report_text = (
                 f"📊 **РЕЗУЛЬТАТЫ LOOKSMAXXING АНАЛИЗА**\n\n"
                 f"🧬 **Пол:** {ai_data.get('gender', 'Не определен')}\n"
@@ -964,25 +907,47 @@ async def on_message(message):
     # === НАСТРОЙКИ ===
     if content_lower.startswith("кульш настройки"):
         parts = message.content.split()
-        if len(parts) >= 3 and parts[2].lower() in ("язык", "language"):
-            if len(parts) >= 4:
-                lang_val = parts[3].lower()
-                if lang_val in ("ru", "русский", "russian"):
-                    user_settings[get_user_key("ds", message.author.id)]["infographic_lang"] = "ru"
-                    await message.reply("Язык инфографики изменён на русский 🇷🇺")
-                elif lang_val in ("en", "английский", "english"):
-                    user_settings[get_user_key("ds", message.author.id)]["infographic_lang"] = "en"
-                    await message.reply("Infographic language set to English 🇬🇧")
+        user_key = get_user_key("ds", message.author.id)
+        if len(parts) >= 3:
+            setting = parts[2].lower()
+            if setting in ("язык", "language"):
+                if len(parts) >= 4:
+                    lang_val = parts[3].lower()
+                    if lang_val in ("ru", "русский", "russian"):
+                        user_settings[user_key]["infographic_lang"] = "ru"
+                        await message.reply("Язык инфографики изменён на русский 🇷🇺")
+                    elif lang_val in ("en", "английский", "english"):
+                        user_settings[user_key]["infographic_lang"] = "en"
+                        await message.reply("Infographic language set to English 🇬🇧")
+                    else:
+                        await message.reply("Доступные языки: ru (русский), en (english)")
                 else:
-                    await message.reply("Доступные языки: ru (русский), en (english)")
+                    await message.reply("Укажите язык: `кульш настройки язык ru` или `en`")
+            elif setting in ("тема", "theme"):
+                if len(parts) >= 4:
+                    theme_val = parts[3].lower()
+                    if theme_val in ("dark", "тёмная", "темная"):
+                        user_settings[user_key]["theme"] = "dark"
+                        await message.reply("Тема изменена на тёмную 🌑")
+                    elif theme_val in ("light", "светлая"):
+                        user_settings[user_key]["theme"] = "light"
+                        await message.reply("Тема изменена на светлую ☀️")
+                    else:
+                        await message.reply("Доступные темы: dark (тёмная), light (светлая)")
+                else:
+                    await message.reply("Укажите тему: `кульш настройки тема dark` или `light`")
             else:
-                await message.reply("Укажите язык: `кульш настройки язык ru` или `en`")
+                await message.reply("Неизвестная настройка. Доступно: язык, тема")
         else:
             current_lang = get_user_lang("ds", message.author.id)
             lang_display = "Русский" if current_lang == "ru" else "English"
+            current_theme = get_user_theme("ds", message.author.id)
+            theme_display = "Тёмная" if current_theme == "dark" else "Светлая"
             await message.reply(
-                f"⚙️ **Настройки**\nЯзык инфографики: {lang_display}\n\n"
-                "Изменить: `кульш настройки язык ru` / `en`")
+                f"⚙️ **Настройки**\n"
+                f"Язык инфографики: {lang_display}\n"
+                f"Тема: {theme_display}\n\n"
+                "Изменить: `кульш настройки язык ru/en`, `кульш настройки тема dark/light`")
         return
 
     # === КОМАНДА "Кульш серия" (ручная активация) ===
@@ -1089,7 +1054,8 @@ async def on_message(message):
                     await message.reply(f"❌ {ai_data['error']}")
                     return
                 lang = get_user_lang("ds", message.author.id)
-                infographic = create_infographic(image_bytes, ai_data, theme="dark", lang=lang)
+                theme = get_user_theme("ds", message.author.id)
+                infographic = await create_infographic(image_bytes, ai_data, theme=theme, lang=lang)
                 report_text = (
                     f"📊 **РЕЗУЛЬТАТЫ LOOKSMAXXING АНАЛИЗА**\n\n"
                     f"🧬 **Пол:** {ai_data.get('gender', 'Не определен')}\n"
