@@ -1359,25 +1359,38 @@ async def series_reminder_loop():
         await asyncio.sleep(86400)
 
 async def main():
-    # 1. Запускаем Discord бота (он будет коннектиться)
-    ds_task = asyncio.create_task(ds_bot.start(DISCORD_TOKEN))
-
-    # 2. Ждём, пока Discord бот полностью подключится
-    await ds_bot.wait_until_ready()
-    logger.info("Discord бот готов, запускаю фоновые задачи")
-
-    # 3. Запускаем фоновые задачи, которым нужен готовый ds_bot
-    asyncio.create_task(series_reminder_loop())
-    if DONATIONALERTS_TOKEN:
-        asyncio.create_task(donation_alerts_listener())
-
-    # 4. Запускаем random_post_loop (ему ds_bot не нужен)
+    # Запускаем рандом-посты (не зависит от Discord)
     asyncio.create_task(random_post_loop())
 
-    # 5. Запускаем Telegram polling
-    tg_task = asyncio.create_task(tg_bot.polling(non_stop=True))
+    # Запускаем Discord бота
+    async def start_discord():
+        await ds_bot.start(DISCORD_TOKEN)
 
-    await asyncio.gather(ds_task, tg_task)
+    async def start_telegram():
+        await tg_bot.polling(non_stop=True)
+
+    # Ждём готовности Discord через событие
+    ready_event = asyncio.Event()
+
+    @ds_bot.event
+    async def on_ready():
+        logger.info(f'Discord бот {ds_bot.user} запущен')
+        logger.info(f'Версия discord.py: {discord.__version__}')
+        if not VOICE_RECOGNITION_ENABLED:
+            logger.info("ℹ️ Распознавание голоса отключено")
+        
+        # Запускаем фоновые задачи после готовности
+        asyncio.create_task(series_reminder_loop())
+        if DONATIONALERTS_TOKEN:
+            asyncio.create_task(donation_alerts_listener())
+        
+        ready_event.set()
+
+    # Запускаем оба бота параллельно
+    await asyncio.gather(
+        start_discord(),
+        start_telegram()
+    )
 
 if __name__ == "__main__":
     logger.info(">>> Кульш в эфире. Врубай микрофоны.")
