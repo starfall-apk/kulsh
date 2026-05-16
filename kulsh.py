@@ -432,7 +432,7 @@ async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark"
     if lang == "ru":
         TITLE = "ОТЧЁТ LOOKSMAXING"
         PSL_LABEL = "PSL"
-        STRENGTHS = "ПРЕИМУЩЕСТВА"
+        STRENGTHS = "ПРЕИМУЩ."
         WEAKNESSES = "НЕДОСТАТКИ"
         FULL_ANALYSIS = "Полный анализ в сообщении"
         METRIC_NAMES = {
