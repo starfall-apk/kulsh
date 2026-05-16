@@ -122,4 +122,4 @@ Web Version: [https://kulsh-ai.web.app/](https://kulsh-ai.web.app/)
 ---
 
 ## 📜 License
-This project is licensed under the MIT License – see the [LICENSE file](LICENSE) for details.
+This project is licensed under the AGPL v3.0 License – see the [LICENSE file](LICENSE) for details.
