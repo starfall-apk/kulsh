@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.12.1 (integrated Looksmaxxing)
+# Kulsh GPT | v2.12.2 (integrated Looksmaxxing)
 # by (main author):
     # starfall-apk
 # coauthor & bot hosting:
@@ -409,14 +409,129 @@ def get_tier_color(tier_name: str) -> str:
         return "#9F7AEA"
     return "#38A169"
 
+# Словари перевода значений метрик (английский -> русский)
+METRIC_VALUE_TRANSLATIONS = {
+    # Skin
+    "oily": "жирная",
+    "clear": "чистая",
+    "dry": "сухая",
+    "combination": "комбинированная",
+    "acne-prone": "склонная к акне",
+    "textured": "неровная",
+    "smooth": "гладкая",
+    "dull": "тусклая",
+    "glowing": "сияющая",
+    "blemished": "с пятнами",
+    "scarred": "со шрамами",
+    "freckled": "веснушчатая",
+    "pale": "бледная",
+    "tanned": "загорелая",
+    "flawless": "безупречная",
+    
+    # Eyes
+    "hunter eyes": "охотничьи глаза",
+    "prey eyes": "глаза жертвы",
+    "almond": "миндалевидные",
+    "round": "круглые",
+    "deep-set": "глубоко посаженные",
+    "wide-set": "широко расставленные",
+    "close-set": "близко посаженные",
+    "hooded": "с нависшим веком",
+    "monolid": "монолид",
+    "prominent": "выпуклые",
+    "small": "маленькие",
+    "large": "большие",
+    
+    # Jawline
+    "defined": "выраженная",
+    "weak": "слабая",
+    "strong": "сильная",
+    "sharp": "острая",
+    "square": "квадратная",
+    "round": "круглая",
+    "recessed": "запавшая",
+    "prominent": "выступающая",
+    "narrow": "узкая",
+    "wide": "широкая",
+    "average": "средняя",
+    
+    # Bloat
+    "low": "низкая",
+    "moderate": "умеренная",
+    "high": "высокая",
+    "none": "отсутствует",
+    "minimal": "минимальная",
+    "bloated": "одутловатое",
+    "lean": "сухое",
+    "puffy": "отёчное",
+    "defined": "чёткое",
+    
+    # Hair
+    "thick": "густые",
+    "thinning": "истончённые",
+    "balding": "лысеющий",
+    "dense": "плотные",
+    "fine": "тонкие",
+    "curly": "кудрявые",
+    "straight": "прямые",
+    "wavy": "волнистые",
+    "receding": "залысины",
+    "bald": "лысый",
+    "buzzcut": "ёжик",
+    "long": "длинные",
+    "short": "короткие",
+    "healthy": "здоровые",
+    "damaged": "повреждённые",
+    
+    # Bone structure
+    "prominent": "выступающая",
+    "gracile": "грацильная",
+    "strong": "крепкая",
+    "weak": "слабая",
+    "robust": "массивная",
+    "delicate": "тонкая",
+    "angular": "угловатая",
+    "rounded": "округлая",
+    "hollow cheeks": "впалые щёки",
+    "flat": "плоская",
+    "projected": "выдающаяся",
+    
+    # Symmetry
+    "high": "высокая",
+    "asymmetrical": "асимметричная",
+    "symmetrical": "симметричная",
+    "low": "низкая",
+    "moderate": "умеренная",
+    "perfect": "идеальная",
+    "slight asymmetry": "лёгкая асимметрия",
+    "notable asymmetry": "заметная асимметрия",
+    
+    # Canthal tilt
+    "positive": "положительный",
+    "negative": "отрицательный",
+    "neutral": "нейтральный",
+    "slightly positive": "слегка положительный",
+    "slightly negative": "слегка отрицательный",
+    "upturned": "приподнятый",
+    "downturned": "опущенный",
+    
+    # Дополнительно
+    "n/a": "н/д",
+    "average": "среднее",
+    "good": "хорошее",
+    "excellent": "отличное",
+    "poor": "плохое",
+    "fair": "удовлетворительное",
+}
+
 def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark", lang: str = "en") -> BytesIO:
     """Генерирует инфографику с поддержкой языков ('en' или 'ru')."""
     # Словари переводов для статического текста
     if lang == "ru":
         TITLE = "ОТЧЁТ LOOKSMAXING"
         PSL_LABEL = "PSL"
-        STRENGTHS = "СИЛЬНЫЕ СТОРОНЫ"
-        WEAKNESSES = "СЛАБЫЕ СТОРОНЫ"
+        STRENGTHS = "ПРЕИМУЩЕСТВА"
+        WEAKNESSES = "НЕДОСТАТКИ"
         FULL_ANALYSIS = "Полный анализ в сообщении"
         METRIC_NAMES = {
             "skin": "Кожа",
@@ -523,7 +638,7 @@ def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark", lang
         tw = bbox[2] - bbox[0]
         draw.text((x - tw / 2, bar_y - 24), num_str, fill=text_secondary, font=font_scale)
 
-    # Метрики (ключи data) с переводом названий
+    # Метрики (ключи data) с переводом названий и значений
     metrics_mapping = [
         ("skin", data.get("skin", "N/A")),
         ("eyes", data.get("eyes", "N/A")),
@@ -542,7 +657,10 @@ def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark", lang
         row_y = table_start_y + idx * row_h
         draw.line([(start_x, row_y), (right_margin, row_y)], fill=line_color, width=1)
         title = METRIC_NAMES.get(key, key)
+        # Перевод значения, если язык русский
         val_str = str(val)
+        if lang == "ru":
+            val_str = METRIC_VALUE_TRANSLATIONS.get(val_str.lower(), val_str)
         title_bbox = draw.textbbox((0, 0), title, font=font_text)
         val_bbox = draw.textbbox((0, 0), val_str, font=font_text)
         title_h = title_bbox[3] - title_bbox[1]
