@@ -108,9 +108,6 @@ voice_text_channels = {}  # guild_id -> text_channel для ответов
 # Настройки пользователей (язык инфографики, тема и т.д.)
 user_settings = defaultdict(dict)  # ключ "tg_123456" или "ds_123456"
 
-# Импорт для динамического перевода
-from deep_translator import GoogleTranslator
-
 def get_chat_memory(chat_id):
     if chat_id not in chat_memories:
         chat_memories[chat_id] = deque(maxlen=5)
@@ -423,21 +420,6 @@ def get_tier_color(tier_name: str) -> str:
         return "#9F7AEA"
     return "#38A169"
 
-async def translate_text(text, target_lang='ru'):
-    """Переводит текст через Google Translate (deep-translator). Не переводит пустые/N/A строки."""
-    if not text or text.lower() == "n/a":
-        return text
-    try:
-        loop = asyncio.get_running_loop()
-        translated = await loop.run_in_executor(
-            None,
-            lambda: GoogleTranslator(source='auto', target=target_lang).translate(text)
-        )
-        return translated
-    except Exception as e:
-        logger.warning(f"Translation failed for '{text}': {e}")
-        return text  # возвращаем оригинал в случае ошибки
-
 def add_bullet(text: str) -> str:
     """Добавляет • в начало строки, если её ещё нет."""
     if text.startswith("•") or text.startswith("-"):
@@ -445,7 +427,7 @@ def add_bullet(text: str) -> str:
     return f"• {text}"
 
 async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark", lang: str = "en") -> BytesIO:
-    """Генерирует инфографику с поддержкой языков и тем (асинхронно из-за переводов)."""
+    """Генерирует инфографику. Метрики и списки берутся из data без дополнительного перевода."""
     # Словари переводов для статического текста
     if lang == "ru":
         TITLE = "ОТЧЁТ LOOKSMAXING"
@@ -530,12 +512,11 @@ async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark"
 
     psl_score = data.get("psl", "N/A")
     tier_name = data.get("tier", "N/A").upper()
-    gender_ru = data.get("gender", "N/A")
-    gender_en = "Male" if "муж" in gender_ru.lower() else "Female" if "жен" in gender_ru.lower() else gender_ru
+    gender = data.get("gender", "N/A")
 
     draw.text((start_x, 100), PSL_LABEL, fill=text_tertiary, font=font_sub)
     draw.text((start_x, 135), f"{psl_score}", fill=text_primary, font=font_psl_num)
-    draw.text((start_x, 210), f"{tier_name} · {gender_en}", fill=accent, font=font_sub)
+    draw.text((start_x, 210), f"{tier_name} · {gender}", fill=accent, font=font_sub)
 
     bar_x, bar_y, bar_w, bar_h = start_x, 270, 400, 20
     draw.rounded_rectangle((bar_x, bar_y, bar_x + bar_w, bar_y + bar_h), radius=10, fill=scale_bg)
@@ -558,7 +539,7 @@ async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark"
         tw = bbox[2] - bbox[0]
         draw.text((x - tw / 2, bar_y - 24), num_str, fill=text_secondary, font=font_scale)
 
-    # Метрики (ключи data) с переводом названий и значений
+    # Метрики – значения берутся напрямую из data (AI уже вернул на нужном языке)
     metrics_mapping = [
         ("skin", data.get("skin", "N/A")),
         ("eyes", data.get("eyes", "N/A")),
@@ -577,10 +558,7 @@ async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark"
         row_y = table_start_y + idx * row_h
         draw.line([(start_x, row_y), (right_margin, row_y)], fill=line_color, width=1)
         title = METRIC_NAMES.get(key, key)
-        # Перевод значения, если язык русский
-        val_str = str(val)
-        if lang == "ru":
-            val_str = await translate_text(val_str, 'ru')
+        val_str = str(val)   # без перевода, AI уже на нужном языке
         title_bbox = draw.textbbox((0, 0), title, font=font_text)
         val_bbox = draw.textbbox((0, 0), val_str, font=font_text)
         title_h = title_bbox[3] - title_bbox[1]
@@ -600,13 +578,9 @@ async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark"
     if isinstance(cons, str):
         cons = [cons]
 
-    # Переводим и добавляем буллиты
-    if lang == "ru":
-        pros = [add_bullet(await translate_text(item, 'ru')) for item in pros]
-        cons = [add_bullet(await translate_text(item, 'ru')) for item in cons]
-    else:
-        pros = [add_bullet(item) for item in pros]
-        cons = [add_bullet(item) for item in cons]
+    # Добавляем буллиты, без перевода
+    pros = [add_bullet(item) for item in pros]
+    cons = [add_bullet(item) for item in cons]
 
     col_y = final_y + 20
     draw.text((start_x, col_y), STRENGTHS, fill=accent, font=font_sub)
@@ -654,38 +628,68 @@ async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark"
     output.seek(0)
     return output
 
-async def get_looksmaxxing_data(photo_bytes: bytes, include_advice: bool) -> dict:
+async def get_looksmaxxing_data(photo_bytes: bytes, include_advice: bool, lang: str = "en") -> dict:
     """
-    Вызывает AI для оценки лица и возвращает словарь с результатами.
-    Использует строгий промпт без персональности Кульша.
+    Вызывает AI для оценки лица. Язык промпта зависит от lang (ru/en).
+    Возвращает словарь с результатами на соответствующем языке.
     """
-    prompt = (
-        "You are an extremely strict and objective AI looksmaxxing analyst. Evaluate the face in the photo critically and honestly, "
-        "pointing out all flaws and strengths without sugarcoating. Determine gender, skin condition, hair, bone structure, jawline, "
-        "eye type (e.g. hunter eyes, prey eyes), subcutane fat/bloating, symmetry, canthal tilt. Calculate a PSL rating from 1.0 to 8.0 "
-        "using the true looksmaxxing scale (where 4.0 is average). Assign a tier strictly based on gender:\n"
-        "Male: SUB 3, SUB 5, LTN, MTN, HTN, CHADLITE, CHAD, TRUE ADAM.\n"
-        "Female: SUB 3, SUB 5, LTB, MTB, HTB, STACYLITE, STACY, TRUE EVE.\n\n"
-        "Return ONLY a valid JSON object without markdown formatting. Fields:\n"
-        '- "gender": "Мужской" or "Женский",\n'
-        '- "psl": string with the rating (e.g. "5.2"),\n'
-        '- "tier": the tier name from the lists above,\n'
-        '- "skin": short in English (e.g. "oily", "clear"),\n'
-        '- "eyes": short in English (e.g. "hunter eyes", "downturned"),\n'
-        '- "jawline": short in English (e.g. "defined", "weak"),\n'
-        '- "bloat": short in English (e.g. "low", "moderate"),\n'
-        '- "hair": short in English (e.g. "thick", "thinning"),\n'
-        '- "bone_structure": short in English (e.g. "prominent", "gracile"),\n'
-        '- "symmetry": short in English (e.g. "high", "asymmetrical"),\n'
-        '- "canthal_tilt": short in English (e.g. "positive", "negative"),\n'
-        '- "pros": array of 2-3 key strengths in English (e.g. ["strong jawline", "good eye area"]),\n'
-        '- "cons": array of 2-3 key weaknesses/flaws in English (e.g. ["bloated face", "asymmetry"]),\n'
-        '- "summary": detailed face analysis in Russian, covering every parameter objectively.\n'
-    )
-    if include_advice:
-        prompt += '- "advice": practical looksmaxxing/softmaxxing/hardmaxxing tips in Russian.\n'
-    else:
-        prompt += '- "advice": leave empty.\n'
+    if lang == "ru":
+        prompt = (
+            "Ты — чрезвычайно строгий и объективный AI-аналитик по looksmaxxing. Оцени лицо на фото критически и честно, "
+            "укажи все недостатки и достоинства без прикрас. Определи пол, состояние кожи, волос, костную структуру, челюсть, "
+            "тип глаз (например, охотничьи глаза, жертвенные глаза), подкожный жир/одутловатость, симметрию, кантальный наклон. "
+            "Рассчитай PSL рейтинг от 1.0 до 8.0 по шкале тру-луксмаксинга (где 4.0 — средний). "
+            "Назначь тир строго в зависимости от пола:\n"
+            "Мужской: SUB 3, SUB 5, LTN, MTN, HTN, CHADLITE, CHAD, TRUE ADAM.\n"
+            "Женский: SUB 3, SUB 5, LTB, MTB, HTB, STACYLITE, STACY, TRUE EVE.\n\n"
+            "Верни ТОЛЬКО валидный JSON объект без форматирования markdown. Поля:\n"
+            '- "gender": "Мужской" или "Женский",\n'
+            '- "psl": строка с рейтингом (например, "5.2"),\n'
+            '- "tier": название тира из списков выше,\n'
+            '- "skin": кратко на русском (например, "жирная", "чистая"),\n'
+            '- "eyes": кратко на русском (например, "охотничьи глаза", "опущенные"),\n'
+            '- "jawline": кратко на русском (например, "выраженная", "слабая"),\n'
+            '- "bloat": кратко на русском (например, "низкая", "умеренная"),\n'
+            '- "hair": кратко на русском (например, "густые", "истончение"),\n'
+            '- "bone_structure": кратко на русском (например, "выраженная", "хрупкая"),\n'
+            '- "symmetry": кратко на русском (например, "высокая", "асимметричная"),\n'
+            '- "canthal_tilt": кратко на русском (например, "положительный", "отрицательный"),\n'
+            '- "pros": массив из 2-3 ключевых достоинств на русском (например, ["сильная челюсть", "хорошая область глаз"]),\n'
+            '- "cons": массив из 2-3 ключевых недостатков на русском (например, ["одутловатое лицо", "асимметрия"]),\n'
+            '- "summary": детальный анализ лица на русском, охватывающий каждый параметр объективно.\n'
+        )
+        if include_advice:
+            prompt += '- "advice": практические советы по looksmaxxing/softmaxxing/hardmaxxing на русском.\n'
+        else:
+            prompt += '- "advice": оставить пустым.\n'
+    else:  # en
+        prompt = (
+            "You are an extremely strict and objective AI looksmaxxing analyst. Evaluate the face in the photo critically and honestly, "
+            "pointing out all flaws and strengths without sugarcoating. Determine gender, skin condition, hair, bone structure, jawline, "
+            "eye type (e.g. hunter eyes, prey eyes), subcutaneous fat/bloating, symmetry, canthal tilt. Calculate a PSL rating from 1.0 to 8.0 "
+            "using the true looksmaxxing scale (where 4.0 is average). Assign a tier strictly based on gender:\n"
+            "Male: SUB 3, SUB 5, LTN, MTN, HTN, CHADLITE, CHAD, TRUE ADAM.\n"
+            "Female: SUB 3, SUB 5, LTB, MTB, HTB, STACYLITE, STACY, TRUE EVE.\n\n"
+            "Return ONLY a valid JSON object without markdown formatting. Fields:\n"
+            '- "gender": "Male" or "Female",\n'
+            '- "psl": string with the rating (e.g. "5.2"),\n'
+            '- "tier": the tier name from the lists above,\n'
+            '- "skin": short in English (e.g. "oily", "clear"),\n'
+            '- "eyes": short in English (e.g. "hunter eyes", "downturned"),\n'
+            '- "jawline": short in English (e.g. "defined", "weak"),\n'
+            '- "bloat": short in English (e.g. "low", "moderate"),\n'
+            '- "hair": short in English (e.g. "thick", "thinning"),\n'
+            '- "bone_structure": short in English (e.g. "prominent", "gracile"),\n'
+            '- "symmetry": short in English (e.g. "high", "asymmetrical"),\n'
+            '- "canthal_tilt": short in English (e.g. "positive", "negative"),\n'
+            '- "pros": array of 2-3 key strengths in English (e.g. ["strong jawline", "good eye area"]),\n'
+            '- "cons": array of 2-3 key weaknesses/flaws in English (e.g. ["bloated face", "asymmetry"]),\n'
+            '- "summary": detailed face analysis in English, covering every parameter objectively.\n'
+        )
+        if include_advice:
+            prompt += '- "advice": practical looksmaxxing/softmaxxing/hardmaxxing tips in English.\n'
+        else:
+            prompt += '- "advice": leave empty.\n'
 
     raw = await ask_ai_async(
         prompt=prompt,
@@ -701,8 +705,7 @@ async def get_looksmaxxing_data(photo_bytes: bytes, include_advice: bool) -> dic
 
     try:
         cleaned = clean_json_text(raw)
-        data = json.loads(cleaned)
-        return data
+        return json.loads(cleaned)
     except json.JSONDecodeError:
         logger.error(f"Looksmaxxing JSON decode failed: {raw[:200]}")
         # Fallback
@@ -835,11 +838,11 @@ async def handle_tg_photo(message):
             photo = message.photo[-1]
             image_bytes = await get_tg_image_bytes(tg_bot, photo.file_id)
             include_advice = "совет" in caption.lower() or "advice" in caption.lower()
-            ai_data = await get_looksmaxxing_data(image_bytes, include_advice)
+            lang = get_user_lang("tg", message.chat.id)
+            ai_data = await get_looksmaxxing_data(image_bytes, include_advice, lang=lang)
             if "error" in ai_data:
                 await tg_bot.edit_message_text(f"❌ {ai_data['error']}", chat_id, status_msg.message_id)
                 return
-            lang = get_user_lang("tg", message.chat.id)
             theme = get_user_theme("tg", message.chat.id)
             infographic = await create_infographic(image_bytes, ai_data, theme=theme, lang=lang)
             report_text = (
@@ -1057,11 +1060,11 @@ async def on_message(message):
             try:
                 image_bytes = await download_image_bytes(image_att.url)
                 include_advice = "совет" in content_lower or "advice" in content_lower
-                ai_data = await get_looksmaxxing_data(image_bytes, include_advice)
+                lang = get_user_lang("ds", message.author.id)
+                ai_data = await get_looksmaxxing_data(image_bytes, include_advice, lang=lang)
                 if "error" in ai_data:
                     await message.reply(f"❌ {ai_data['error']}")
                     return
-                lang = get_user_lang("ds", message.author.id)
                 theme = get_user_theme("ds", message.author.id)
                 infographic = await create_infographic(image_bytes, ai_data, theme=theme, lang=lang)
                 report_text = (
