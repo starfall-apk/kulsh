@@ -817,14 +817,15 @@ async def send_donation_alert(platform, name, amount, message_text=''):
                 except Exception as e:
                     logger.error(f"Не удалось отправить донат-оповещение в DS: {e}")
 
-# --- ОБРАБОТКА DONATIONALERTS ---
+# --- ОБРАБОТКА DONATIONALERTS (ИСПРАВЛЕНО) ---
 async def donation_alerts_listener():
     if not DONATIONALERTS_TOKEN:
         logger.info("🔕 DonationAlerts токен не задан, слушатель не запущен.")
         return
     await ds_bot.wait_until_ready()
     import socketio
-    sio = socketio.AsyncClient(reconnection=True)
+    # FIX: принудительно используем протокол Socket.IO v2 (engineio_version=3)
+    sio = socketio.AsyncClient(reconnection=True, engineio_version=3)
 
     @sio.event
     async def connect():
@@ -853,12 +854,13 @@ async def donation_alerts_listener():
         except Exception as e:
             logger.error(f"Ошибка обработки доната от DonationAlerts: {e}")
 
-    # Подключаемся с использованием токена
+    # Подключаемся с использованием токена (ssl_verify=False на случай проблем с сертификатом)
     try:
         await sio.connect(
             'https://socket.donationalerts.ru:443',
             transports=['websocket'],
-            auth={'token': DONATIONALERTS_TOKEN}
+            auth={'token': DONATIONALERTS_TOKEN},
+            ssl_verify=False
         )
         await sio.wait()
     except Exception as e:
