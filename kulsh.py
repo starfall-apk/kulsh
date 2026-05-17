@@ -825,7 +825,7 @@ async def donation_alerts_listener():
     await ds_bot.wait_until_ready()
     import socketio
     # FIX: принудительно используем протокол Socket.IO v2 (engineio_version=3)
-    sio = socketio.AsyncClient(reconnection=True, engineio_version=3)
+    sio = socketio.AsyncClient(reconnection=True)
 
     @sio.event
     async def connect():
