@@ -446,9 +446,9 @@ def add_bullet(text: str) -> str:
 
 async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark", lang: str = "en") -> BytesIO:
     if lang == "ru":
-        TITLE = "ОТЧЁТ LOOKSMAXING"
+        TITLE = "ОТЧЁТ LOOKSMAXXING"
         PSL_LABEL = "PSL"
-        STRENGTHS = "ПРЕИМУЩ."
+        STRENGTHS = "ПРЕИМУЩЕСТВ."
         WEAKNESSES = "НЕДОСТАТКИ"
         FULL_ANALYSIS = "Полный анализ в сообщении"
         METRIC_NAMES = {
@@ -461,8 +461,9 @@ async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark"
             "symmetry": "Симметрия",
             "canthal_tilt": "Кант. наклон"
         }
+        PERCENT_TEMPLATE = "Вы на одном уровне с {}% людей"
     else:
-        TITLE = "LOOKSMAXING REPORT"
+        TITLE = "LOOKSMAXXING REPORT"
         PSL_LABEL = "PSL"
         STRENGTHS = "STRENGTHS"
         WEAKNESSES = "WEAKNESSES"
@@ -477,6 +478,7 @@ async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark"
             "symmetry": "Symmetry",
             "canthal_tilt": "Canthal tilt"
         }
+        PERCENT_TEMPLATE = "You are on par with {}% of people"
 
     if theme == "light":
         bg_color = "#F9F9FB"
@@ -524,36 +526,55 @@ async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark"
     photo_x, photo_y = 40, 100
     image.paste(rounded_user_img, (photo_x, photo_y), rounded_user_img)
 
-    start_x = 510
-
     psl_score = data.get("psl", "N/A")
     tier_name = data.get("tier", "N/A").upper()
     gender = data.get("gender", "N/A")
+
+    try:
+        psl_val = float(psl_score)
+        psl_val = max(1.0, min(8.0, psl_val))
+    except (ValueError, TypeError):
+        psl_val = 1.0
+
+    percent = round((psl_val - 1.0) / 7.0 * 100)
+    percent = max(0, min(100, percent))
+    percent_text = PERCENT_TEMPLATE.format(percent)
+
+    # Текст и диаграмма под фото
+    photo_bottom = photo_y + rounded_user_img.size[1]
+    draw.text((40, photo_bottom + 15), percent_text, fill=text_secondary, font=font_sub)
+
+    bar_x, bar_y, bar_w, bar_h = 40, photo_bottom + 50, 350, 24
+    draw.rounded_rectangle((bar_x, bar_y, bar_x + bar_w, bar_y + bar_h), radius=12, fill=scale_bg)
+    fill_width = int(percent / 100 * bar_w)
+    draw.rounded_rectangle((bar_x, bar_y, bar_x + fill_width, bar_y + bar_h), radius=12, fill=accent)
+    draw.text((bar_x, bar_y + bar_h + 5), "0%", fill=text_tertiary, font=font_small)
+    draw.text((bar_x + bar_w - 35, bar_y + bar_h + 5), "100%", fill=text_tertiary, font=font_small)
+
+    start_x = 510
 
     draw.text((start_x, 100), PSL_LABEL, fill=text_tertiary, font=font_sub)
     draw.text((start_x, 135), f"{psl_score}", fill=text_primary, font=font_psl_num)
     draw.text((start_x, 210), f"{tier_name} · {gender}", fill=accent, font=font_sub)
 
-    bar_x, bar_y, bar_w, bar_h = start_x, 270, 400, 20
-    draw.rounded_rectangle((bar_x, bar_y, bar_x + bar_w, bar_y + bar_h), radius=10, fill=scale_bg)
+    psl_bar_x, psl_bar_y, psl_bar_w, psl_bar_h = start_x, 270, 400, 20
+    draw.rounded_rectangle((psl_bar_x, psl_bar_y, psl_bar_x + psl_bar_w, psl_bar_y + psl_bar_h), radius=10, fill=scale_bg)
 
     try:
-        psl_val = float(psl_score)
-        psl_val = max(1.0, min(8.0, psl_val))
-        fill_width = int((psl_val - 1) / 7 * bar_w)
-    except (ValueError, TypeError):
-        fill_width = 0
-    if fill_width > 0:
+        psl_fill_width = int((psl_val - 1) / 7 * psl_bar_w)
+    except:
+        psl_fill_width = 0
+    if psl_fill_width > 0:
         tier_color = get_tier_color(tier_name)
-        draw.rounded_rectangle((bar_x, bar_y, bar_x + fill_width, bar_y + bar_h), radius=10, fill=tier_color)
+        draw.rounded_rectangle((psl_bar_x, psl_bar_y, psl_bar_x + psl_fill_width, psl_bar_y + psl_bar_h), radius=10, fill=tier_color)
 
     for i in range(1, 9):
-        x = bar_x + (i - 1) / 7 * bar_w
-        draw.line([(x, bar_y - 6), (x, bar_y)], fill=text_tertiary, width=1)
+        x = psl_bar_x + (i - 1) / 7 * psl_bar_w
+        draw.line([(x, psl_bar_y - 6), (x, psl_bar_y)], fill=text_tertiary, width=1)
         num_str = str(i)
         bbox = draw.textbbox((0, 0), num_str, font=font_scale)
         tw = bbox[2] - bbox[0]
-        draw.text((x - tw / 2, bar_y - 24), num_str, fill=text_secondary, font=font_scale)
+        draw.text((x - tw / 2, psl_bar_y - 24), num_str, fill=text_secondary, font=font_scale)
 
     metrics_mapping = [
         ("skin", data.get("skin", "N/A")),
@@ -648,10 +669,19 @@ async def get_looksmaxxing_data(photo_bytes: bytes, include_advice: bool, lang: 
             "Ты — чрезвычайно строгий и объективный AI-аналитик по looksmaxxing. Оцени лицо на фото критически и честно, "
             "укажи все недостатки и достоинства без прикрас, максимум строгости и объективности. Определи пол, состояние кожи, волос, костную структуру, челюсть, "
             "тип глаз (например, охотничьи глаза, жертвенные глаза), подкожный жир/одутловатость, симметрию, кантальный наклон. Максимадьно кратко, пару недлинных слов в каждом поле JSON. "
-            "Рассчитай PSL рейтинг от 1.0 до 8.0 по шкале тру-луксмаксинга (где 4.0 — средний LMTN). "
+            "Рассчитай PSL рейтинг от 1.0 до 8.0 по шкале тру-луксмаксинга (где 5.55 — средний LMTN). "
             "Назначь тир строго в зависимости от пола:\n"
             "Мужской: SUB 3, SUB 5, LTN, MTN, HTN, CHADLITE, CHAD, TRUE ADAM.\n"
             "Женский: SUB 3, SUB 5, LTB, MTB, HTB, STACYLITE, STACY, TRUE EVE.\n\n"
+            "Диапазоны PSL для тиров:\n"
+            "SUB 3: 1.0 – 2.9\n"
+            "SUB 5: 3.0 – 4.9\n"
+            "LTN / LTB: 5.0 – 5.5\n"
+            "MTN / MTB: 5.6 – 6.3\n"
+            "HTN / HTB: 6.4 – 7.0\n"
+            "CHADLITE / STACYLITE: 7.0 – 7.4\n"
+            "CHAD / STACY: 7.5 – 7.7\n"
+            "TRUE ADAM / TRUE EVE: 7.8 – 8.0\n\n"
             "Верни ТОЛЬКО валидный JSON объект без форматирования markdown. Поля:\n"
             '- "gender": "Мужской" или "Женский",\n'
             '- "psl": строка с рейтингом (например, "5.2"),\n'
@@ -680,6 +710,15 @@ async def get_looksmaxxing_data(photo_bytes: bytes, include_advice: bool, lang: 
             "using the true looksmaxxing scale (where 4.0 is average LMTN). Assign a tier strictly based on gender:\n"
             "Male: SUB 3, SUB 5, LTN, MTN, HTN, CHADLITE, CHAD, TRUE ADAM.\n"
             "Female: SUB 3, SUB 5, LTB, MTB, HTB, STACYLITE, STACY, TRUE EVE.\n\n"
+            "PSL ranges for tiers:\n"
+            "SUB 3: 1.0 – 2.9\n"
+            "SUB 5: 3.0 – 4.9\n"
+            "LTN / LTB: 5.0 – 5.5\n"
+            "MTN / MTB: 5.6 – 6.3\n"
+            "HTN / HTB: 6.4 – 7.0\n"
+            "CHADLITE / STACYLITE: 7.0 – 7.4\n"
+            "CHAD / STACY: 7.5 – 7.7\n"
+            "TRUE ADAM / TRUE EVE: 7.8 – 8.0\n\n"
             "Return ONLY a valid JSON object without markdown formatting. Fields:\n"
             '- "gender": "Male" or "Female",\n'
             '- "psl": string with the rating (e.g. "5.2"),\n'
