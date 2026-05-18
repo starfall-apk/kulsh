@@ -22,6 +22,7 @@ import threading
 import time
 import json
 from PIL import Image, ImageDraw, ImageFont
+import math
 
 import logging
 from logging.handlers import RotatingFileHandler
@@ -444,6 +445,36 @@ def add_bullet(text: str) -> str:
         return text
     return f"• {text}"
 
+# Проценты тиров по нормальному распределению (z-границы)
+# Сумма ≈ 100%
+TIER_DISTRIBUTION = [
+    {"key": "sub3",  "short": "S3",  "full": "SUB 3",       "z_low": -10, "z_high": -2.0, "psl_low": 1.0, "psl_high": 2.9},
+    {"key": "sub5",  "short": "S5",  "full": "SUB 5",       "z_low": -2.0, "z_high": -1.0, "psl_low": 3.0, "psl_high": 4.9},
+    {"key": "ltn",   "short": "LTN", "full": "LTN / LTB",   "z_low": -1.0, "z_high": 0.7,  "psl_low": 5.0, "psl_high": 5.5},
+    {"key": "mtn",   "short": "MTN", "full": "MTN / MTB",   "z_low": 0.7,  "z_high": 1.3,  "psl_low": 5.6, "psl_high": 6.3},
+    {"key": "htn",   "short": "HTN", "full": "HTN / HTB",   "z_low": 1.3,  "z_high": 1.8,  "psl_low": 6.4, "psl_high": 7.0},
+    {"key": "chadlite","short":"CL", "full": "CHADLITE / STACYLITE", "z_low": 1.8, "z_high": 2.3, "psl_low": 7.0, "psl_high": 7.4},
+    {"key": "chad",   "short": "CH",  "full": "CHAD / STACY","z_low": 2.3,  "z_high": 3.0,  "psl_low": 7.5, "psl_high": 7.7},
+    {"key": "trueadam","short":"TA", "full": "TRUE ADAM / EVE","z_low": 3.0, "z_high": 10,  "psl_low": 7.8, "psl_high": 8.0},
+]
+
+def normal_cdf(z):
+    """Cumulative distribution function for standard normal"""
+    return 0.5 * (1 + math.erf(z / math.sqrt(2)))
+
+def get_tier_percents():
+    """Calculate exact percentages for each tier based on z-scores"""
+    percents = []
+    for tier in TIER_DISTRIBUTION:
+        low = max(tier["z_low"], -8)  # avoid extremes
+        high = min(tier["z_high"], 8)
+        p = (normal_cdf(high) - normal_cdf(low)) * 100
+        percents.append(p)
+    return percents
+
+# Предрасчитанные проценты
+TIER_PERCENTS = get_tier_percents()  # список длиной 8
+
 async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark", lang: str = "en") -> BytesIO:
     if lang == "ru":
         TITLE = "ОТЧЁТ LOOKSMAXXING"
@@ -461,7 +492,8 @@ async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark"
             "symmetry": "Симметрия",
             "canthal_tilt": "Кант. наклон"
         }
-        PERCENT_TEMPLATE = "Вы на одном уровне с {}% людей"
+        BETTER_THAN = "Вы превосходите {}% людей"
+        DISTRIBUTION_CAPTION = "Распределение тиров"
     else:
         TITLE = "LOOKSMAXXING REPORT"
         PSL_LABEL = "PSL"
@@ -478,7 +510,8 @@ async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark"
             "symmetry": "Symmetry",
             "canthal_tilt": "Canthal tilt"
         }
-        PERCENT_TEMPLATE = "You are on par with {}% of people"
+        BETTER_THAN = "You outperform {}% of people"
+        DISTRIBUTION_CAPTION = "Tier distribution"
 
     if theme == "light":
         bg_color = "#F9F9FB"
@@ -489,6 +522,7 @@ async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark"
         line_color = "#D1D5DB"
         scale_bg = "#E5E7EB"
         weak_color = "#C53030"
+        highlight_outline = "#1A1A2E"
     else:
         bg_color = "#0E0E12"
         text_primary = "#F3F4F6"
@@ -498,8 +532,9 @@ async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark"
         line_color = "#2A2A3A"
         scale_bg = "#2A2A3A"
         weak_color = "#E53E3E"
+        highlight_outline = "#FFFFFF"
 
-    canvas_w, canvas_h = 1000, 920
+    canvas_w, canvas_h = 1000, 1000  # немного увеличил высоту
     image = Image.new("RGBA", (canvas_w, canvas_h), bg_color)
     draw = ImageDraw.Draw(image)
 
@@ -510,6 +545,7 @@ async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark"
     font_small = load_font(15)
     font_scale = load_font(16)
     list_font = load_font(17)
+    font_tier_label = load_font(13)
 
     draw.text((40, 25), TITLE, fill=text_tertiary, font=font_title)
     draw.line([(40, 70), (canvas_w - 40, 70)], fill=line_color, width=1)
@@ -536,30 +572,107 @@ async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark"
     except (ValueError, TypeError):
         psl_val = 1.0
 
-    percent = round((psl_val - 1.0) / 7.0 * 100)
-    percent = max(0, min(100, percent))
-    percent_text = PERCENT_TEMPLATE.format(percent)
+    # Определяем текущий тир и его индекс
+    current_tier_key = None
+    current_tier_idx = -1
+    for idx, t in enumerate(TIER_DISTRIBUTION):
+        if tier_name.upper().replace(" ", "") in [t["key"].upper(), t["full"].upper().replace(" ", ""), t["short"].upper()]:
+            # Грубое сопоставление
+            current_tier_key = t["key"]
+            current_tier_idx = idx
+            break
+    if current_tier_key is None:
+        # Если не нашли, попробуем по диапазону PSL
+        for idx, t in enumerate(TIER_DISTRIBUTION):
+            if t["psl_low"] <= psl_val <= t["psl_high"]:
+                current_tier_idx = idx
+                current_tier_key = t["key"]
+                break
+    if current_tier_key is None:  # fallback
+        current_tier_idx = 4  # HTN примерно
+        current_tier_key = "htn"
 
-    # Текст и диаграмма под фото
+    # Вычисление процентиля "превосходит X%"
+    # Кумулятивный процент ниже текущего тира
+    cum_low = sum(TIER_PERCENTS[:current_tier_idx])  # процент людей ниже
+    # Процент внутри текущего тира
+    tier_percent = TIER_PERCENTS[current_tier_idx]
+    # Позиция внутри тира (доля)
+    tier = TIER_DISTRIBUTION[current_tier_idx]
+    psl_low, psl_high = tier["psl_low"], tier["psl_high"]
+    if psl_high > psl_low:
+        fraction = (psl_val - psl_low) / (psl_high - psl_low)
+    else:
+        fraction = 0.5
+    fraction = max(0, min(1, fraction))
+    better_than = cum_low + fraction * tier_percent
+    better_than = round(better_than, 1)
+    if better_than > 99.9:
+        better_than = 99.9
+    elif better_than < 0.1:
+        better_than = 0.1
+
+    better_text = BETTER_THAN.format(better_than)
+
+    # Рисуем текст процента под фото
     photo_bottom = photo_y + rounded_user_img.size[1]
-    draw.text((40, photo_bottom + 15), percent_text, fill=text_secondary, font=font_sub)
+    draw.text((40, photo_bottom + 20), better_text, fill=text_secondary, font=font_sub)
 
-    bar_x, bar_y, bar_w, bar_h = 40, photo_bottom + 50, 350, 24
-    draw.rounded_rectangle((bar_x, bar_y, bar_x + bar_w, bar_y + bar_h), radius=12, fill=scale_bg)
-    fill_width = int(percent / 100 * bar_w)
-    draw.rounded_rectangle((bar_x, bar_y, bar_x + fill_width, bar_y + bar_h), radius=12, fill=accent)
-    draw.text((bar_x, bar_y + bar_h + 5), "0%", fill=text_tertiary, font=font_small)
-    draw.text((bar_x + bar_w - 35, bar_y + bar_h + 5), "100%", fill=text_tertiary, font=font_small)
+    # Диаграмма распределения тиров под фото
+    chart_x = 40
+    chart_y = photo_bottom + 65
+    chart_width = 430
+    chart_height = 90
+    bar_gap = 3  # зазор между столбцами
+    total_gaps = bar_gap * (len(TIER_DISTRIBUTION) - 1)
+    available_width = chart_width - total_gaps
+    # Вычисляем ширины столбцов пропорционально процентам
+    percent_sum = sum(TIER_PERCENTS)
+    bar_widths = [available_width * (p / percent_sum) for p in TIER_PERCENTS]
 
+    # Рисуем столбцы
+    x_cursor = chart_x
+    for i, tier in enumerate(TIER_DISTRIBUTION):
+        w = bar_widths[i]
+        color = get_tier_color(tier["key"])
+        # Заливка
+        draw.rectangle([x_cursor, chart_y, x_cursor + w, chart_y + chart_height], fill=color)
+        # Обводка для текущего тира
+        if i == current_tier_idx:
+            draw.rectangle([x_cursor-1, chart_y-1, x_cursor + w+1, chart_y + chart_height+1], outline=highlight_outline, width=2)
+        # Подписи (сокращённые названия)
+        label = tier["short"]
+        text_bbox = draw.textbbox((0, 0), label, font=font_tier_label)
+        text_w = text_bbox[2] - text_bbox[0]
+        text_h = text_bbox[3] - text_bbox[1]
+        # Центрируем под столбцом
+        label_x = x_cursor + w/2 - text_w/2
+        label_y = chart_y + chart_height + 5
+        draw.text((label_x, label_y), label, fill=text_secondary, font=font_tier_label)
+        # Процент под названием
+        percent_str = f"{TIER_PERCENTS[i]:.1f}%"
+        p_bbox = draw.textbbox((0, 0), percent_str, font=font_tier_label)
+        p_w = p_bbox[2] - p_bbox[0]
+        draw.text((x_cursor + w/2 - p_w/2, label_y + text_h + 2), percent_str, fill=text_tertiary, font=font_tier_label)
+        x_cursor += w + bar_gap
+
+    # Надпись "Распределение тиров" слева от диаграммы (или над ней, но места мало, поставим слева вертикально? Лучше не надо, просто под диаграммой)
+    draw.text((40, chart_y + chart_height + 40), DISTRIBUTION_CAPTION, fill=text_tertiary, font=font_small)
+
+    # Далее правая часть с метриками и т.д. смещается вниз
     start_x = 510
+    # Нужно пересчитать Y-координаты правой колонки, чтобы они не наезжали на диаграмму.
+    # Раньше правая колонка начиналась на 100, теперь диаграмма занимает до chart_y+chart_height+40 ~ photo_bottom+65+90+40 = photo_bottom+195.
+    # При photo_y=100 и photo_height=530, photo_bottom=630, тогда chart заканчивается около 825.
+    # Правая колонка start_x=510, начинаем с y=100, но метрики могут залезть на chart. Чтобы избежать, лучше правую часть начать ниже, например, с y=chart_y + chart_height + 60.
+    right_top_y = chart_y + chart_height + 70  # отступ
+    draw.text((start_x, right_top_y), PSL_LABEL, fill=text_tertiary, font=font_sub)
+    draw.text((start_x, right_top_y+35), f"{psl_score}", fill=text_primary, font=font_psl_num)
+    draw.text((start_x, right_top_y+110), f"{tier_name} · {gender}", fill=accent, font=font_sub)
 
-    draw.text((start_x, 100), PSL_LABEL, fill=text_tertiary, font=font_sub)
-    draw.text((start_x, 135), f"{psl_score}", fill=text_primary, font=font_psl_num)
-    draw.text((start_x, 210), f"{tier_name} · {gender}", fill=accent, font=font_sub)
-
-    psl_bar_x, psl_bar_y, psl_bar_w, psl_bar_h = start_x, 270, 400, 20
+    psl_bar_x, psl_bar_y = start_x, right_top_y + 160
+    psl_bar_w, psl_bar_h = 400, 20
     draw.rounded_rectangle((psl_bar_x, psl_bar_y, psl_bar_x + psl_bar_w, psl_bar_y + psl_bar_h), radius=10, fill=scale_bg)
-
     try:
         psl_fill_width = int((psl_val - 1) / 7 * psl_bar_w)
     except:
@@ -567,7 +680,6 @@ async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark"
     if psl_fill_width > 0:
         tier_color = get_tier_color(tier_name)
         draw.rounded_rectangle((psl_bar_x, psl_bar_y, psl_bar_x + psl_fill_width, psl_bar_y + psl_bar_h), radius=10, fill=tier_color)
-
     for i in range(1, 9):
         x = psl_bar_x + (i - 1) / 7 * psl_bar_w
         draw.line([(x, psl_bar_y - 6), (x, psl_bar_y)], fill=text_tertiary, width=1)
@@ -588,7 +700,7 @@ async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark"
     ]
 
     row_h = 38
-    table_start_y = 315
+    table_start_y = psl_bar_y + psl_bar_h + 25
     right_margin = start_x + 430
     for idx, (key, val) in enumerate(metrics_mapping):
         row_y = table_start_y + idx * row_h
