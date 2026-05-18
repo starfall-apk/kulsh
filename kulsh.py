@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.15.0 (donations, leaderboard, DonationAlerts, auto-update)
+# Kulsh GPT | v2.15.1 (donations, leaderboard, DonationAlerts, auto-update)
 # by (main author):
 #     starfall-apk
 # coauthor & bot hosting:
@@ -8,6 +8,7 @@ import asyncio
 import aiohttp
 import telebot
 from telebot.async_telebot import AsyncTeleBot
+from telebot.types import InputFile
 import discord
 from discord.ext import tasks
 from discord.ext import voice_recv
@@ -632,17 +633,19 @@ async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark"
         draw.rectangle([x_cursor, chart_y, x_cursor + w, chart_y + chart_height], fill=color)
         if i == current_tier_idx:
             draw.rectangle([x_cursor-1, chart_y-1, x_cursor + w+1, chart_y + chart_height+1], outline=highlight_outline, width=2)
-        label = tier["short"]
-        text_bbox = draw.textbbox((0, 0), label, font=font_tier_label)
-        text_w = text_bbox[2] - text_bbox[0]
-        text_h = text_bbox[3] - text_bbox[1]
-        label_x = x_cursor + w/2 - text_w/2
-        label_y = chart_y + chart_height + 5
-        draw.text((label_x, label_y), label, fill=text_secondary, font=font_tier_label)
-        percent_str = f"{TIER_PERCENTS[i]:.1f}%"
-        p_bbox = draw.textbbox((0, 0), percent_str, font=font_tier_label)
-        p_w = p_bbox[2] - p_bbox[0]
-        draw.text((x_cursor + w/2 - p_w/2, label_y + text_h + 2), percent_str, fill=text_tertiary, font=font_tier_label)
+        # Пропускаем подписи, если полоса слишком узкая (например, < 25px)
+        if w >= 25:
+            label = tier["short"]
+            text_bbox = draw.textbbox((0, 0), label, font=font_tier_label)
+            text_w = text_bbox[2] - text_bbox[0]
+            text_h = text_bbox[3] - text_bbox[1]
+            label_x = x_cursor + w/2 - text_w/2
+            label_y = chart_y + chart_height + 5
+            draw.text((label_x, label_y), label, fill=text_secondary, font=font_tier_label)
+            percent_str = f"{TIER_PERCENTS[i]:.1f}%"
+            p_bbox = draw.textbbox((0, 0), percent_str, font=font_tier_label)
+            p_w = p_bbox[2] - p_bbox[0]
+            draw.text((x_cursor + w/2 - p_w/2, label_y + text_h + 2), percent_str, fill=text_tertiary, font=font_tier_label)
         x_cursor += w + bar_gap
 
     draw.text((40, chart_y + chart_height + 40), DISTRIBUTION_CAPTION, fill=text_tertiary, font=font_small)
@@ -1093,6 +1096,7 @@ async def handle_tg_photo(message):
     if is_looksmaxxing:
         user_looksmaxxing_state[message.chat.id] = False
         status_msg = await tg_bot.send_message(message.chat.id, "⏳ Анализирую внешность...")
+        logger.info(f"Начат looksmaxxing анализ для {message.chat.id}")
         try:
             photo = message.photo[-1]
             image_bytes = await get_tg_image_bytes(tg_bot, photo.file_id)
@@ -1100,7 +1104,7 @@ async def handle_tg_photo(message):
             lang = get_user_lang("tg", message.chat.id)
             ai_data = await get_looksmaxxing_data(image_bytes, include_advice, lang=lang)
             if "error" in ai_data:
-                await tg_bot.edit_message_text(f"❌ {ai_data['error']}", chat_id, status_msg.message_id)
+                await tg_bot.edit_message_text(f"❌ {ai_data['error']}", message.chat.id, status_msg.message_id)
                 return
             theme = get_user_theme("tg", message.chat.id)
             infographic = await create_infographic(image_bytes, ai_data, theme=theme, lang=lang)
@@ -1113,14 +1117,23 @@ async def handle_tg_photo(message):
             )
             if include_advice and ai_data.get("advice"):
                 report_text += f"\n\n⚡ **Рекомендации:**\n{ai_data['advice']}"
-            await tg_bot.send_photo(chat_id, photo=infographic, caption=report_text[:1024], parse_mode="Markdown")
+            # Отправляем инфографику как InputFile, без parse_mode (избегаем ошибок Markdown)
+            try:
+                await tg_bot.send_photo(message.chat.id, InputFile(infographic), caption=report_text[:1024])
+            except Exception as e:
+                logger.error(f"Ошибка при отправке инфографики: {e}")
+                await tg_bot.send_message(message.chat.id, "Не удалось отправить инфографику, но вот текст анализа:")
+                await tg_bot.send_message(message.chat.id, report_text[:4096])
+            # Если текст слишком длинный, отправляем продолжение
             if len(report_text) > 1024:
-                await tg_bot.send_message(chat_id, report_text[1024:], parse_mode="Markdown")
-            await tg_bot.delete_message(chat_id, status_msg.message_id)
+                await tg_bot.send_message(message.chat.id, report_text[1024:])
+            await tg_bot.delete_message(message.chat.id, status_msg.message_id)
+            logger.info(f"Анализ завершён для {message.chat.id}")
             memory.append(f"Пользователь: [looksmaxxing фото] {caption}")
             memory.append(f"Кульш: [looksmaxxing отчёт]")
         except Exception as e:
-            await tg_bot.send_message(chat_id, f"🌋 Ошибка: {e}")
+            logger.error(f"Ошибка в looksmaxxing: {e}")
+            await tg_bot.send_message(message.chat.id, f"🌋 Ошибка: {e}")
         return
 
     is_reply_to_bot = (message.reply_to_message and 
