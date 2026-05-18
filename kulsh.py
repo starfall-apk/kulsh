@@ -27,7 +27,7 @@ import math
 import subprocess
 import sys
 import html
-
+import socketio
 import logging
 from logging.handlers import RotatingFileHandler
 
@@ -947,7 +947,6 @@ async def donation_alerts_listener():
         logger.info("🔕 DonationAlerts токен не задан, слушатель не запущен.")
         return
     await ds_bot.wait_until_ready()
-    import socketio
     sio = socketio.AsyncClient(reconnection=True)
 
     @sio.event

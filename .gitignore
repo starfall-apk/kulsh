@@ -1,6 +1,6 @@
-.env
-env
-venv
-.venv
-*.md
+*
+!requirements.txt
+!kulsh.py
 !README.md
+!LICENSE
+!pyproject.toml
