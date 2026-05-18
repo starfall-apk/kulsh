@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.14.0 (donations, leaderboard, DonationAlerts)
+# Kulsh GPT | v2.15.0 (donations, leaderboard, DonationAlerts, auto-update)
 # by (main author):
 #     starfall-apk
 # coauthor & bot hosting:
@@ -23,6 +23,8 @@ import time
 import json
 from PIL import Image, ImageDraw, ImageFont
 import math
+import subprocess
+import sys
 
 import logging
 from logging.handlers import RotatingFileHandler
@@ -1148,6 +1150,9 @@ intents = discord.Intents.default()
 intents.message_content = True
 ds_bot = discord.Client(intents=intents)
 
+# ID пользователей, которым разрешено обновлять бота
+AUTHORIZED_UPDATERS = [735217033867821098, 1193627300797878362]
+
 @ds_bot.event
 async def on_message(message):
     if message.author == ds_bot.user:
@@ -1164,6 +1169,34 @@ async def on_message(message):
         if isinstance(message.reference.resolved, discord.Message) and message.reference.resolved.author == ds_bot.user:
             is_reply_to_bot = True
 
+    # === НОВАЯ КОМАНДА АВТООБНОВЛЕНИЯ ===
+    if content_lower.startswith("кульш обновись"):
+        if message.author.id not in AUTHORIZED_UPDATERS:
+            await message.reply("ты кто бля, обновлять меня будешь?")
+            return
+        await message.reply("ща попробую обновиться, если повезёт — перезапущусь...")
+        try:
+            # Путь к папке с ботом (можно вынести в .env при желании)
+            repo_path = os.getenv('REPO_PATH', os.getcwd())
+            result = subprocess.run(
+                ["git", "pull", "origin", "main"],  # или master, смотря какая ветка
+                cwd=repo_path,
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            output = result.stdout + result.stderr
+            if "Already up to date" in result.stdout:
+                await message.reply(f"я и так свежий:\n```\n{output}\n```")
+            else:
+                await message.reply(f"изменения подтянуты, перезапускаюсь:\n```\n{output}\n```")
+                await asyncio.sleep(2)
+                os._exit(0)  # Жёсткий выход, systemd перезапустит
+        except Exception as e:
+            await message.reply(f"ошибка обновления:\n```\n{e}\n```")
+        return
+
+    # Остальные команды
     if content_lower.startswith("кульш настройки"):
         parts = message.content.split()
         user_key = get_user_key("ds", message.author.id)
@@ -1238,7 +1271,7 @@ async def on_message(message):
         return
 
     if "кульш логи" in content_lower:
-        if message.author.id not in [735217033867821098, 1193627300797878362]:
+        if message.author.id not in AUTHORIZED_UPDATERS:
             await message.reply("ты кто бля")
             return
         try:
