@@ -534,7 +534,7 @@ async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark"
         weak_color = "#E53E3E"
         highlight_outline = "#FFFFFF"
 
-    canvas_w, canvas_h = 1000, 1000  # немного увеличил высоту
+    canvas_w, canvas_h = 1000, 1000
     image = Image.new("RGBA", (canvas_w, canvas_h), bg_color)
     draw = ImageDraw.Draw(image)
 
@@ -577,27 +577,22 @@ async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark"
     current_tier_idx = -1
     for idx, t in enumerate(TIER_DISTRIBUTION):
         if tier_name.upper().replace(" ", "") in [t["key"].upper(), t["full"].upper().replace(" ", ""), t["short"].upper()]:
-            # Грубое сопоставление
             current_tier_key = t["key"]
             current_tier_idx = idx
             break
     if current_tier_key is None:
-        # Если не нашли, попробуем по диапазону PSL
         for idx, t in enumerate(TIER_DISTRIBUTION):
             if t["psl_low"] <= psl_val <= t["psl_high"]:
                 current_tier_idx = idx
                 current_tier_key = t["key"]
                 break
-    if current_tier_key is None:  # fallback
-        current_tier_idx = 4  # HTN примерно
+    if current_tier_key is None:
+        current_tier_idx = 4
         current_tier_key = "htn"
 
     # Вычисление процентиля "превосходит X%"
-    # Кумулятивный процент ниже текущего тира
-    cum_low = sum(TIER_PERCENTS[:current_tier_idx])  # процент людей ниже
-    # Процент внутри текущего тира
+    cum_low = sum(TIER_PERCENTS[:current_tier_idx])
     tier_percent = TIER_PERCENTS[current_tier_idx]
-    # Позиция внутри тира (доля)
     tier = TIER_DISTRIBUTION[current_tier_idx]
     psl_low, psl_high = tier["psl_low"], tier["psl_high"]
     if psl_high > psl_low:
@@ -614,7 +609,6 @@ async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark"
 
     better_text = BETTER_THAN.format(better_than)
 
-    # Рисуем текст процента под фото
     photo_bottom = photo_y + rounded_user_img.size[1]
     draw.text((40, photo_bottom + 20), better_text, fill=text_secondary, font=font_sub)
 
@@ -623,49 +617,38 @@ async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark"
     chart_y = photo_bottom + 65
     chart_width = 430
     chart_height = 90
-    bar_gap = 3  # зазор между столбцами
+    bar_gap = 3
     total_gaps = bar_gap * (len(TIER_DISTRIBUTION) - 1)
     available_width = chart_width - total_gaps
-    # Вычисляем ширины столбцов пропорционально процентам
     percent_sum = sum(TIER_PERCENTS)
     bar_widths = [available_width * (p / percent_sum) for p in TIER_PERCENTS]
 
-    # Рисуем столбцы
     x_cursor = chart_x
     for i, tier in enumerate(TIER_DISTRIBUTION):
         w = bar_widths[i]
         color = get_tier_color(tier["key"])
-        # Заливка
         draw.rectangle([x_cursor, chart_y, x_cursor + w, chart_y + chart_height], fill=color)
-        # Обводка для текущего тира
         if i == current_tier_idx:
             draw.rectangle([x_cursor-1, chart_y-1, x_cursor + w+1, chart_y + chart_height+1], outline=highlight_outline, width=2)
-        # Подписи (сокращённые названия)
         label = tier["short"]
         text_bbox = draw.textbbox((0, 0), label, font=font_tier_label)
         text_w = text_bbox[2] - text_bbox[0]
         text_h = text_bbox[3] - text_bbox[1]
-        # Центрируем под столбцом
         label_x = x_cursor + w/2 - text_w/2
         label_y = chart_y + chart_height + 5
         draw.text((label_x, label_y), label, fill=text_secondary, font=font_tier_label)
-        # Процент под названием
         percent_str = f"{TIER_PERCENTS[i]:.1f}%"
         p_bbox = draw.textbbox((0, 0), percent_str, font=font_tier_label)
         p_w = p_bbox[2] - p_bbox[0]
         draw.text((x_cursor + w/2 - p_w/2, label_y + text_h + 2), percent_str, fill=text_tertiary, font=font_tier_label)
         x_cursor += w + bar_gap
 
-    # Надпись "Распределение тиров" слева от диаграммы (или над ней, но места мало, поставим слева вертикально? Лучше не надо, просто под диаграммой)
     draw.text((40, chart_y + chart_height + 40), DISTRIBUTION_CAPTION, fill=text_tertiary, font=font_small)
 
-    # Далее правая часть с метриками и т.д. смещается вниз
+    # Правая колонка – начинается на уровне верха фото
     start_x = 510
-    # Нужно пересчитать Y-координаты правой колонки, чтобы они не наезжали на диаграмму.
-    # Раньше правая колонка начиналась на 100, теперь диаграмма занимает до chart_y+chart_height+40 ~ photo_bottom+65+90+40 = photo_bottom+195.
-    # При photo_y=100 и photo_height=530, photo_bottom=630, тогда chart заканчивается около 825.
-    # Правая колонка start_x=510, начинаем с y=100, но метрики могут залезть на chart. Чтобы избежать, лучше правую часть начать ниже, например, с y=chart_y + chart_height + 60.
-    right_top_y = chart_y + chart_height + 70  # отступ
+    right_top_y = 100
+
     draw.text((start_x, right_top_y), PSL_LABEL, fill=text_tertiary, font=font_sub)
     draw.text((start_x, right_top_y+35), f"{psl_score}", fill=text_primary, font=font_psl_num)
     draw.text((start_x, right_top_y+110), f"{tier_name} · {gender}", fill=accent, font=font_sub)
@@ -1166,13 +1149,6 @@ intents.message_content = True
 ds_bot = discord.Client(intents=intents)
 
 @ds_bot.event
-async def on_ready():
-    logger.info(f'Discord бот {ds_bot.user} запущен')
-    logger.info(f'Версия discord.py: {discord.__version__}')
-    if not VOICE_RECOGNITION_ENABLED:
-        logger.info("ℹ️ Распознавание голоса отключено")
-
-@ds_bot.event
 async def on_message(message):
     if message.author == ds_bot.user:
         return
@@ -1440,14 +1416,6 @@ async def series_reminder_loop():
 async def main():
     asyncio.create_task(random_post_loop())
 
-    async def start_discord():
-        await ds_bot.start(DISCORD_TOKEN)
-
-    async def start_telegram():
-        await tg_bot.polling(non_stop=True)
-
-    ready_event = asyncio.Event()
-
     @ds_bot.event
     async def on_ready():
         logger.info(f'Discord бот {ds_bot.user} запущен')
@@ -1457,7 +1425,12 @@ async def main():
         asyncio.create_task(series_reminder_loop())
         if DONATIONALERTS_TOKEN:
             asyncio.create_task(donation_alerts_listener())
-        ready_event.set()
+
+    async def start_discord():
+        await ds_bot.start(DISCORD_TOKEN)
+
+    async def start_telegram():
+        await tg_bot.polling(non_stop=True)
 
     await asyncio.gather(
         start_discord(),
