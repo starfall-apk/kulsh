@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.15.2 (donations, leaderboard, DonationAlerts, auto-update)
+# Kulsh GPT | v2.15.3 (donations, leaderboard, DonationAlerts, auto-update)
 # by (main author):
 #     starfall-apk
 # coauthor & bot hosting:
@@ -480,19 +480,15 @@ def get_tier_percents():
 TIER_PERCENTS = get_tier_percents()  # список длиной 8
 
 def markdown_like_to_telegram_html(text: str) -> str:
-    """
-    Конвертирует простой Markdown-подобный синтаксис (**жирный**, *курсив*)
-    в HTML-теги, экранируя остальные спецсимволы для Telegram HTML.
-    """
-    # Сначала заменяем **жирный** и *курсив* на уникальные метки
-    # чтобы не сломать экранирование
-    text = re.sub(r'\*\*(.+?)\*\*', r'\x01B\x01\1\x01/B\x01', text)  # жирный
-    text = re.sub(r'\*(.+?)\*', r'\x01I\x01\1\x01/I\x01', text)      # курсив
-    # Экранируем HTML
+    """Конвертирует Markdown-подобный синтаксис (**жирный**, *курсив*) в HTML для Telegram."""
+    # Заменяем **жирный** на плейсхолдеры, чтобы не мешать экранированию
+    text = re.sub(r'\*\*(.+?)\*\*', r'{{BOLD}}\1{{/BOLD}}', text)
+    text = re.sub(r'\*(.+?)\*', r'{{ITALIC}}\1{{/ITALIC}}', text)
+    # Экранируем весь текст (плейсхолдеры не содержат спецсимволов HTML)
     text = html.escape(text)
-    # Возвращаем метки к нормальным тегам
-    text = text.replace('\x01B\x01', '<b>').replace('\x01/B\x01', '</b>')
-    text = text.replace('\x01I\x01', '<i>').replace('\x01/I\x01', '</i>')
+    # Возвращаем плейсхолдеры к HTML-тегам
+    text = text.replace('{{BOLD}}', '<b>').replace('{{/BOLD}}', '</b>')
+    text = text.replace('{{ITALIC}}', '<i>').replace('{{/ITALIC}}', '</i>')
     return text
 
 async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark", lang: str = "en") -> BytesIO:
@@ -704,18 +700,20 @@ async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark"
         ("canthal_tilt", data.get("canthal_tilt", "N/A"))
     ]
 
-    # --- Адаптивная таблица с переносом значений ---
+    # --- Адаптивная таблица с фиксированными отступами ---
     right_margin = start_x + 430
     col1_x = start_x
-    col1_width = 200
-    col2_x = col1_x + col1_width + 20
-    col2_width = right_margin - col2_x
-    base_row_height = 38
-    line_height_value = 24
+    col1_width = 150                     # уменьшено, чтобы дать больше места значениям
+    col2_x = col1_x + col1_width + 10    # зазор 10 пикселей
+    col2_width = right_margin - col2_x   # ~270 пикселей
+
+    pad_top = 8    # расстояние от линии до текста
+    pad_bot = 6    # расстояние после текста до нижней линии
+    line_height_value = 24   # межстрочный интервал для перенесённого текста
+
     table_start_y = psl_bar_y + psl_bar_h + 25
     current_y = table_start_y
 
-    # Функция переноса текста (уже определена, но оставлю для ясности)
     def wrap_text(text, draw, font, max_width):
         words = text.split(' ')
         lines = []
@@ -735,26 +733,21 @@ async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark"
 
     for key, val_str in metrics_mapping:
         title = METRIC_NAMES.get(key, key)
-        # Высота названия
         title_bbox = draw.textbbox((0, 0), title, font=font_text)
         title_h = title_bbox[3] - title_bbox[1]
-        # Переносим значение
+
         val_lines = wrap_text(str(val_str), draw, font_text, col2_width)
         val_total_h = len(val_lines) * line_height_value
-        # Высота строки
-        row_height = max(base_row_height, title_h + 6, val_total_h + 6)
+
+        row_height = max(title_h, val_total_h) + pad_top + pad_bot
 
         # Линия над строкой
         draw.line([(col1_x, current_y), (right_margin, current_y)], fill=line_color, width=1)
 
-        # Название (центр вертикально)
-        title_y = current_y + (row_height - title_h) / 2
-        draw.text((col1_x, title_y), title, fill=text_secondary, font=font_text)
-
-        # Значение с левым выравниванием
-        val_start_y = current_y + (row_height - val_total_h) / 2
+        content_y = current_y + pad_top
+        draw.text((col1_x, content_y), title, fill=text_secondary, font=font_text)
         for i, line in enumerate(val_lines):
-            draw.text((col2_x, val_start_y + i * line_height_value), line, fill=text_primary, font=font_text)
+            draw.text((col2_x, content_y + i * line_height_value), line, fill=text_primary, font=font_text)
 
         current_y += row_height
 
@@ -1225,17 +1218,16 @@ async def on_message(message):
         if isinstance(message.reference.resolved, discord.Message) and message.reference.resolved.author == ds_bot.user:
             is_reply_to_bot = True
 
-    # === НОВАЯ КОМАНДА АВТООБНОВЛЕНИЯ ===
+    # === КОМАНДА АВТООБНОВЛЕНИЯ ===
     if content_lower.startswith("кульш обновись"):
         if message.author.id not in AUTHORIZED_UPDATERS:
             await message.reply("ты кто бля, обновлять меня будешь?")
             return
         await message.reply("ща попробую обновиться, если повезёт — перезапущусь...")
         try:
-            # Путь к папке с ботом (можно вынести в .env при желании)
             repo_path = os.getenv('REPO_PATH', os.getcwd())
             result = subprocess.run(
-                ["git", "pull", "origin", "main"],  # или master, смотря какая ветка
+                ["git", "pull", "origin", "main"],
                 cwd=repo_path,
                 capture_output=True,
                 text=True,
@@ -1247,7 +1239,7 @@ async def on_message(message):
             else:
                 await message.reply(f"изменения подтянуты, перезапускаюсь:\n```\n{output}\n```")
                 await asyncio.sleep(2)
-                os._exit(0)  # Жёсткий выход, systemd перезапустит
+                os._exit(0)
         except Exception as e:
             await message.reply(f"ошибка обновления:\n```\n{e}\n```")
         return
