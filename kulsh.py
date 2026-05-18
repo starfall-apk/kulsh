@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.15.1 (donations, leaderboard, DonationAlerts, auto-update)
+# Kulsh GPT | v2.15.2 (donations, leaderboard, DonationAlerts, auto-update)
 # by (main author):
 #     starfall-apk
 # coauthor & bot hosting:
@@ -26,6 +26,7 @@ from PIL import Image, ImageDraw, ImageFont
 import math
 import subprocess
 import sys
+import html
 
 import logging
 from logging.handlers import RotatingFileHandler
@@ -478,6 +479,22 @@ def get_tier_percents():
 # Предрасчитанные проценты
 TIER_PERCENTS = get_tier_percents()  # список длиной 8
 
+def markdown_like_to_telegram_html(text: str) -> str:
+    """
+    Конвертирует простой Markdown-подобный синтаксис (**жирный**, *курсив*)
+    в HTML-теги, экранируя остальные спецсимволы для Telegram HTML.
+    """
+    # Сначала заменяем **жирный** и *курсив* на уникальные метки
+    # чтобы не сломать экранирование
+    text = re.sub(r'\*\*(.+?)\*\*', r'\x01B\x01\1\x01/B\x01', text)  # жирный
+    text = re.sub(r'\*(.+?)\*', r'\x01I\x01\1\x01/I\x01', text)      # курсив
+    # Экранируем HTML
+    text = html.escape(text)
+    # Возвращаем метки к нормальным тегам
+    text = text.replace('\x01B\x01', '<b>').replace('\x01/B\x01', '</b>')
+    text = text.replace('\x01I\x01', '<i>').replace('\x01/I\x01', '</i>')
+    return text
+
 async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark", lang: str = "en") -> BytesIO:
     if lang == "ru":
         TITLE = "ОТЧЁТ LOOKSMAXXING"
@@ -687,25 +704,64 @@ async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark"
         ("canthal_tilt", data.get("canthal_tilt", "N/A"))
     ]
 
-    row_h = 38
-    table_start_y = psl_bar_y + psl_bar_h + 25
+    # --- Адаптивная таблица с переносом значений ---
     right_margin = start_x + 430
-    for idx, (key, val) in enumerate(metrics_mapping):
-        row_y = table_start_y + idx * row_h
-        draw.line([(start_x, row_y), (right_margin, row_y)], fill=line_color, width=1)
+    col1_x = start_x
+    col1_width = 200
+    col2_x = col1_x + col1_width + 20
+    col2_width = right_margin - col2_x
+    base_row_height = 38
+    line_height_value = 24
+    table_start_y = psl_bar_y + psl_bar_h + 25
+    current_y = table_start_y
+
+    # Функция переноса текста (уже определена, но оставлю для ясности)
+    def wrap_text(text, draw, font, max_width):
+        words = text.split(' ')
+        lines = []
+        current_line = ""
+        for word in words:
+            test_line = f"{current_line} {word}".strip()
+            bbox = draw.textbbox((0, 0), test_line, font=font)
+            if bbox[2] - bbox[0] <= max_width:
+                current_line = test_line
+            else:
+                if current_line:
+                    lines.append(current_line)
+                current_line = word
+        if current_line:
+            lines.append(current_line)
+        return lines
+
+    for key, val_str in metrics_mapping:
         title = METRIC_NAMES.get(key, key)
-        val_str = str(val)
+        # Высота названия
         title_bbox = draw.textbbox((0, 0), title, font=font_text)
-        val_bbox = draw.textbbox((0, 0), val_str, font=font_text)
         title_h = title_bbox[3] - title_bbox[1]
-        val_h = val_bbox[3] - val_bbox[1]
-        title_y = row_y + (row_h - title_h) / 2
-        val_y = row_y + (row_h - val_h) / 2
-        draw.text((start_x, title_y), title, fill=text_secondary, font=font_text)
-        val_width = val_bbox[2] - val_bbox[0]
-        draw.text((right_margin - val_width, val_y), val_str, fill=text_primary, font=font_text)
-    final_y = table_start_y + len(metrics_mapping) * row_h
-    draw.line([(start_x, final_y), (right_margin, final_y)], fill=line_color, width=1)
+        # Переносим значение
+        val_lines = wrap_text(str(val_str), draw, font_text, col2_width)
+        val_total_h = len(val_lines) * line_height_value
+        # Высота строки
+        row_height = max(base_row_height, title_h + 6, val_total_h + 6)
+
+        # Линия над строкой
+        draw.line([(col1_x, current_y), (right_margin, current_y)], fill=line_color, width=1)
+
+        # Название (центр вертикально)
+        title_y = current_y + (row_height - title_h) / 2
+        draw.text((col1_x, title_y), title, fill=text_secondary, font=font_text)
+
+        # Значение с левым выравниванием
+        val_start_y = current_y + (row_height - val_total_h) / 2
+        for i, line in enumerate(val_lines):
+            draw.text((col2_x, val_start_y + i * line_height_value), line, fill=text_primary, font=font_text)
+
+        current_y += row_height
+
+    # Финальная линия таблицы
+    final_y = current_y
+    draw.line([(col1_x, final_y), (right_margin, final_y)], fill=line_color, width=1)
+    # --- Конец адаптивной таблицы ---
 
     pros = data.get("pros", [])
     cons = data.get("cons", [])
@@ -724,23 +780,6 @@ async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark"
     col_width = 200
     line_height = 26
     list_start_y = col_y + 38
-
-    def wrap_text(text, draw, font, max_width):
-        words = text.split(' ')
-        lines = []
-        current_line = ""
-        for word in words:
-            test_line = f"{current_line} {word}".strip()
-            bbox = draw.textbbox((0, 0), test_line, font=font)
-            if bbox[2] - bbox[0] <= max_width:
-                current_line = test_line
-            else:
-                if current_line:
-                    lines.append(current_line)
-                current_line = word
-        if current_line:
-            lines.append(current_line)
-        return lines
 
     def render_list(items, x, y, color, max_width=col_width):
         current_y = y
@@ -1117,16 +1156,21 @@ async def handle_tg_photo(message):
             )
             if include_advice and ai_data.get("advice"):
                 report_text += f"\n\n⚡ **Рекомендации:**\n{ai_data['advice']}"
-            # Отправляем инфографику как InputFile, без parse_mode (избегаем ошибок Markdown)
+
+            html_report = markdown_like_to_telegram_html(report_text)
+
+            # Отправляем инфографику с короткой подписью
             try:
-                await tg_bot.send_photo(message.chat.id, InputFile(infographic), caption=report_text[:1024])
+                await tg_bot.send_photo(message.chat.id, InputFile(infographic), caption="📊 Результаты looksmaxxing-анализа")
             except Exception as e:
                 logger.error(f"Ошибка при отправке инфографики: {e}")
                 await tg_bot.send_message(message.chat.id, "Не удалось отправить инфографику, но вот текст анализа:")
-                await tg_bot.send_message(message.chat.id, report_text[:4096])
-            # Если текст слишком длинный, отправляем продолжение
-            if len(report_text) > 1024:
-                await tg_bot.send_message(message.chat.id, report_text[1024:])
+
+            # Основной текст с HTML-форматированием
+            await tg_bot.send_message(message.chat.id, html_report[:4096], parse_mode='HTML')
+            if len(html_report) > 4096:
+                await tg_bot.send_message(message.chat.id, html_report[4096:])
+
             await tg_bot.delete_message(message.chat.id, status_msg.message_id)
             logger.info(f"Анализ завершён для {message.chat.id}")
             memory.append(f"Пользователь: [looksmaxxing фото] {caption}")
