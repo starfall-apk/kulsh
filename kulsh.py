@@ -703,18 +703,16 @@ async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark"
         ("canthal_tilt", data.get("canthal_tilt", "N/A"))
     ]
 
-    # --- Адаптивная таблица с фиксированными отступами ---
+    # --- Адаптивная таблица с выравниванием по центру строк ---
     right_margin = start_x + 430
     col1_x = start_x
     col1_width = 200
     col2_x = col1_x + col1_width + 20
     col2_width = right_margin - col2_x
 
-    # Параметры отступов и межстрочного интервала
-    padding_top = 5
-    padding_bottom = 5
-    line_height_value = 20  # уменьшенный межстрочный интервал
+    # Параметры: минимальная высота строки, межстрочный интервал для значения
     base_row_height = 38
+    line_height_value = 20  # уменьшенный интервал между строками значения
 
     table_start_y = psl_bar_y + psl_bar_h + 25
     current_y = table_start_y
@@ -745,18 +743,19 @@ async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark"
         val_lines = wrap_text(str(val_str), draw, font_text, col2_width)
         val_total_h = len(val_lines) * line_height_value
 
-        # Высота строки с учётом фиксированных отступов
-        row_height = max(base_row_height, title_h + padding_top + padding_bottom, val_total_h + padding_top + padding_bottom)
+        # Минимальные отступы сверху и снизу 6px, чтобы текст не прилипал к линиям
+        min_padding = 6
+        row_height = max(base_row_height, title_h + 2*min_padding, val_total_h + 2*min_padding)
 
         # Линия над строкой
         draw.line([(col1_x, current_y), (right_margin, current_y)], fill=line_color, width=1)
 
-        # Позиция названия (с отступом сверху)
-        title_y = current_y + padding_top
+        # Центрирование названия по вертикали
+        title_y = current_y + (row_height - title_h) / 2
         draw.text((col1_x, title_y), title, fill=text_secondary, font=font_text)
 
-        # Позиция значения (с отступом сверху)
-        val_start_y = current_y + padding_top
+        # Центрирование блока значения по вертикали
+        val_start_y = current_y + (row_height - val_total_h) / 2
         for i, line in enumerate(val_lines):
             draw.text((col2_x, val_start_y + i * line_height_value), line, fill=text_primary, font=font_text)
 
