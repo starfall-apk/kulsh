@@ -703,18 +703,16 @@ async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark"
         ("canthal_tilt", data.get("canthal_tilt", "N/A"))
     ]
 
-    # --- Адаптивная таблица с фиксированными отступами сверху/снизу (равномерно для всех строк) ---
+    # --- Точное центрирование с минимальными отступами ---
     right_margin = start_x + 430
     col1_x = start_x
     col1_width = 200
     col2_x = col1_x + col1_width + 20
     col2_width = right_margin - col2_x
 
-    # Фиксированные отступы от линий до текста
-    padding_top = 6
-    padding_bottom = 6
-    base_row_height = 38
-    line_height_value = 20  # уменьшенный межстрочный интервал для значения
+    base_row_height = 38          # минимальная высота строки
+    min_padding = 6               # минимальный отступ от линии до текста
+    line_spacing = 2              # межстрочный интервал внутри блока значения
 
     table_start_y = psl_bar_y + psl_bar_h + 25
     current_y = table_start_y
@@ -736,36 +734,51 @@ async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark"
             lines.append(current_line)
         return lines
 
+    def get_text_block_height(lines, font, line_spacing):
+        total = 0
+        for line in lines:
+            bbox = draw.textbbox((0, 0), line, font=font)
+            total += bbox[3] - bbox[1] + line_spacing
+        if total > 0:
+            total -= line_spacing  # убираем лишний spacing после последней строки
+        return total
+
     for key, val_str in metrics_mapping:
         title = METRIC_NAMES.get(key, key)
         # Высота названия
         title_bbox = draw.textbbox((0, 0), title, font=font_text)
         title_h = title_bbox[3] - title_bbox[1]
-        # Перенос значения
-        val_lines = wrap_text(str(val_str), draw, font_text, col2_width)
-        val_total_h = len(val_lines) * line_height_value
 
-        # Высота строки с учётом фиксированных отступов
-        row_height = max(base_row_height, title_h + padding_top + padding_bottom, val_total_h + padding_top + padding_bottom)
+        # Точная высота блока значения
+        val_lines = wrap_text(str(val_str), draw, font_text, col2_width)
+        val_block_h = get_text_block_height(val_lines, font_text, line_spacing)
+
+        # Высота строки = макс(базовая, высота названия+отступы, высота значения+отступы)
+        row_height = max(base_row_height,
+                         title_h + 2*min_padding,
+                         val_block_h + 2*min_padding)
 
         # Линия над строкой
         draw.line([(col1_x, current_y), (right_margin, current_y)], fill=line_color, width=1)
 
-        # Название: отступ сверху padding_top
-        title_y = current_y + padding_top
+        # Центрирование названия по вертикали
+        title_y = current_y + (row_height - title_h) / 2
         draw.text((col1_x, title_y), title, fill=text_secondary, font=font_text)
 
-        # Значение: отступ сверху padding_top
-        val_start_y = current_y + padding_top
+        # Центрирование блока значения по вертикали
+        val_start_y = current_y + (row_height - val_block_h) / 2
         for i, line in enumerate(val_lines):
-            draw.text((col2_x, val_start_y + i * line_height_value), line, fill=text_primary, font=font_text)
+            bbox = draw.textbbox((0, 0), line, font=font_text)
+            line_h = bbox[3] - bbox[1]
+            draw.text((col2_x, val_start_y), line, fill=text_primary, font=font_text)
+            val_start_y += line_h + line_spacing
 
         current_y += row_height
 
     # Финальная линия таблицы
     final_y = current_y
     draw.line([(col1_x, final_y), (right_margin, final_y)], fill=line_color, width=1)
-    # --- Конец адаптивной таблицы ---
+    # --- Конец таблицы ---
 
     pros = data.get("pros", [])
     cons = data.get("cons", [])
