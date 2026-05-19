@@ -480,13 +480,17 @@ def get_tier_percents():
 TIER_PERCENTS = get_tier_percents()  # список длиной 8
 
 def markdown_like_to_telegram_html(text: str) -> str:
-    """Конвертирует Markdown-подобный синтаксис (**жирный**, *курсив*) в HTML для Telegram."""
-    # Заменяем **жирный** и *курсив* на безопасные плейсхолдеры
+    """Конвертирует Markdown-подобный синтаксис (**жирный**, *курсив*, `code`) в HTML для Telegram."""
+    # Обратные кавычки для моноширинного текста: `...` -> <code>...</code>
+    text = re.sub(r'`(.+?)`', r'{{CODE}}\1{{/CODE}}', text)
+    # Жирный
     text = re.sub(r'\*\*(.+?)\*\*', r'{{BOLD}}\1{{/BOLD}}', text)
+    # Курсив
     text = re.sub(r'\*(.+?)\*', r'{{ITALIC}}\1{{/ITALIC}}', text)
     # Экранируем специальные HTML-символы
     text = html.escape(text)
     # Возвращаем плейсхолдеры к тегам
+    text = text.replace('{{CODE}}', '<code>').replace('{{/CODE}}', '</code>')
     text = text.replace('{{BOLD}}', '<b>').replace('{{/BOLD}}', '</b>')
     text = text.replace('{{ITALIC}}', '<i>').replace('{{/ITALIC}}', '</i>')
     return text
@@ -699,15 +703,18 @@ async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark"
         ("canthal_tilt", data.get("canthal_tilt", "N/A"))
     ]
 
-    # --- Адаптивная таблица с сохранением оригинальных отступов ---
+    # --- Адаптивная таблица с фиксированными отступами ---
     right_margin = start_x + 430
     col1_x = start_x
-    col1_width = 200                     # исходная ширина названий
-    col2_x = col1_x + col1_width + 20    # зазор 20px, как было
+    col1_width = 200
+    col2_x = col1_x + col1_width + 20
     col2_width = right_margin - col2_x
 
-    base_row_height = 38                 # минимальная высота строки
-    line_height_value = 24               # межстрочный интервал для перенесённого текста
+    # Параметры отступов и межстрочного интервала
+    padding_top = 5
+    padding_bottom = 5
+    line_height_value = 20  # уменьшенный межстрочный интервал
+    base_row_height = 38
 
     table_start_y = psl_bar_y + psl_bar_h + 25
     current_y = table_start_y
@@ -737,18 +744,19 @@ async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark"
         # Перенос значения
         val_lines = wrap_text(str(val_str), draw, font_text, col2_width)
         val_total_h = len(val_lines) * line_height_value
-        # Высота строки = максимальная высота контента (без дополнительных отступов, чтобы сохранить прежний вид)
-        row_height = max(base_row_height, title_h + 6, val_total_h + 6)
+
+        # Высота строки с учётом фиксированных отступов
+        row_height = max(base_row_height, title_h + padding_top + padding_bottom, val_total_h + padding_top + padding_bottom)
 
         # Линия над строкой
         draw.line([(col1_x, current_y), (right_margin, current_y)], fill=line_color, width=1)
 
-        # Название по центру вертикали
-        title_y = current_y + (row_height - title_h) / 2
+        # Позиция названия (с отступом сверху)
+        title_y = current_y + padding_top
         draw.text((col1_x, title_y), title, fill=text_secondary, font=font_text)
 
-        # Значение по левому краю колонки, также вертикально по центру
-        val_start_y = current_y + (row_height - val_total_h) / 2
+        # Позиция значения (с отступом сверху)
+        val_start_y = current_y + padding_top
         for i, line in enumerate(val_lines):
             draw.text((col2_x, val_start_y + i * line_height_value), line, fill=text_primary, font=font_text)
 
