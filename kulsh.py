@@ -481,12 +481,12 @@ TIER_PERCENTS = get_tier_percents()  # список длиной 8
 
 def markdown_like_to_telegram_html(text: str) -> str:
     """Конвертирует Markdown-подобный синтаксис (**жирный**, *курсив*) в HTML для Telegram."""
-    # Заменяем **жирный** на плейсхолдеры, чтобы не мешать экранированию
+    # Заменяем **жирный** и *курсив* на безопасные плейсхолдеры
     text = re.sub(r'\*\*(.+?)\*\*', r'{{BOLD}}\1{{/BOLD}}', text)
     text = re.sub(r'\*(.+?)\*', r'{{ITALIC}}\1{{/ITALIC}}', text)
-    # Экранируем весь текст (плейсхолдеры не содержат спецсимволов HTML)
+    # Экранируем специальные HTML-символы
     text = html.escape(text)
-    # Возвращаем плейсхолдеры к HTML-тегам
+    # Возвращаем плейсхолдеры к тегам
     text = text.replace('{{BOLD}}', '<b>').replace('{{/BOLD}}', '</b>')
     text = text.replace('{{ITALIC}}', '<i>').replace('{{/ITALIC}}', '</i>')
     return text
@@ -646,7 +646,6 @@ async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark"
         draw.rectangle([x_cursor, chart_y, x_cursor + w, chart_y + chart_height], fill=color)
         if i == current_tier_idx:
             draw.rectangle([x_cursor-1, chart_y-1, x_cursor + w+1, chart_y + chart_height+1], outline=highlight_outline, width=2)
-        # Пропускаем подписи, если полоса слишком узкая (например, < 25px)
         if w >= 25:
             label = tier["short"]
             text_bbox = draw.textbbox((0, 0), label, font=font_tier_label)
@@ -700,16 +699,15 @@ async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark"
         ("canthal_tilt", data.get("canthal_tilt", "N/A"))
     ]
 
-    # --- Адаптивная таблица с фиксированными отступами ---
+    # --- Адаптивная таблица с сохранением оригинальных отступов ---
     right_margin = start_x + 430
     col1_x = start_x
-    col1_width = 150                     # уменьшено, чтобы дать больше места значениям
-    col2_x = col1_x + col1_width + 10    # зазор 10 пикселей
-    col2_width = right_margin - col2_x   # ~270 пикселей
+    col1_width = 200                     # исходная ширина названий
+    col2_x = col1_x + col1_width + 20    # зазор 20px, как было
+    col2_width = right_margin - col2_x
 
-    pad_top = 8    # расстояние от линии до текста
-    pad_bot = 6    # расстояние после текста до нижней линии
-    line_height_value = 24   # межстрочный интервал для перенесённого текста
+    base_row_height = 38                 # минимальная высота строки
+    line_height_value = 24               # межстрочный интервал для перенесённого текста
 
     table_start_y = psl_bar_y + psl_bar_h + 25
     current_y = table_start_y
@@ -733,21 +731,26 @@ async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark"
 
     for key, val_str in metrics_mapping:
         title = METRIC_NAMES.get(key, key)
+        # Высота названия
         title_bbox = draw.textbbox((0, 0), title, font=font_text)
         title_h = title_bbox[3] - title_bbox[1]
-
+        # Перенос значения
         val_lines = wrap_text(str(val_str), draw, font_text, col2_width)
         val_total_h = len(val_lines) * line_height_value
-
-        row_height = max(title_h, val_total_h) + pad_top + pad_bot
+        # Высота строки = максимальная высота контента (без дополнительных отступов, чтобы сохранить прежний вид)
+        row_height = max(base_row_height, title_h + 6, val_total_h + 6)
 
         # Линия над строкой
         draw.line([(col1_x, current_y), (right_margin, current_y)], fill=line_color, width=1)
 
-        content_y = current_y + pad_top
-        draw.text((col1_x, content_y), title, fill=text_secondary, font=font_text)
+        # Название по центру вертикали
+        title_y = current_y + (row_height - title_h) / 2
+        draw.text((col1_x, title_y), title, fill=text_secondary, font=font_text)
+
+        # Значение по левому краю колонки, также вертикально по центру
+        val_start_y = current_y + (row_height - val_total_h) / 2
         for i, line in enumerate(val_lines):
-            draw.text((col2_x, content_y + i * line_height_value), line, fill=text_primary, font=font_text)
+            draw.text((col2_x, val_start_y + i * line_height_value), line, fill=text_primary, font=font_text)
 
         current_y += row_height
 
