@@ -703,16 +703,18 @@ async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark"
         ("canthal_tilt", data.get("canthal_tilt", "N/A"))
     ]
 
-    # --- Адаптивная таблица с выравниванием по центру строк ---
+    # --- Адаптивная таблица с фиксированными отступами сверху/снизу (равномерно для всех строк) ---
     right_margin = start_x + 430
     col1_x = start_x
     col1_width = 200
     col2_x = col1_x + col1_width + 20
     col2_width = right_margin - col2_x
 
-    # Параметры: минимальная высота строки, межстрочный интервал для значения
+    # Фиксированные отступы от линий до текста
+    padding_top = 6
+    padding_bottom = 6
     base_row_height = 38
-    line_height_value = 20  # уменьшенный интервал между строками значения
+    line_height_value = 20  # уменьшенный межстрочный интервал для значения
 
     table_start_y = psl_bar_y + psl_bar_h + 25
     current_y = table_start_y
@@ -743,19 +745,18 @@ async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark"
         val_lines = wrap_text(str(val_str), draw, font_text, col2_width)
         val_total_h = len(val_lines) * line_height_value
 
-        # Минимальные отступы сверху и снизу 6px, чтобы текст не прилипал к линиям
-        min_padding = 6
-        row_height = max(base_row_height, title_h + 2*min_padding, val_total_h + 2*min_padding)
+        # Высота строки с учётом фиксированных отступов
+        row_height = max(base_row_height, title_h + padding_top + padding_bottom, val_total_h + padding_top + padding_bottom)
 
         # Линия над строкой
         draw.line([(col1_x, current_y), (right_margin, current_y)], fill=line_color, width=1)
 
-        # Центрирование названия по вертикали
-        title_y = current_y + (row_height - title_h) / 2
+        # Название: отступ сверху padding_top
+        title_y = current_y + padding_top
         draw.text((col1_x, title_y), title, fill=text_secondary, font=font_text)
 
-        # Центрирование блока значения по вертикали
-        val_start_y = current_y + (row_height - val_total_h) / 2
+        # Значение: отступ сверху padding_top
+        val_start_y = current_y + padding_top
         for i, line in enumerate(val_lines):
             draw.text((col2_x, val_start_y + i * line_height_value), line, fill=text_primary, font=font_text)
 
