@@ -7,22 +7,14 @@
 import asyncio
 import aiohttp
 import telebot
-from telebot.async_telebot import AsyncTeleBot
-from telebot.types import InputFile
 import discord
-from discord.ext import tasks
-from discord.ext import voice_recv
 import re
 import random
-from collections import deque, defaultdict
 import base64
-from io import BytesIO
 import os
-from dotenv import load_dotenv
 import threading
 import time
 import json
-from PIL import Image, ImageDraw, ImageFont
 import math
 import subprocess
 import sys
@@ -30,6 +22,14 @@ import html
 import socketio
 import logging
 from logging.handlers import RotatingFileHandler
+from typing import Any, cast
+from PIL import Image, ImageDraw, ImageFont
+from dotenv import load_dotenv
+from io import BytesIO
+from collections import deque, defaultdict
+from discord.ext import tasks, voice_recv
+from telebot.async_telebot import AsyncTeleBot
+from telebot.types import InputFile
 
 # Создаем логгер
 logger = logging.getLogger('KulshBot')
@@ -49,8 +49,8 @@ logger.addHandler(console_handler)
 
 # --- КОНФИГУРАЦИЯ ---
 load_dotenv()
-TG_TOKEN = os.getenv('TG_TOKEN')
-DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
+TG_TOKEN = cast(str, os.getenv('TG_TOKEN'))
+DISCORD_TOKEN = cast(str, os.getenv('DISCORD_TOKEN'))
 AI_KEY = os.getenv('AI_KEY')
 AI_KEY_1 = os.getenv('AI_KEY_1')
 AI_KEY_2 = os.getenv('AI_KEY_2')
@@ -111,7 +111,7 @@ user_settings = defaultdict(dict)
 # ============================================================
 DONATIONS_FILE = 'donations.json'
 
-def load_donations():
+def load_donations() -> None:
     global donations_data
     if not os.path.exists(DONATIONS_FILE):
         donations_data = {}
@@ -119,14 +119,14 @@ def load_donations():
     try:
         with open(DONATIONS_FILE, 'r', encoding='utf-8') as f:
             donations_data = json.load(f)
-    except:
+    except Exception:
         donations_data = {}
 
-def save_donations():
+def save_donations() -> None:
     with open(DONATIONS_FILE, 'w', encoding='utf-8') as f:
         json.dump(donations_data, f, ensure_ascii=False, indent=2)
 
-def add_donation(platform, user_id, amount, name="Аноним"):
+def add_donation(platform, user_id, amount, name="Аноним") -> None:
     key = f"{platform}_{user_id}"
     donations_data[key] = donations_data.get(key, 0) + amount
     if 'names' not in donations_data:
@@ -134,26 +134,26 @@ def add_donation(platform, user_id, amount, name="Аноним"):
     donations_data['names'][key] = name
     save_donations()
 
-def get_top_donators(top_n=10):
+def get_top_donators(top_n: int = 10) -> list[str]:
     totals = {}
-    names = donations_data.get('names', {})
+    names: dict[str, str] = donations_data.get('names', {})
     for key, total in donations_data.items():
         if key == 'names':
             continue
         name = names.get(key, key)
         totals[name] = totals.get(name, 0) + total
-    sorted_totals = sorted(totals.items(), key=lambda x: x[1], reverse=True)[:top_n]
+    sorted_totals: list[str] = sorted(totals.items(), key=lambda x: x[1], reverse=True)[:top_n]
     return sorted_totals
 
 load_donations()
 
-def get_chat_memory(chat_id):
+def get_chat_memory(chat_id: str) -> deque[str]:
     if chat_id not in chat_memories:
         chat_memories[chat_id] = deque(maxlen=5)
     return chat_memories[chat_id]
 
-def memory_to_messages(memory_deque):
-    messages = []
+def memory_to_messages(memory_deque: deque[str]) -> list[dict[str, str]]:
+    messages: list[dict[str, str]] = []
     for entry in memory_deque:
         if ": " in entry:
             role_part, text = entry.split(": ", 1)
@@ -614,7 +614,7 @@ async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark"
     cum_low = sum(TIER_PERCENTS[:current_tier_idx])
     tier_percent = TIER_PERCENTS[current_tier_idx]
     tier = TIER_DISTRIBUTION[current_tier_idx]
-    psl_low, psl_high = tier["psl_low"], tier["psl_high"]
+    psl_low, psl_high = cast(float, tier["psl_low"]), cast(float, tier["psl_high"])
     if psl_high > psl_low:
         fraction = (psl_val - psl_low) / (psl_high - psl_low)
     else:
@@ -717,7 +717,7 @@ async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark"
     table_start_y = psl_bar_y + psl_bar_h + 25
     current_y = table_start_y
 
-    def wrap_text(text, draw, font, max_width):
+    def wrap_text(text: str, draw, font, max_width):
         words = text.split(' ')
         lines = []
         current_line = ""
@@ -819,7 +819,7 @@ async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark"
     output.seek(0)
     return output
 
-async def get_looksmaxxing_data(photo_bytes: bytes, include_advice: bool, lang: str = "en") -> dict:
+async def get_looksmaxxing_data(photo_bytes: bytes, include_advice: bool, lang: str = "en") -> dict[str, Any]:
     if lang == "ru":
         prompt = (
             "Ты — чрезвычайно строгий и объективный AI-аналитик по looksmaxxing. Оцени лицо на фото критически и честно, "
@@ -910,7 +910,7 @@ async def get_looksmaxxing_data(photo_bytes: bytes, include_advice: bool, lang: 
 
     try:
         cleaned = clean_json_text(raw)
-        return json.loads(cleaned)
+        return cast(dict[str, Any], json.loads(cleaned))
     except json.JSONDecodeError:
         logger.error(f"Looksmaxxing JSON decode failed: {raw[:200]}")
         raw2 = await ask_ai_async(
@@ -925,7 +925,7 @@ async def get_looksmaxxing_data(photo_bytes: bytes, include_advice: bool, lang: 
         )
         try:
             cleaned2 = clean_json_text(raw2)
-            return json.loads(cleaned2)
+            return cast(dict[str, Any], json.loads(cleaned2))
         except:
             return {"error": "Could not parse AI response as JSON."}
 
@@ -959,7 +959,7 @@ async def send_donation_alert(platform, name, amount, message_text=''):
                 except Exception as e:
                     logger.error(f"Не удалось отправить донат-оповещение в DS: {e}")
 
-async def donation_alerts_listener():
+async def donation_alerts_listener() -> None:
     if not DONATIONALERTS_TOKEN:
         logger.info("🔕 DonationAlerts токен не задан, слушатель не запущен.")
         return
@@ -967,15 +967,15 @@ async def donation_alerts_listener():
     sio = socketio.AsyncClient(reconnection=True)
 
     @sio.event
-    async def connect():
+    async def connect() -> None:
         logger.info("🔌 Подключились к DonationAlerts Socket.IO")
 
     @sio.event
-    async def disconnect():
+    async def disconnect() -> None:
         logger.warning("🔌 Отключились от DonationAlerts")
 
     @sio.on('donation')
-    async def on_donation(data):
+    async def on_donation(data: dict[str, Any]) -> None:
         try:
             amount = float(data.get('amount', 0))
             currency = data.get('currency', 'RUB')
@@ -1006,7 +1006,7 @@ tg_bot = AsyncTeleBot(TG_TOKEN)
 pending_donations = {}
 
 @tg_bot.message_handler(commands=['start'])
-async def handle_start(message):
+async def handle_start(message: telebot.types.Message) -> None:
     args = telebot.util.extract_arguments(message.text)
     if not args:
         return
@@ -1033,12 +1033,12 @@ async def handle_start(message):
         logger.info(f"Выставлен счёт на {stars} звёзд для пользователя {message.chat.id}")
 
 @tg_bot.pre_checkout_query_handler(func=lambda query: True)
-async def handle_pre_checkout(pre_checkout):
+async def handle_pre_checkout(pre_checkout: telebot.types.PreCheckoutQuery) -> None:
     logger.info(f"Pre-checkout запрос от {pre_checkout.from_user.id}: {pre_checkout.invoice_payload}")
     await tg_bot.answer_pre_checkout_query(pre_checkout.id, ok=True)
 
 @tg_bot.message_handler(content_types=['successful_payment'])
-async def handle_successful_payment(message: telebot.types.Message):
+async def handle_successful_payment(message: telebot.types.Message) -> None:
     payment = message.successful_payment
     user_id = message.chat.id
     stars = pending_donations.pop(user_id, None) or int(payment.invoice_payload.split('_')[1])
@@ -1049,10 +1049,10 @@ async def handle_successful_payment(message: telebot.types.Message):
     await tg_bot.reply_to(message, f"🍷🗿 Спасибо за {stars} звёзд, кент! Ты сделал Кульша чуточку счастливее.")
 
 @tg_bot.message_handler(func=lambda m: m.text)
-async def handle_tg_text(message):
+async def handle_tg_text(message: telebot.types.Message) -> None:
     chat_id = f"tg_{message.chat.id}"
     memory = get_chat_memory(chat_id)
-    text = message.text
+    text = cast(str, message.text)
 
     if text.lower().startswith("кульш донаты"):
         top = get_top_donators()
@@ -1117,7 +1117,7 @@ async def handle_tg_text(message):
         return
 
     is_reply_to_bot = (message.reply_to_message and 
-                       message.reply_to_message.from_user.id == tg_bot.user.id)
+                       cast(telebot.types.User, message.reply_to_message.from_user).id == tg_bot.user.id)
 
     if is_reply_to_bot or re.search(r'(?i)\bкульш\b', text):
         await tg_bot.send_chat_action(message.chat.id, 'typing')
@@ -1136,10 +1136,13 @@ async def handle_tg_text(message):
         memory.append(f"Пользователь: {text}")
 
 @tg_bot.message_handler(content_types=['photo'])
-async def handle_tg_photo(message):
+async def handle_tg_photo(message: telebot.types.Message) -> None:
     chat_id = f"tg_{message.chat.id}"
     memory = get_chat_memory(chat_id)
     caption = message.caption or ""
+
+    assert message.photo is not None # всегда True
+    assert isinstance(message.reply_to_message, telebot.types.User)
 
     is_looksmaxxing = (
         any(kw in caption.lower() for kw in LOOKSMAXXING_KEYWORDS) or
@@ -1227,7 +1230,7 @@ ds_bot = discord.Client(intents=intents)
 AUTHORIZED_UPDATERS = [735217033867821098, 1193627300797878362]
 
 @ds_bot.event
-async def on_message(message):
+async def on_message(message: discord.Message) -> None:
     if message.author == ds_bot.user:
         return
     if message.guild is None:
@@ -1330,7 +1333,7 @@ async def on_message(message):
             try:
                 prompt = "Попроси пользователя @1364588699589021890 отправить Фолзу сообщение в приложении TikTok чтобы продлить серию. Напиши одно короткое сообщение в стиле Кульша."
                 answer = await ask_ai_async(prompt=prompt, context_type="default")
-                target_channel = ds_bot.get_channel(DS_SERIES_CHANNEL_ID)
+                target_channel = cast(discord.TextChannel, ds_bot.get_channel(DS_SERIES_CHANNEL_ID))
                 if target_channel:
                     full_message = f"<@{DS_SERIES_TARGET_USER_ID}> {answer}"
                     await target_channel.send(full_message)
@@ -1360,13 +1363,14 @@ async def on_message(message):
 
     if "кульш зайди в войс" in content_lower:
         voice_channel = None
-        if message.author.voice and message.author.voice.channel:
-            voice_channel = message.author.voice.channel
+        author = cast(discord.Member, message.author)
+        if author.voice and author.voice.channel:
+            voice_channel = author.voice.channel
         else:
             await message.reply("ты не в войсе, куда заходить?")
             return
         try:
-            vc = message.guild.voice_client
+            vc = cast(discord.VoiceChannel, message.guild.voice_client)
             if vc and vc.is_connected():
                 await vc.move_to(voice_channel)
                 logger.info(f"Переместился в канал {voice_channel.name}")
@@ -1385,7 +1389,7 @@ async def on_message(message):
         return
 
     if "кульш скажи в войсе" in content_lower:
-        vc = message.guild.voice_client
+        vc = cast(discord.VoiceChannel, message.guild.voice_client)
         if vc:
             phrase = content_lower.split("войсе", 1)[-1].strip()
             if phrase:
@@ -1398,7 +1402,7 @@ async def on_message(message):
         return
 
     if "кульш выйди из войса" in content_lower:
-        vc = message.guild.voice_client
+        vc = cast(discord.VoiceChannel, message.guild.voice_client)
         if vc:
             if hasattr(vc, "_recognition_sink"):
                 sink = getattr(vc, "_recognition_sink")
@@ -1416,7 +1420,7 @@ async def on_message(message):
 
     if has_looksmaxxing_cmd and has_image_att:
         async with message.channel.typing():
-            image_att = next(att for att in message.attachments if att.content_type.startswith('image/'))
+            image_att = next(att for att in message.attachments if cast(str, att.content_type).startswith('image/'))
             try:
                 image_bytes = await download_image_bytes(image_att.url)
                 include_advice = "совет" in content_lower or "advice" in content_lower
@@ -1457,7 +1461,7 @@ async def on_message(message):
 
     if has_image and (is_reply_to_bot or text_contains_kulsh):
         async with message.channel.typing():
-            image_att = next(att for att in message.attachments if att.content_type.startswith('image/'))
+            image_att = next(att for att in message.attachments if cast(str, att.content_type).startswith('image/'))
             try:
                 image_bytes = await download_image_bytes(image_att.url)
                 mime_type = image_att.content_type or "image/jpeg"
@@ -1492,7 +1496,7 @@ async def on_message(message):
     else:
         memory.append(f"{message.author.name}: {message.content}")
 
-async def random_post_loop():
+async def random_post_loop() -> None:
     while True:
         await asyncio.sleep(random.randint(3600, 14400))
         answer = await ask_ai_async(prompt=None, context_type="random")
@@ -1501,9 +1505,9 @@ async def random_post_loop():
         except Exception as e:
             logger.info(f"Ошибка рандомного поста: {e}")
 
-async def series_reminder_loop():
+async def series_reminder_loop() -> None:
     await ds_bot.wait_until_ready()
-    channel = ds_bot.get_channel(DS_SERIES_CHANNEL_ID)
+    channel = cast(discord.TextChannel, ds_bot.get_channel(DS_SERIES_CHANNEL_ID))
     if not channel:
         logger.error("Канал для напоминаний о серии не найден")
         return
@@ -1518,11 +1522,11 @@ async def series_reminder_loop():
             logger.error(f"Ошибка отправки серийного напоминания: {e}")
         await asyncio.sleep(86400)
 
-async def main():
+async def main() -> None:
     asyncio.create_task(random_post_loop())
 
     @ds_bot.event
-    async def on_ready():
+    async def on_ready() -> None:
         logger.info(f'Discord бот {ds_bot.user} запущен')
         logger.info(f'Версия discord.py: {discord.__version__}')
         if not VOICE_RECOGNITION_ENABLED:
@@ -1531,10 +1535,10 @@ async def main():
         if DONATIONALERTS_TOKEN:
             asyncio.create_task(donation_alerts_listener())
 
-    async def start_discord():
+    async def start_discord() -> None:
         await ds_bot.start(DISCORD_TOKEN)
 
-    async def start_telegram():
+    async def start_telegram() -> None:
         await tg_bot.polling(non_stop=True)
 
     await asyncio.gather(
