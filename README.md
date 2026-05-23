@@ -41,7 +41,7 @@ Now also a brutally honest **looksmaxxing analyst** – upload a face photo and 
 
 ## 🛠️ Tech Stack
 
-- **Core:** Python 3.9+
+- **Core:** Python 3.10+
 - **AI Engine:** Google Generative AI (Gemini 2.5 Flash, Gemini 2.5 Flash Lite, Gemini Flash Latest, Gemini Flash Lite Latest, Gemini 3 Flash Preview, Gemini 3.1 Flash Lite Preview) — multiple models with automatic fallback
 - **Frameworks:** `pyTelegramBotAPI` (Async), `discord.py` 2.x
 - **Voice Processing:** `discord-ext-voice-receive`, `SpeechRecognition`, `pydub`
