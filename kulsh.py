@@ -101,6 +101,7 @@ else:
 
 chat_memories: dict[str, deque[str]] = {}
 voice_text_channels = {}
+donations_data: dict[str, Any] = {}
 user_settings: defaultdict[str, dict[str, Any]] = defaultdict(dict)
 
 # ============================================================
@@ -111,13 +112,13 @@ DONATIONS_FILE = 'donations.json'
 def load_donations() -> None:
     global donations_data
     if not os.path.exists(DONATIONS_FILE):
-        donations_data: dict[str, Any] = {}
+        donations_data = {}
         return
     try:
         with open(DONATIONS_FILE, 'r', encoding='utf-8') as f:
-            donations_data: dict[str, Any] = json.load(f)
+            donations_data = json.load(f)
     except Exception:
-        donations_data: dict[str, Any] = {}
+        donations_data = {}
 
 def save_donations() -> None:
     with open(DONATIONS_FILE, 'w', encoding='utf-8') as f:
