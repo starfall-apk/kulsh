@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.15.3 (donations, leaderboard, DonationAlerts, auto-update)
+# Kulsh GPT | v2.15.4 (donations, leaderboard, DonationAlerts, auto-update)
 # by (main author):
 #     starfall-apk
 # coauthor & bot hosting:
@@ -24,7 +24,6 @@ from PIL import Image, ImageDraw, ImageFont
 from dotenv import load_dotenv
 from io import BytesIO
 from collections import deque, defaultdict
-# from discord.ext import tasks, voice_recv
 from telebot.async_telebot import AsyncTeleBot
 from telebot.types import InputFile
 
@@ -78,26 +77,34 @@ MODEL_LIST = [
     "gemini-3.1-flash-lite-preview"
 ]
 
+# Попытка импорта voice_recv из discord.ext
+try:
+    from discord.ext import voice_recv
+    VOICE_RECV_AVAILABLE = True
+except ImportError:
+    VOICE_RECV_AVAILABLE = False
+    voice_recv = None
+
 DISCORD_VERSION = tuple(map(int, discord.__version__.split('.')))
-VOICE_RECOGNITION_ENABLED = DISCORD_VERSION >= (2, 0, 0)
+VOICE_RECOGNITION_ENABLED = DISCORD_VERSION >= (2, 0, 0) and VOICE_RECV_AVAILABLE
+
+if VOICE_RECOGNITION_ENABLED:
+    try:
+        import speech_recognition as sr  # pyright: ignore[reportMissingTypeStubs]
+        from pydub import AudioSegment  # pyright: ignore[reportMissingTypeStubs]
+    except ImportError:
+        VOICE_RECOGNITION_ENABLED = False
+        logger.info("⚠️ speech_recognition или pydub не найдены, распознавание речи отключено")
+else:
+    logger.info(f"⚠️ У вас discord.py {discord.__version__}. Для распознавания голоса нужна версия 2.0+ и voice_recv. Голосовое распознавание будет отключено.")
 
 try:
     import edge_tts
     from discord import FFmpegPCMAudio
     VOICE_ENABLED = True
 except ImportError:
-    VOICE_ENABLED = False # type: ignore
+    VOICE_ENABLED = False
     logger.info("⚠️ edge_tts или FFmpeg не найдены, синтез речи отключен")
-
-if VOICE_RECOGNITION_ENABLED:
-    try:
-        import speech_recognition as sr # pyright: ignore[reportMissingTypeStubs]
-        from pydub import AudioSegment # pyright: ignore[reportMissingTypeStubs]
-    except ImportError:
-        VOICE_RECOGNITION_ENABLED = False # pyright: ignore[reportConstantRedefinition]
-        logger.info("⚠️ speech_recognition или pydub не найдены, распознавание речи отключено")
-else:
-    logger.info(f"⚠️ У вас discord.py {discord.__version__}. Для распознавания голоса нужна версия 2.0+. Голосовое распознавание будет отключено.")
 
 chat_memories: dict[str, deque[str]] = {}
 voice_text_channels = {}
@@ -1380,7 +1387,11 @@ async def on_message(message: discord.Message) -> None:
                 await vc.move_to(voice_channel)
                 logger.info(f"Переместился в канал {voice_channel.name}")
             else:
-                vc = await voice_channel.connect(cls=voice_recv.VoiceRecvClient)
+                # Используем VoiceRecvClient только если доступен
+                if VOICE_RECOGNITION_ENABLED and VOICE_RECV_AVAILABLE:
+                    vc = await voice_channel.connect(cls=voice_recv.VoiceRecvClient)
+                else:
+                    vc = await voice_channel.connect()
                 logger.info(f"Подключился к каналу {voice_channel.name}")
             voice_text_channels[message.guild.id] = message.channel
             await message.reply(f"залетел в {voice_channel.name} 🍷🗿")
