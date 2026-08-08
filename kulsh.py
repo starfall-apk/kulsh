@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.16.2 (fixed sticker send, voice sink)
+# Kulsh GPT | v2.16.3 (fixed Discord sticker/gif, voice, DonationAlerts)
 # by (main author):
 #     starfall-apk
 # coauthor & bot hosting:
@@ -367,17 +367,20 @@ async def send_sticker_if_needed(platform: str, target, answer: str, chat_id: st
     config = get_chat_config(chat_id)
     if not config.get("stickers_enabled", True):
         return answer
+
+    # Telegram: обрабатываем !sticker
     if platform == "tg" and "!sticker" in answer:
         if sticker_cooldown[chat_id] <= 0:
             try:
                 sticker = random.choice(STICKER_POOL)
-                # ИСПРАВЛЕНО: используем tg_bot.send_sticker, а не target.send_sticker
                 await tg_bot.send_sticker(target.chat.id, sticker)
                 sticker_cooldown[chat_id] = 5
             except Exception as e:
                 logger.error(f"Не удалось отправить стикер: {e}")
         return answer.replace("!sticker", "").strip()
-    elif platform == "ds" and "!gif" in answer:
+
+    # Discord: обрабатываем и !sticker, и !gif → отправляем гифку
+    elif platform == "ds" and ("!sticker" in answer or "!gif" in answer):
         if sticker_cooldown[chat_id] <= 0:
             try:
                 gif_url = random.choice(GIF_POOL)
@@ -386,7 +389,10 @@ async def send_sticker_if_needed(platform: str, target, answer: str, chat_id: st
                 sticker_cooldown[chat_id] = 5
             except Exception as e:
                 logger.error(f"Не удалось отправить гифку: {e}")
-        return answer.replace("!gif", "").strip()
+        # Убираем оба токена из ответа
+        answer = answer.replace("!sticker", "").replace("!gif", "").strip()
+        return answer
+
     return answer
 
 def decrease_sticker_cooldown(chat_id: str):
@@ -919,7 +925,7 @@ async def donation_alerts_listener() -> None:
         logger.error(f"Ошибка подключения к DonationAlerts: {e}")
 
 # ============================================================
-# ГОЛОСОВОЙ СИНК (объявлен здесь глобально, чтобы избежать NameError)
+# ГОЛОСОВОЙ СИНК (глобальное объявление)
 # ============================================================
 if VOICE_RECOGNITION_ENABLED and VOICE_RECV_AVAILABLE:
     class RecognitionSink(voice_recv.AudioSink):
@@ -1016,7 +1022,6 @@ if VOICE_RECOGNITION_ENABLED and VOICE_RECV_AVAILABLE:
                 task.cancel()
             self.buffers.clear()
 else:
-    # Заглушка, чтобы имя существовало (но фактически не будет использоваться)
     class RecognitionSink:
         pass
 
