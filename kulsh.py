@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.16.3 (fixed Discord sticker/gif, voice, DonationAlerts)
+# Kulsh GPT | v2.16.4 (fixed sticker/gif cooldown, caption handling)
 # by (main author):
 #     starfall-apk
 # coauthor & bot hosting:
@@ -1083,6 +1083,9 @@ async def handle_tg_text(message: telebot.types.Message) -> None:
     memory = get_chat_memory(chat_id)
     text = cast(str, message.text)
 
+    # Уменьшаем кулдаун стикеров при любом входящем сообщении
+    decrease_sticker_cooldown(chat_id)
+
     if text.lower().startswith("кульш конфиг"):
         parts = text.split()
         config = get_chat_config(chat_id)
@@ -1221,7 +1224,6 @@ async def handle_tg_text(message: telebot.types.Message) -> None:
 
     if is_reply_to_bot or re.search(r'(?i)\bкульш\b', text):
         await tg_bot.send_chat_action(message.chat.id, 'typing')
-        decrease_sticker_cooldown(chat_id)
         if wants_photo(text):
             photo_url = await get_random_photo_url()
             caption = await ask_ai_async(prompt=None, context_type="caption")
@@ -1243,6 +1245,9 @@ async def handle_tg_photo(message: telebot.types.Message) -> None:
     chat_id = f"tg_{message.chat.id}"
     memory = get_chat_memory(chat_id)
     caption = message.caption or ""
+
+    # Уменьшаем кулдаун при любом фото
+    decrease_sticker_cooldown(chat_id)
 
     is_looksmaxxing = (
         any(kw in caption.lower() for kw in LOOKSMAXXING_KEYWORDS) or
@@ -1305,7 +1310,6 @@ async def handle_tg_photo(message: telebot.types.Message) -> None:
         return
 
     await tg_bot.send_chat_action(message.chat.id, 'typing')
-    decrease_sticker_cooldown(chat_id)
     photo = message.photo[-1]
     file_id = photo.file_id
 
@@ -1315,6 +1319,7 @@ async def handle_tg_photo(message: telebot.types.Message) -> None:
         prompt = caption.strip() or "че на фото?"
         messages = memory_to_messages(memory) + [{"role": "user", "text": f"{message.from_user.full_name}: {prompt} [с фото]"}]
         answer = await ask_ai_async(messages=messages, image_bytes=image_bytes, image_mime=mime_type, chat_id=chat_id)
+        # Обрабатываем !sticker в ответе, даже если это подпись к фото
         answer = await send_sticker_if_needed("tg", message, answer, chat_id)
         memory.append(f"{message.from_user.full_name}: [изображение] {caption}")
         memory.append(f"Кульш: {answer}")
@@ -1374,6 +1379,9 @@ async def on_message(message: discord.Message) -> None:
     chat_id = f"ds_guild_{message.guild.id}"
     memory = get_chat_memory(chat_id)
     content_lower = message.content.lower()
+
+    # Уменьшаем кулдаун стикеров/гифок при любом входящем сообщении
+    decrease_sticker_cooldown(chat_id)
 
     is_reply_to_bot = False
     if message.reference and message.reference.resolved:
@@ -1623,7 +1631,6 @@ async def on_message(message: discord.Message) -> None:
 
     if has_image and (is_reply_to_bot or text_contains_kulsh):
         async with message.channel.typing():
-            decrease_sticker_cooldown(chat_id)
             image_att = next(att for att in message.attachments if cast(str, att.content_type).startswith('image/'))
             try:
                 image_bytes = await download_image_bytes(image_att.url)
@@ -1645,7 +1652,6 @@ async def on_message(message: discord.Message) -> None:
 
     if is_reply_to_bot or text_contains_kulsh:
         async with message.channel.typing():
-            decrease_sticker_cooldown(chat_id)
             if wants_photo(message.content):
                 photo_url = await get_random_photo_url()
                 caption = await ask_ai_async(prompt=None, context_type="caption")
