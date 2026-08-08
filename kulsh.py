@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.16.1 (donations, leaderboard, DonationAlerts, auto-update, memory)
+# Kulsh GPT | v2.16.2 (fixed sticker send, voice sink)
 # by (main author):
 #     starfall-apk
 # coauthor & bot hosting:
@@ -18,7 +18,7 @@ import subprocess
 import html
 import socketio
 import logging
-import datetime  # добавлено для extract_memory
+import datetime
 from logging.handlers import RotatingFileHandler
 from typing import Any, cast
 from PIL import Image, ImageDraw, ImageFont
@@ -32,7 +32,6 @@ from telebot.types import InputFile
 logger = logging.getLogger('KulshBot')
 logger.setLevel(logging.DEBUG)
 
-# Формат логов
 log_formatter = logging.Formatter('%(asctime)s | %(levelname)s | %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
 
 file_handler = RotatingFileHandler('bot.log', maxBytes=5*1024*1024, backupCount=1, encoding='utf-8')
@@ -228,11 +227,11 @@ def image_bytes_to_base64(image_bytes: bytes, mime_type: str = "image/jpeg"):
 # ОСНОВНОЙ ЗАПРОС К AI
 # ============================================================
 async def ask_ai_async(
-    prompt: str | None = None, 
-    context_type: str | None = "default", 
-    messages: list[dict[str, Any]] | None = None, 
-    image_bytes: bytes | None = None, 
-    image_mime: str = "image/jpeg", 
+    prompt: str | None = None,
+    context_type: str | None = "default",
+    messages: list[dict[str, Any]] | None = None,
+    image_bytes: bytes | None = None,
+    image_mime: str = "image/jpeg",
     system_instruction_override: str | None = None,
     chat_id: str | None = None
 ):
@@ -372,7 +371,8 @@ async def send_sticker_if_needed(platform: str, target, answer: str, chat_id: st
         if sticker_cooldown[chat_id] <= 0:
             try:
                 sticker = random.choice(STICKER_POOL)
-                await target.send_sticker(sticker)
+                # ИСПРАВЛЕНО: используем tg_bot.send_sticker, а не target.send_sticker
+                await tg_bot.send_sticker(target.chat.id, sticker)
                 sticker_cooldown[chat_id] = 5
             except Exception as e:
                 logger.error(f"Не удалось отправить стикер: {e}")
@@ -881,7 +881,7 @@ async def donation_alerts_listener() -> None:
         logger.info("🔕 DonationAlerts токен не задан, слушатель не запущен.")
         return
     await ds_bot.wait_until_ready()
-    sio = socketio.AsyncClient(query={'token': DONATIONALERTS_TOKEN})  # исправлено
+    sio = socketio.AsyncClient(query={'token': DONATIONALERTS_TOKEN})
 
     @sio.event
     async def connect() -> None:
@@ -917,6 +917,108 @@ async def donation_alerts_listener() -> None:
         await sio.wait()
     except Exception as e:
         logger.error(f"Ошибка подключения к DonationAlerts: {e}")
+
+# ============================================================
+# ГОЛОСОВОЙ СИНК (объявлен здесь глобально, чтобы избежать NameError)
+# ============================================================
+if VOICE_RECOGNITION_ENABLED and VOICE_RECV_AVAILABLE:
+    class RecognitionSink(voice_recv.AudioSink):
+        def __init__(self, bot, guild, text_channel):
+            super().__init__()
+            self.bot = bot
+            self.guild = guild
+            self.text_channel = text_channel
+            self.buffers = {}
+            self.recognizer = sr.Recognizer()
+            self.processing_tasks = {}
+
+        def wants_opus(self) -> bool:
+            return False
+
+        def write(self, user, data):
+            user_id = user.id if user else "unknown_session"
+            user_name = user.name if user else "Аноним"
+            if user and user.bot:
+                return
+            if user_id not in self.buffers:
+                self.buffers[user_id] = bytearray()
+            self.buffers[user_id].extend(data.pcm)
+            if len(self.buffers[user_id]) > 380000:
+                if user_id in self.processing_tasks:
+                    self.processing_tasks[user_id].cancel()
+                self.processing_tasks[user_id] = asyncio.run_coroutine_threadsafe(
+                    self.wait_and_process(user_id, user_name), self.bot.loop
+                )
+
+        def trigger_processing(self, user):
+            if user.id in self.processing_tasks:
+                self.processing_tasks[user.id].cancel()
+            asyncio.run_coroutine_threadsafe(self.process_now(user), self.bot.loop)
+
+        async def process_now(self, user):
+            if user.id not in self.buffers or len(self.buffers[user.id]) < 1000:
+                return
+            pcm_data = bytes(self.buffers.pop(user.id))
+            text = await self.recognize_pcm(pcm_data)
+            if text and random.random() <= 0.65:
+                await self.handle_voice_command(user, text)
+
+        def _sync_recognize(self, pcm_data):
+            try:
+                audio = AudioSegment(
+                    data=pcm_data,
+                    sample_width=2,
+                    frame_rate=48000,
+                    channels=2
+                ).set_channels(1).set_frame_rate(16000)
+                wav_io = BytesIO()
+                audio.export(wav_io, format="wav")
+                wav_io.seek(0)
+                with sr.AudioFile(wav_io) as source:
+                    return self.recognizer.recognize_google(
+                        self.recognizer.record(source),
+                        language="ru-RU"
+                    )
+            except sr.UnknownValueError:
+                return None
+            except Exception as e:
+                logger.error(f"Ошибка распознавания: {e}")
+                return None
+
+        async def wait_and_process(self, user_id, user_name):
+            try:
+                await asyncio.sleep(1.5)
+                if user_id in self.buffers:
+                    pcm_data = bytes(self.buffers.pop(user_id))
+                    text = await asyncio.to_thread(self._sync_recognize, pcm_data)
+                    if text and random.random() <= 0.65:
+                        logger.info(f"Распознано: {text}")
+            except asyncio.CancelledError:
+                pass
+
+        async def recognize_pcm(self, pcm_data: bytes):
+            return await asyncio.to_thread(self._sync_recognize, pcm_data)
+
+        async def handle_voice_command(self, user, text):
+            memory = get_chat_memory(f"ds_guild_{self.guild.id}")
+            memory.append(f"{user.name}: {text}")
+            messages = memory_to_messages(memory)
+            answer = await ask_ai_async(messages=messages)
+            memory.append(f"Кульш: {answer}")
+            if self.text_channel:
+                await self.text_channel.send(f"**{user.display_name}**, {answer}")
+            vc = self.guild.voice_client
+            if vc:
+                await say_in_voice(vc, answer)
+
+        def cleanup(self):
+            for task in self.processing_tasks.values():
+                task.cancel()
+            self.buffers.clear()
+else:
+    # Заглушка, чтобы имя существовало (но фактически не будет использоваться)
+    class RecognitionSink:
+        pass
 
 # ============================================================
 # ИНИЦИАЛИЗАЦИЯ БОТОВ
@@ -1558,7 +1660,7 @@ async def on_message(message: discord.Message) -> None:
         memory.append(f"{message.author.name}: {message.content}")
 
 # ============================================================
-# ФУНКЦИЯ say_in_voice (исправлена проверка подключения)
+# ФУНКЦИЯ say_in_voice
 # ============================================================
 async def say_in_voice(voice_client, text):
     if not VOICE_ENABLED or not voice_client or not voice_client.is_connected():
