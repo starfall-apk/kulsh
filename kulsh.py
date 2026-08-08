@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.16.4 (fixed sticker/gif cooldown, caption handling)
+# Kulsh GPT | v2.16.5 (removed sticker cooldown)
 # by (main author):
 #     starfall-apk
 # coauthor & bot hosting:
@@ -344,7 +344,7 @@ def wants_photo(text: str):
     return any(re.search(p, text) for p in patterns)
 
 # ============================================================
-# СТИКЕРЫ И ГИФКИ
+# СТИКЕРЫ И ГИФКИ (без кулдауна)
 # ============================================================
 STICKER_POOL = [
     "CAACAgEAAxkBAAEXkj1qd6YOMXAHLciofztbliRFn-qf5gACvAIAAmIaIUTfm-IZfGZGmj0E",
@@ -361,43 +361,32 @@ GIF_POOL = [
     "https://cdn.discordapp.com/attachments/1494583947664035913/1535766837772427294/octopus_20260808214849.gif?ex=6a78f5d3&is=6a77a453&hm=28bfd8cbe5746dd2b0961c2c07ab73ed99efbc1261f12347df48dfe63acea776&"
 ]
 
-sticker_cooldown: dict[str, int] = defaultdict(int)
-
 async def send_sticker_if_needed(platform: str, target, answer: str, chat_id: str) -> str:
     config = get_chat_config(chat_id)
     if not config.get("stickers_enabled", True):
         return answer
 
-    # Telegram: обрабатываем !sticker
+    # Telegram: обрабатываем !sticker (кулдаун убран)
     if platform == "tg" and "!sticker" in answer:
-        if sticker_cooldown[chat_id] <= 0:
-            try:
-                sticker = random.choice(STICKER_POOL)
-                await tg_bot.send_sticker(target.chat.id, sticker)
-                sticker_cooldown[chat_id] = 5
-            except Exception as e:
-                logger.error(f"Не удалось отправить стикер: {e}")
+        try:
+            sticker = random.choice(STICKER_POOL)
+            await tg_bot.send_sticker(target.chat.id, sticker)
+        except Exception as e:
+            logger.error(f"Не удалось отправить стикер: {e}")
         return answer.replace("!sticker", "").strip()
 
-    # Discord: обрабатываем и !sticker, и !gif → отправляем гифку
+    # Discord: обрабатываем и !sticker, и !gif → отправляем гифку (кулдаун убран)
     elif platform == "ds" and ("!sticker" in answer or "!gif" in answer):
-        if sticker_cooldown[chat_id] <= 0:
-            try:
-                gif_url = random.choice(GIF_POOL)
-                embed = discord.Embed().set_image(url=gif_url)
-                await target.reply(embed=embed)
-                sticker_cooldown[chat_id] = 5
-            except Exception as e:
-                logger.error(f"Не удалось отправить гифку: {e}")
-        # Убираем оба токена из ответа
+        try:
+            gif_url = random.choice(GIF_POOL)
+            embed = discord.Embed().set_image(url=gif_url)
+            await target.reply(embed=embed)
+        except Exception as e:
+            logger.error(f"Не удалось отправить гифку: {e}")
         answer = answer.replace("!sticker", "").replace("!gif", "").strip()
         return answer
 
     return answer
-
-def decrease_sticker_cooldown(chat_id: str):
-    if sticker_cooldown[chat_id] > 0:
-        sticker_cooldown[chat_id] -= 1
 
 # ============================================================
 # LOOKSMAXXING
@@ -1083,9 +1072,6 @@ async def handle_tg_text(message: telebot.types.Message) -> None:
     memory = get_chat_memory(chat_id)
     text = cast(str, message.text)
 
-    # Уменьшаем кулдаун стикеров при любом входящем сообщении
-    decrease_sticker_cooldown(chat_id)
-
     if text.lower().startswith("кульш конфиг"):
         parts = text.split()
         config = get_chat_config(chat_id)
@@ -1246,9 +1232,6 @@ async def handle_tg_photo(message: telebot.types.Message) -> None:
     memory = get_chat_memory(chat_id)
     caption = message.caption or ""
 
-    # Уменьшаем кулдаун при любом фото
-    decrease_sticker_cooldown(chat_id)
-
     is_looksmaxxing = (
         any(kw in caption.lower() for kw in LOOKSMAXXING_KEYWORDS) or
         (message.reply_to_message and 
@@ -1319,7 +1302,6 @@ async def handle_tg_photo(message: telebot.types.Message) -> None:
         prompt = caption.strip() or "че на фото?"
         messages = memory_to_messages(memory) + [{"role": "user", "text": f"{message.from_user.full_name}: {prompt} [с фото]"}]
         answer = await ask_ai_async(messages=messages, image_bytes=image_bytes, image_mime=mime_type, chat_id=chat_id)
-        # Обрабатываем !sticker в ответе, даже если это подпись к фото
         answer = await send_sticker_if_needed("tg", message, answer, chat_id)
         memory.append(f"{message.from_user.full_name}: [изображение] {caption}")
         memory.append(f"Кульш: {answer}")
@@ -1379,9 +1361,6 @@ async def on_message(message: discord.Message) -> None:
     chat_id = f"ds_guild_{message.guild.id}"
     memory = get_chat_memory(chat_id)
     content_lower = message.content.lower()
-
-    # Уменьшаем кулдаун стикеров/гифок при любом входящем сообщении
-    decrease_sticker_cooldown(chat_id)
 
     is_reply_to_bot = False
     if message.reference and message.reference.resolved:
