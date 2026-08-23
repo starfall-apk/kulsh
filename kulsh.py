@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.20.0 (fixed battle photo collection, strict commands)
+# Kulsh GPT | v2.21.0 (fixed battle infographic layout, compact style)
 # by (main author):
 #     starfall-apk
 # coauthor & bot hosting:
@@ -468,6 +468,7 @@ def markdown_like_to_telegram_html(text: str) -> str:
     return text
 
 async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark", lang: str = "en") -> BytesIO:
+    # (без изменений, как в предыдущем коде)
     if lang == "ru":
         TITLE = "ОТЧЁТ LOOKSMAXXING"
         PSL_LABEL = "PSL"
@@ -802,16 +803,16 @@ async def create_battle_infographic(photo1_bytes: bytes, photo2_bytes: bytes, da
         mogged_color = (0, 0, 0, 180)
         mogged_text_color = "#E53E3E"
 
-    canvas_w, canvas_h = 1400, 900
+    # Увеличиваем высоту, чтобы все поместилось
+    canvas_w, canvas_h = 1400, 1300
     image = Image.new("RGBA", (canvas_w, canvas_h), bg_color)
     draw = ImageDraw.Draw(image)
 
     font_title = load_font(34)
     font_sub = load_font(22)
     font_psl = load_font(40)
-    font_text = load_font(16)
-    font_small = load_font(14)
     font_factor = load_font(14)
+    font_mogged = load_font(48)
 
     draw.text((canvas_w//2, 25), TITLE, fill=text_tertiary, font=font_title, anchor="mm")
     draw.line([(40, 70), (canvas_w - 40, 70)], fill=line_color, width=1)
@@ -843,12 +844,13 @@ async def create_battle_infographic(photo1_bytes: bytes, photo2_bytes: bytes, da
     overlay = Image.new("RGBA", (photo_width, photo_height), mogged_color)
     image.paste(overlay, (loser_photo_x, loser_photo_y), overlay)
     draw.text((loser_photo_x + photo_width//2, loser_photo_y + photo_height//2),
-              MOGGED_TEXT, fill=mogged_text_color, font=load_font(48), anchor="mm")
+              MOGGED_TEXT, fill=mogged_text_color, font=font_mogged, anchor="mm")
 
     winner_photo_x = left_photo_x if winner_num == "1" else right_photo_x
     draw.text((winner_photo_x + photo_width//2, photo_y + photo_height + 15),
               WINNER_LABEL, fill=accent, font=font_sub, anchor="mm")
 
+    # Текст под фото
     for side, photo_x, photo_data_key in [(1, left_photo_x, "photo1"), (2, right_photo_x, "photo2")]:
         pd = data[photo_data_key]
         psl = pd.get("psl", "N/A")
@@ -857,29 +859,58 @@ async def create_battle_infographic(photo1_bytes: bytes, photo2_bytes: bytes, da
         factors = pd.get("factors", {})
 
         info_y = photo_y + photo_height + 50
-        draw.text((photo_x + 20, info_y), f"PSL: {psl}", fill=text_primary, font=font_psl)
-        draw.text((photo_x + 20, info_y + 45), f"{tier} · {gender}", fill=accent, font=font_sub)
-
-        psl_val = float(psl) if isinstance(psl, str) and psl.replace('.', '').isdigit() else 1.0
-        psl_val = max(1.0, min(8.0, psl_val))
-        bar_x = photo_x + 20
-        bar_y = info_y + 80
-        bar_w = photo_width - 40
-        bar_h = 12
-        draw.rounded_rectangle((bar_x, bar_y, bar_x + bar_w, bar_y + bar_h), radius=6, fill=scale_bg)
-        fill_w = int((psl_val - 1) / 7 * bar_w)
-        if fill_w > 0:
-            draw.rounded_rectangle((bar_x, bar_y, bar_x + fill_w, bar_y + bar_h), radius=6, fill=get_tier_color(tier))
-
-        factor_y_start = bar_y + bar_h + 20
-        factor_line_height = 24
-        for i, (factor_key, label) in enumerate(FACTOR_LABELS.items()):
-            if factor_key in factors:
-                val = factors[factor_key]
-                if isinstance(val, (int, float)):
-                    val = str(val)
-                draw.text((photo_x + 20, factor_y_start + i * factor_line_height),
-                          f"{label}: {val}", fill=text_secondary, font=font_factor)
+        if side == 1:
+            # Левое фото: выравнивание по левому краю
+            text_x = photo_x + 20
+            bar_x = photo_x + 20
+            bar_w = photo_width - 40
+            # Тексты рисуем с левого края
+            draw.text((text_x, info_y), f"PSL: {psl}", fill=text_primary, font=font_psl)
+            draw.text((text_x, info_y + 45), f"{tier} · {gender}", fill=accent, font=font_sub)
+            # Шкала PSL
+            psl_val = float(psl) if isinstance(psl, str) and psl.replace('.', '').isdigit() else 1.0
+            psl_val = max(1.0, min(8.0, psl_val))
+            bar_y = info_y + 80
+            draw.rounded_rectangle((bar_x, bar_y, bar_x + bar_w, bar_y + 12), radius=6, fill=scale_bg)
+            fill_w = int((psl_val - 1) / 7 * bar_w)
+            if fill_w > 0:
+                draw.rounded_rectangle((bar_x, bar_y, bar_x + fill_w, bar_y + 12), radius=6, fill=get_tier_color(tier))
+            # Факторы
+            factor_y_start = bar_y + 20
+            factor_line_height = 24
+            for i, (factor_key, label) in enumerate(FACTOR_LABELS.items()):
+                if factor_key in factors:
+                    val = factors[factor_key]
+                    if isinstance(val, (int, float)):
+                        val = str(val)
+                    draw.text((text_x, factor_y_start + i * factor_line_height),
+                              f"{label}: {val}", fill=text_secondary, font=font_factor)
+        else:
+            # Правое фото: выравнивание по правому краю canvas (или фото)
+            text_x = right_photo_x + photo_width - 20
+            bar_x = right_photo_x + photo_width - 20 - (photo_width - 40)
+            bar_w = photo_width - 40
+            # Тексты рисуем с правого края (anchor="ra")
+            draw.text((text_x, info_y), f"PSL: {psl}", fill=text_primary, font=font_psl, anchor="ra")
+            draw.text((text_x, info_y + 45), f"{tier} · {gender}", fill=accent, font=font_sub, anchor="ra")
+            # Шкала PSL
+            psl_val = float(psl) if isinstance(psl, str) and psl.replace('.', '').isdigit() else 1.0
+            psl_val = max(1.0, min(8.0, psl_val))
+            bar_y = info_y + 80
+            draw.rounded_rectangle((bar_x, bar_y, bar_x + bar_w, bar_y + 12), radius=6, fill=scale_bg)
+            fill_w = int((psl_val - 1) / 7 * bar_w)
+            if fill_w > 0:
+                draw.rounded_rectangle((bar_x, bar_y, bar_x + fill_w, bar_y + 12), radius=6, fill=get_tier_color(tier))
+            # Факторы (выравнивание по правому краю)
+            factor_y_start = bar_y + 20
+            factor_line_height = 24
+            for i, (factor_key, label) in enumerate(FACTOR_LABELS.items()):
+                if factor_key in factors:
+                    val = factors[factor_key]
+                    if isinstance(val, (int, float)):
+                        val = str(val)
+                    draw.text((text_x, factor_y_start + i * factor_line_height),
+                              f"{label}: {val}", fill=text_secondary, font=font_factor, anchor="ra")
 
     output = BytesIO()
     image.save(output, format="PNG")
@@ -887,6 +918,7 @@ async def create_battle_infographic(photo1_bytes: bytes, photo2_bytes: bytes, da
     return output
 
 async def get_looksmaxxing_data(photo_bytes: bytes, include_advice: bool, lang: str = "en") -> dict[str, Any]:
+    # (без изменений)
     if lang == "ru":
         prompt = (
             "Ты — чрезвычайно строгий и объективный AI-аналитик по looksmaxxing. Оцени лицо на фото критически и честно, "
@@ -1003,6 +1035,7 @@ async def get_looksmaxxing_data(photo_bytes: bytes, include_advice: bool, lang: 
             return {"error": "Could not parse AI response as JSON."}
 
 async def get_battle_data(photo1_bytes: bytes, photo2_bytes: bytes, lang: str = "en") -> dict[str, Any]:
+    # (без изменений)
     if lang == "ru":
         prompt = (
             "Ты — строгий и объективный AI-аналитик по looksmaxxing. Сравни два лица на фотографиях и выбери победителя "
@@ -1256,8 +1289,8 @@ tg_bot = AsyncTeleBot(TG_TOKEN)
 pending_donations = {}
 
 # Словари для сбора баттл-фото в Telegram
-battle_media_groups = {}  # media_group_id -> asyncio.Task
-battle_photos = {}        # media_group_id -> list[bytes]
+battle_media_groups = {}
+battle_photos = {}
 
 # ============================================================
 # ТЕЛЕГРАМ ОБРАБОТЧИКИ
@@ -1487,35 +1520,28 @@ async def handle_tg_photo(message: telebot.types.Message) -> None:
     memory = get_chat_memory(chat_id)
     caption = message.caption or ""
 
-    # Проверка на баттл: если caption содержит баттл-команду
     if is_battle_command(caption):
         if message.media_group_id:
             media_group_id = message.media_group_id
-            # Инициализируем список, если его нет
             if media_group_id not in battle_photos:
                 battle_photos[media_group_id] = []
-                # Создаем задачу обработки через 1.5 секунды
                 battle_media_groups[media_group_id] = asyncio.create_task(
                     process_battle_media_group(media_group_id, message.chat.id, memory)
                 )
-            # Добавляем фото
             photo = message.photo[-1]
             image_bytes = await get_tg_image_bytes(tg_bot, photo.file_id)
             battle_photos[media_group_id].append(image_bytes)
         else:
-            # Если одно фото, просим второе
             await tg_bot.reply_to(message, "Для баттла нужно два фото. Отправьте их в одном сообщении (альбомом).")
         return
 
-    # Если фото пришло без подписи, но media_group_id есть в battle_photos (т.е. это второе фото баттла)
+    # Если фото без подписи, но это часть баттл-группы
     if message.media_group_id and message.media_group_id in battle_photos:
-        # Добавляем фото
         photo = message.photo[-1]
         image_bytes = await get_tg_image_bytes(tg_bot, photo.file_id)
         battle_photos[message.media_group_id].append(image_bytes)
         return
 
-    # Проверка на PSL команду
     is_looksmaxxing = (
         is_looksmaxxing_command(caption) or
         (message.reply_to_message and 
