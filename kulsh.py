@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.16.5 (removed sticker cooldown)
+# Kulsh GPT | v2.17.0 (added random messages toggle)
 # by (main author):
 #     starfall-apk
 # coauthor & bot hosting:
@@ -177,7 +177,8 @@ DEFAULT_CHAT_CONFIG = {
     "series_reminder_enabled": True,
     "stickers_enabled": True,
     "custom_prompt": None,
-    "random_reply_enabled": False
+    "random_reply_enabled": False,
+    "random_messages_enabled": True
 }
 
 chat_configs: dict[str, dict] = defaultdict(lambda: DEFAULT_CHAT_CONFIG.copy())
@@ -1080,13 +1081,15 @@ async def handle_tg_text(message: telebot.types.Message) -> None:
             stickers = "вкл" if config["stickers_enabled"] else "выкл"
             prompt = config["custom_prompt"] or "стандартный"
             random_reply = "вкл" if config["random_reply_enabled"] else "выкл"
+            random_messages = "вкл" if config["random_messages_enabled"] else "выкл"
             msg = (f"⚙️ **Конфигурация чата**\n"
                    f"Авто-серия (DS): {series}\n"
                    f"Стикеры/гифки: {stickers}\n"
-                   f"Случайные ответы: {random_reply}\n"
+                   f"Случайные ответы (автоответ): {random_reply}\n"
+                   f"Случайные сообщения (рандом): {random_messages}\n"
                    f"Кастомный промпт: {prompt}\n"
                    f"Для изменения: `кульш конфиг <параметр> <значение>`\n"
-                   f"Доступные параметры: серия, стикеры, промпт, сброс_памяти, автоответ")
+                   f"Доступные параметры: серия, стикеры, промпт, сброс_памяти, автоответ, рандом")
             await tg_bot.reply_to(message, msg)
             return
         if len(parts) >= 3:
@@ -1121,6 +1124,16 @@ async def handle_tg_text(message: telebot.types.Message) -> None:
                     await tg_bot.reply_to(message, "Случайные ответы выключены")
                 else:
                     await tg_bot.reply_to(message, "Укажите: вкл/выкл")
+            elif param == "рандом":
+                val = parts[3].lower() if len(parts) >= 4 else ""
+                if val in ("вкл", "on", "1"):
+                    config["random_messages_enabled"] = True
+                    await tg_bot.reply_to(message, "Случайные сообщения (рандом) включены")
+                elif val in ("выкл", "off", "0"):
+                    config["random_messages_enabled"] = False
+                    await tg_bot.reply_to(message, "Случайные сообщения (рандом) выключены")
+                else:
+                    await tg_bot.reply_to(message, "Укажите: вкл/выкл")
             elif param == "промпт":
                 new_prompt = " ".join(parts[3:]).strip()
                 if new_prompt.lower() in ("сброс", "убрать", "стандарт"):
@@ -1139,7 +1152,7 @@ async def handle_tg_text(message: telebot.types.Message) -> None:
                 else:
                     await tg_bot.reply_to(message, "Память и так пуста")
             else:
-                await tg_bot.reply_to(message, "Неизвестный параметр. Доступно: серия, стикеры, промпт, сброс_памяти, автоответ")
+                await tg_bot.reply_to(message, "Неизвестный параметр. Доступно: серия, стикеры, промпт, сброс_памяти, автоответ, рандом")
             return
         return
 
@@ -1400,13 +1413,15 @@ async def on_message(message: discord.Message) -> None:
             stickers = "вкл" if config["stickers_enabled"] else "выкл"
             prompt = config["custom_prompt"] or "стандартный"
             random_reply = "вкл" if config["random_reply_enabled"] else "выкл"
+            random_messages = "вкл" if config["random_messages_enabled"] else "выкл"
             msg = (f"⚙️ **Конфигурация чата**\n"
                    f"Авто-серия (DS): {series}\n"
                    f"Стикеры/гифки: {stickers}\n"
-                   f"Случайные ответы: {random_reply}\n"
+                   f"Случайные ответы (автоответ): {random_reply}\n"
+                   f"Случайные сообщения (рандом): {random_messages}\n"
                    f"Кастомный промпт: {prompt}\n"
                    f"Для изменения: `кульш конфиг <параметр> <значение>`\n"
-                   f"Доступные параметры: серия, стикеры, промпт, сброс_памяти, автоответ")
+                   f"Доступные параметры: серия, стикеры, промпт, сброс_памяти, автоответ, рандом")
             await message.reply(msg)
             return
         if len(parts) >= 3:
@@ -1441,6 +1456,16 @@ async def on_message(message: discord.Message) -> None:
                     await message.reply("Случайные ответы выключены")
                 else:
                     await message.reply("Укажите: вкл/выкл")
+            elif param == "рандом":
+                val = parts[3].lower() if len(parts) >= 4 else ""
+                if val in ("вкл", "on", "1"):
+                    config["random_messages_enabled"] = True
+                    await message.reply("Случайные сообщения (рандом) включены")
+                elif val in ("выкл", "off", "0"):
+                    config["random_messages_enabled"] = False
+                    await message.reply("Случайные сообщения (рандом) выключены")
+                else:
+                    await message.reply("Укажите: вкл/выкл")
             elif param == "промпт":
                 new_prompt = " ".join(parts[3:]).strip()
                 if new_prompt.lower() in ("сброс", "убрать", "стандарт"):
@@ -1459,7 +1484,7 @@ async def on_message(message: discord.Message) -> None:
                 else:
                     await message.reply("Память и так пуста")
             else:
-                await message.reply("Неизвестный параметр. Доступно: серия, стикеры, промпт, сброс_памяти, автоответ")
+                await message.reply("Неизвестный параметр. Доступно: серия, стикеры, промпт, сброс_памяти, автоответ, рандом")
             return
         return
 
@@ -1673,6 +1698,8 @@ async def random_post_loop() -> None:
         await asyncio.sleep(random.randint(3600, 14400))
         chat_id = f"tg_{TG_TARGET_CHAT}"
         config = get_chat_config(chat_id)
+        if not config.get("random_messages_enabled", True):
+            continue
         if config.get("random_reply_enabled", False):
             memory = get_chat_memory(chat_id)
             if memory:
@@ -1689,6 +1716,13 @@ async def random_post_loop() -> None:
                         await tg_bot.send_message(TG_TARGET_CHAT, answer)
                     except Exception as e:
                         logger.info(f"Ошибка случайного ответа: {e}")
+            else:
+                # Если памяти нет, отправляем случайный мем
+                answer = await ask_ai_async(prompt=None, context_type="random")
+                try:
+                    await tg_bot.send_message(TG_TARGET_CHAT, answer)
+                except Exception as e:
+                    logger.info(f"Ошибка рандомного поста: {e}")
         else:
             answer = await ask_ai_async(prompt=None, context_type="random")
             try:
