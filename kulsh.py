@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.19.0 (fixed battle, strict commands, new tiers, potential)
+# Kulsh GPT | v2.20.0 (fixed battle photo collection, strict commands)
 # by (main author):
 #     starfall-apk
 # coauthor & bot hosting:
@@ -21,7 +21,7 @@ import logging
 import datetime
 from logging.handlers import RotatingFileHandler
 from typing import Any, cast
-from PIL import Image, ImageDraw, ImageFont, ImageEnhance, ImageFilter
+from PIL import Image, ImageDraw, ImageFont
 from dotenv import load_dotenv
 from io import BytesIO
 from collections import deque, defaultdict
@@ -275,7 +275,6 @@ async def ask_ai_async(
         for i, msg in enumerate(messages):
             role = msg["role"] if msg["role"] in ("user", "model") else "user"
             parts = [{"text": msg["text"]}]
-            # Если есть список изображений и это последнее сообщение и роль user
             if image_bytes_list and i == len(messages) - 1 and role == "user":
                 for img_bytes, mime in zip(image_bytes_list, image_mime_list or []):
                     encoded, _ = image_bytes_to_base64(img_bytes, mime)
@@ -402,30 +401,12 @@ async def send_sticker_if_needed(platform: str, target, answer: str, chat_id: st
 # ============================================================
 # LOOKSMAXXING
 # ============================================================
-# Строгие команды
 def is_looksmaxxing_command(text: str) -> bool:
-    """
-    Проверяет, является ли сообщение командой PSL (с флагом совет/advice или без).
-    Допустимые форматы:
-    - "psl"
-    - "кульш psl"
-    - "psl совет" / "psl advice"
-    - "кульш psl совет" / "кульш psl advice"
-    (регистр не важен)
-    """
     t = text.strip().lower()
-    # Регулярное выражение: (кульш\s+)?psl(\s+(совет|advice))?
     pattern = r'^(кульш\s+)?psl(\s+(совет|advice))?$'
     return bool(re.match(pattern, t))
 
 def is_battle_command(text: str) -> bool:
-    """
-    Строгие команды баттла:
-    - "battle"
-    - "кульш battle"
-    - "баттл" / "батл"
-    - "кульш баттл" / "кульш батл"
-    """
     t = text.strip().lower()
     pattern = r'^(кульш\s+)?(battle|баттл|батл)$'
     return bool(re.match(pattern, t))
@@ -487,7 +468,6 @@ def markdown_like_to_telegram_html(text: str) -> str:
     return text
 
 async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark", lang: str = "en") -> BytesIO:
-    # (Функция создания инфографики с потенциалом)
     if lang == "ru":
         TITLE = "ОТЧЁТ LOOKSMAXXING"
         PSL_LABEL = "PSL"
@@ -635,11 +615,10 @@ async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark"
     draw.text((start_x, right_top_y+35), f"{psl_score}", fill=text_primary, font=font_psl_num)
     draw.text((start_x, right_top_y+110), f"{tier_name} · {gender}", fill=accent, font=font_sub)
 
-    # Добавляем потенциал
     potential_text = f"{POTENTIAL_LABEL} {potential}"
     draw.text((start_x, right_top_y+145), potential_text, fill=text_secondary, font=font_small)
 
-    psl_bar_x, psl_bar_y = start_x, right_top_y + 200  # сдвинули вниз
+    psl_bar_x, psl_bar_y = start_x, right_top_y + 200
     psl_bar_w, psl_bar_h = 400, 20
     draw.rounded_rectangle((psl_bar_x, psl_bar_y, psl_bar_x + psl_bar_w, psl_bar_y + psl_bar_h), radius=10, fill=scale_bg)
     psl_fill_width = int((psl_val - 1) / 7 * psl_bar_w)
@@ -773,9 +752,6 @@ async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark"
     return output
 
 async def create_battle_infographic(photo1_bytes: bytes, photo2_bytes: bytes, data: dict, theme: str = "dark", lang: str = "en") -> BytesIO:
-    """
-    Создает изображение для баттла двух лиц.
-    """
     if lang == "ru":
         TITLE = "БАТТЛ LOOKSMAXXING"
         FACTOR_LABELS = {
@@ -813,7 +789,7 @@ async def create_battle_infographic(photo1_bytes: bytes, photo2_bytes: bytes, da
         accent = "#2B6CB0"
         line_color = "#D1D5DB"
         scale_bg = "#E5E7EB"
-        mogged_color = (0, 0, 0, 180)  # полупрозрачный чёрный
+        mogged_color = (0, 0, 0, 180)
         mogged_text_color = "#E53E3E"
     else:
         bg_color = "#0E0E12"
@@ -846,26 +822,22 @@ async def create_battle_infographic(photo1_bytes: bytes, photo2_bytes: bytes, da
     right_photo_x = canvas_w - 50 - photo_width
     photo_y = 110
 
-    # Открываем и вставляем фото
     img1 = Image.open(BytesIO(photo1_bytes)).convert("RGBA")
     img2 = Image.open(BytesIO(photo2_bytes)).convert("RGBA")
     img1.thumbnail((photo_width, photo_height), Image.Resampling.LANCZOS)
     img2.thumbnail((photo_width, photo_height), Image.Resampling.LANCZOS)
 
-    # Центрируем в отведенном месте
     left_img_x = left_photo_x + (photo_width - img1.width) // 2
     left_img_y = photo_y + (photo_height - img1.height) // 2
     right_img_x = right_photo_x + (photo_width - img2.width) // 2
     right_img_y = photo_y + (photo_height - img2.height) // 2
 
-    # Вставляем фото
     image.paste(img1, (left_img_x, left_img_y), img1)
     image.paste(img2, (right_img_x, right_img_y), img2)
 
     winner_num = data.get("winner", "1")
     loser_num = "2" if winner_num == "1" else "1"
 
-    # Накладываем полосу на проигравшего
     loser_photo_x = left_photo_x if loser_num == "1" else right_photo_x
     loser_photo_y = photo_y
     overlay = Image.new("RGBA", (photo_width, photo_height), mogged_color)
@@ -873,12 +845,10 @@ async def create_battle_infographic(photo1_bytes: bytes, photo2_bytes: bytes, da
     draw.text((loser_photo_x + photo_width//2, loser_photo_y + photo_height//2),
               MOGGED_TEXT, fill=mogged_text_color, font=load_font(48), anchor="mm")
 
-    # Подпись победителя
     winner_photo_x = left_photo_x if winner_num == "1" else right_photo_x
     draw.text((winner_photo_x + photo_width//2, photo_y + photo_height + 15),
               WINNER_LABEL, fill=accent, font=font_sub, anchor="mm")
 
-    # Информация под каждым фото
     for side, photo_x, photo_data_key in [(1, left_photo_x, "photo1"), (2, right_photo_x, "photo2")]:
         pd = data[photo_data_key]
         psl = pd.get("psl", "N/A")
@@ -886,12 +856,10 @@ async def create_battle_infographic(photo1_bytes: bytes, photo2_bytes: bytes, da
         gender = pd.get("gender", "N/A")
         factors = pd.get("factors", {})
 
-        # PSL и tier
         info_y = photo_y + photo_height + 50
         draw.text((photo_x + 20, info_y), f"PSL: {psl}", fill=text_primary, font=font_psl)
         draw.text((photo_x + 20, info_y + 45), f"{tier} · {gender}", fill=accent, font=font_sub)
 
-        # Шкала PSL (упрощенная, без делений)
         psl_val = float(psl) if isinstance(psl, str) and psl.replace('.', '').isdigit() else 1.0
         psl_val = max(1.0, min(8.0, psl_val))
         bar_x = photo_x + 20
@@ -903,7 +871,6 @@ async def create_battle_infographic(photo1_bytes: bytes, photo2_bytes: bytes, da
         if fill_w > 0:
             draw.rounded_rectangle((bar_x, bar_y, bar_x + fill_w, bar_y + bar_h), radius=6, fill=get_tier_color(tier))
 
-        # Оценки факторов
         factor_y_start = bar_y + bar_h + 20
         factor_line_height = 24
         for i, (factor_key, label) in enumerate(FACTOR_LABELS.items()):
@@ -914,7 +881,6 @@ async def create_battle_infographic(photo1_bytes: bytes, photo2_bytes: bytes, da
                 draw.text((photo_x + 20, factor_y_start + i * factor_line_height),
                           f"{label}: {val}", fill=text_secondary, font=font_factor)
 
-    # Сохраняем
     output = BytesIO()
     image.save(output, format="PNG")
     output.seek(0)
@@ -1289,6 +1255,10 @@ else:
 tg_bot = AsyncTeleBot(TG_TOKEN)
 pending_donations = {}
 
+# Словари для сбора баттл-фото в Telegram
+battle_media_groups = {}  # media_group_id -> asyncio.Task
+battle_photos = {}        # media_group_id -> list[bytes]
+
 # ============================================================
 # ТЕЛЕГРАМ ОБРАБОТЧИКИ
 # ============================================================
@@ -1342,7 +1312,6 @@ async def handle_tg_text(message: telebot.types.Message) -> None:
     text = cast(str, message.text)
 
     if text.lower().startswith("кульш конфиг"):
-        # ... (без изменений, как было)
         parts = text.split()
         config = get_chat_config(chat_id)
         if len(parts) == 2:
@@ -1481,14 +1450,12 @@ async def handle_tg_text(message: telebot.types.Message) -> None:
                 "Изменить: `кульш настройки язык ru/en`, `кульш настройки тема dark/light`")
         return
 
-    # Команда PSL (только текст)
     if is_looksmaxxing_command(text):
         user_looksmaxxing_state[message.chat.id] = True
         await tg_bot.reply_to(message, "📸 Жду фото для анализа. Отправь его с пометкой 'looksmaxxing' или просто подпиши.")
         memory.append(f"Пользователь: {text}")
         return
 
-    # Команда battle (только текст)
     if is_battle_command(text):
         await tg_bot.reply_to(message, "Для баттла пришлите два фото в одном сообщении (альбомом) с командой `кульш баттл`.")
         return
@@ -1524,20 +1491,31 @@ async def handle_tg_photo(message: telebot.types.Message) -> None:
     if is_battle_command(caption):
         if message.media_group_id:
             media_group_id = message.media_group_id
-            if not hasattr(tg_bot, '_battle_photos'):
-                tg_bot._battle_photos = {}
-            if media_group_id not in tg_bot._battle_photos:
-                tg_bot._battle_photos[media_group_id] = []
-                # Запланируем обработку через 1 секунду
-                asyncio.create_task(process_battle_media_group(media_group_id, message.chat.id, memory))
+            # Инициализируем список, если его нет
+            if media_group_id not in battle_photos:
+                battle_photos[media_group_id] = []
+                # Создаем задачу обработки через 1.5 секунды
+                battle_media_groups[media_group_id] = asyncio.create_task(
+                    process_battle_media_group(media_group_id, message.chat.id, memory)
+                )
+            # Добавляем фото
             photo = message.photo[-1]
             image_bytes = await get_tg_image_bytes(tg_bot, photo.file_id)
-            tg_bot._battle_photos[media_group_id].append(image_bytes)
+            battle_photos[media_group_id].append(image_bytes)
         else:
+            # Если одно фото, просим второе
             await tg_bot.reply_to(message, "Для баттла нужно два фото. Отправьте их в одном сообщении (альбомом).")
         return
 
-    # Проверка на PSL команду: caption точно команда или установлено состояние
+    # Если фото пришло без подписи, но media_group_id есть в battle_photos (т.е. это второе фото баттла)
+    if message.media_group_id and message.media_group_id in battle_photos:
+        # Добавляем фото
+        photo = message.photo[-1]
+        image_bytes = await get_tg_image_bytes(tg_bot, photo.file_id)
+        battle_photos[message.media_group_id].append(image_bytes)
+        return
+
+    # Проверка на PSL команду
     is_looksmaxxing = (
         is_looksmaxxing_command(caption) or
         (message.reply_to_message and 
@@ -1623,10 +1601,11 @@ async def handle_tg_photo(message: telebot.types.Message) -> None:
         await tg_bot.reply_to(message, "не вижу фотку, битая чтоли")
 
 async def process_battle_media_group(media_group_id, user_id, memory):
-    await asyncio.sleep(1.0)
-    if not hasattr(tg_bot, '_battle_photos') or media_group_id not in tg_bot._battle_photos:
+    await asyncio.sleep(1.5)
+    if media_group_id not in battle_photos:
         return
-    photos = tg_bot._battle_photos.pop(media_group_id)
+    photos = battle_photos.pop(media_group_id)
+    battle_media_groups.pop(media_group_id, None)
     if len(photos) < 2:
         await tg_bot.send_message(user_id, "Нужно два фото для баттла.")
         return
@@ -1928,14 +1907,14 @@ async def on_message(message: discord.Message) -> None:
         memory.append(f"{message.author.name}: {message.content}")
         return
 
-    # Команда баттла
-    if is_battle_command(message.content):
+    # Команда баттла без вложений
+    if is_battle_command(message.content) and len(message.attachments) == 0:
         await message.reply("Для баттла пришлите два фото в одном сообщении с командой `кульш баттл`.")
         return
 
-    # Проверка на баттл с вложениями
-    has_battle_cmd = is_battle_command(message.content)
+    # Обработка баттла с вложениями
     image_attachments = [att for att in message.attachments if att.content_type and att.content_type.startswith('image/')]
+    has_battle_cmd = is_battle_command(message.content)
 
     if has_battle_cmd and len(image_attachments) >= 2:
         async with message.channel.typing():
@@ -2007,6 +1986,7 @@ async def on_message(message: discord.Message) -> None:
                 await message.reply(f"Ошибка анализа: {e}")
         return
 
+    # Обработка фото с упоминанием Кульша
     if has_image_att and (is_reply_to_bot or re.search(r'(?i)\bкульш\b', message.content)):
         async with message.channel.typing():
             image_att = image_attachments[0]
@@ -2028,6 +2008,7 @@ async def on_message(message: discord.Message) -> None:
                 await message.reply("не могу глянуть фотку, сломалась")
         return
 
+    # Текст с упоминанием Кульша
     if is_reply_to_bot or re.search(r'(?i)\bкульш\b', message.content):
         async with message.channel.typing():
             if wants_photo(message.content):
