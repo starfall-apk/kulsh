@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.21.0 (fixed battle infographic layout, compact style)
+# Kulsh GPT | v2.22.0 (battle infographic fully redesigned to match PSL style)
 # by (main author):
 #     starfall-apk
 # coauthor & bot hosting:
@@ -803,114 +803,147 @@ async def create_battle_infographic(photo1_bytes: bytes, photo2_bytes: bytes, da
         mogged_color = (0, 0, 0, 180)
         mogged_text_color = "#E53E3E"
 
-    # Увеличиваем высоту, чтобы все поместилось
-    canvas_w, canvas_h = 1400, 1300
+    canvas_w = 1300
+    # Высота рассчитана: заголовок (70) + фото (500) + промежуток + информация + факторы
+    canvas_h = 1100
     image = Image.new("RGBA", (canvas_w, canvas_h), bg_color)
     draw = ImageDraw.Draw(image)
 
+    # Шрифты (аналогично обычной инфографике)
     font_title = load_font(34)
-    font_sub = load_font(22)
-    font_psl = load_font(40)
-    font_factor = load_font(14)
+    font_psl_num = load_font(56)
+    font_sub = load_font(24)
+    font_text = load_font(18)
+    font_small = load_font(15)
+    font_scale = load_font(16)
+    font_tier_label = load_font(13)
+    font_winner = load_font(30)
     font_mogged = load_font(48)
 
+    # Заголовок
     draw.text((canvas_w//2, 25), TITLE, fill=text_tertiary, font=font_title, anchor="mm")
     draw.line([(40, 70), (canvas_w - 40, 70)], fill=line_color, width=1)
 
-    photo_width = 550
-    photo_height = 500
-    left_photo_x = 50
-    right_photo_x = canvas_w - 50 - photo_width
+    # Параметры колонок
+    col_width = 550
+    left_x = 50
+    right_x = canvas_w - 50 - col_width
     photo_y = 110
+    photo_width = col_width
+    photo_height = 500
 
-    img1 = Image.open(BytesIO(photo1_bytes)).convert("RGBA")
-    img2 = Image.open(BytesIO(photo2_bytes)).convert("RGBA")
-    img1.thumbnail((photo_width, photo_height), Image.Resampling.LANCZOS)
-    img2.thumbnail((photo_width, photo_height), Image.Resampling.LANCZOS)
+    # Функция для скругления фото
+    def paste_rounded_photo(img_bytes, x, y, w, h, radius=20):
+        img = Image.open(BytesIO(img_bytes)).convert("RGBA")
+        img.thumbnail((w, h), Image.Resampling.LANCZOS)
+        # Центрируем внутри области
+        img_x = x + (w - img.width) // 2
+        img_y = y + (h - img.height) // 2
+        mask = Image.new("L", img.size, 0)
+        mask_draw = ImageDraw.Draw(mask)
+        mask_draw.rounded_rectangle((0, 0) + img.size, radius=radius, fill=255)
+        rounded_img = Image.new("RGBA", img.size, (0, 0, 0, 0))
+        rounded_img.paste(img, (0, 0), mask=mask)
+        image.paste(rounded_img, (img_x, img_y), rounded_img)
+        return img_x, img_y, img.width, img.height
 
-    left_img_x = left_photo_x + (photo_width - img1.width) // 2
-    left_img_y = photo_y + (photo_height - img1.height) // 2
-    right_img_x = right_photo_x + (photo_width - img2.width) // 2
-    right_img_y = photo_y + (photo_height - img2.height) // 2
-
-    image.paste(img1, (left_img_x, left_img_y), img1)
-    image.paste(img2, (right_img_x, right_img_y), img2)
+    # Вставляем фото
+    left_img_rect = paste_rounded_photo(photo1_bytes, left_x, photo_y, photo_width, photo_height)
+    right_img_rect = paste_rounded_photo(photo2_bytes, right_x, photo_y, photo_width, photo_height)
 
     winner_num = data.get("winner", "1")
     loser_num = "2" if winner_num == "1" else "1"
 
-    loser_photo_x = left_photo_x if loser_num == "1" else right_photo_x
-    loser_photo_y = photo_y
-    overlay = Image.new("RGBA", (photo_width, photo_height), mogged_color)
-    image.paste(overlay, (loser_photo_x, loser_photo_y), overlay)
-    draw.text((loser_photo_x + photo_width//2, loser_photo_y + photo_height//2),
+    # Накладываем полосу на проигравшего
+    loser_rect = left_img_rect if loser_num == "1" else right_img_rect
+    # Полоса горизонтальная по центру фото
+    strip_height = 80
+    strip_y = loser_rect[1] + (loser_rect[3] - strip_height) // 2
+    overlay = Image.new("RGBA", (loser_rect[2], strip_height), mogged_color)
+    image.paste(overlay, (loser_rect[0], strip_y), overlay)
+    draw.text((loser_rect[0] + loser_rect[2]//2, strip_y + strip_height//2),
               MOGGED_TEXT, fill=mogged_text_color, font=font_mogged, anchor="mm")
 
-    winner_photo_x = left_photo_x if winner_num == "1" else right_photo_x
-    draw.text((winner_photo_x + photo_width//2, photo_y + photo_height + 15),
-              WINNER_LABEL, fill=accent, font=font_sub, anchor="mm")
+    # Подпись победителя
+    winner_rect = left_img_rect if winner_num == "1" else right_img_rect
+    draw.text((winner_rect[0] + winner_rect[2]//2, photo_y + photo_height + 15),
+              WINNER_LABEL, fill=accent, font=font_winner, anchor="mm")
 
-    # Текст под фото
-    for side, photo_x, photo_data_key in [(1, left_photo_x, "photo1"), (2, right_photo_x, "photo2")]:
+    # Информация под каждым фото
+    for side, photo_rect, photo_data_key in [(1, left_img_rect, "photo1"), (2, right_img_rect, "photo2")]:
         pd = data[photo_data_key]
         psl = pd.get("psl", "N/A")
         tier = pd.get("tier", "N/A")
         gender = pd.get("gender", "N/A")
         factors = pd.get("factors", {})
 
-        info_y = photo_y + photo_height + 50
+        # Определяем выравнивание
         if side == 1:
-            # Левое фото: выравнивание по левому краю
-            text_x = photo_x + 20
-            bar_x = photo_x + 20
-            bar_w = photo_width - 40
-            # Тексты рисуем с левого края
-            draw.text((text_x, info_y), f"PSL: {psl}", fill=text_primary, font=font_psl)
-            draw.text((text_x, info_y + 45), f"{tier} · {gender}", fill=accent, font=font_sub)
-            # Шкала PSL
-            psl_val = float(psl) if isinstance(psl, str) and psl.replace('.', '').isdigit() else 1.0
-            psl_val = max(1.0, min(8.0, psl_val))
-            bar_y = info_y + 80
-            draw.rounded_rectangle((bar_x, bar_y, bar_x + bar_w, bar_y + 12), radius=6, fill=scale_bg)
-            fill_w = int((psl_val - 1) / 7 * bar_w)
-            if fill_w > 0:
-                draw.rounded_rectangle((bar_x, bar_y, bar_x + fill_w, bar_y + 12), radius=6, fill=get_tier_color(tier))
-            # Факторы
-            factor_y_start = bar_y + 20
-            factor_line_height = 24
-            for i, (factor_key, label) in enumerate(FACTOR_LABELS.items()):
-                if factor_key in factors:
-                    val = factors[factor_key]
-                    if isinstance(val, (int, float)):
-                        val = str(val)
-                    draw.text((text_x, factor_y_start + i * factor_line_height),
-                              f"{label}: {val}", fill=text_secondary, font=font_factor)
+            align = "left"
+            text_anchor = "ls"
+            bar_x = photo_rect[0]  # левый край фото
         else:
-            # Правое фото: выравнивание по правому краю canvas (или фото)
-            text_x = right_photo_x + photo_width - 20
-            bar_x = right_photo_x + photo_width - 20 - (photo_width - 40)
-            bar_w = photo_width - 40
-            # Тексты рисуем с правого края (anchor="ra")
-            draw.text((text_x, info_y), f"PSL: {psl}", fill=text_primary, font=font_psl, anchor="ra")
-            draw.text((text_x, info_y + 45), f"{tier} · {gender}", fill=accent, font=font_sub, anchor="ra")
-            # Шкала PSL
-            psl_val = float(psl) if isinstance(psl, str) and psl.replace('.', '').isdigit() else 1.0
-            psl_val = max(1.0, min(8.0, psl_val))
-            bar_y = info_y + 80
-            draw.rounded_rectangle((bar_x, bar_y, bar_x + bar_w, bar_y + 12), radius=6, fill=scale_bg)
+            align = "right"
+            text_anchor = "rs"
+            bar_x = photo_rect[0] + photo_rect[2]  # правый край фото
+            # Для правого выравнивания текст будет рисоваться с якорем "rs" (right, baseline)
+            # Но для удобства мы будем рисовать текст с правого края, поэтому x будет правым краем
+
+        # Y после фото
+        info_y = photo_y + photo_height + 50
+
+        # PSL значение
+        draw.text((bar_x, info_y), f"PSL: {psl}", fill=text_primary, font=font_psl_num, anchor=text_anchor)
+        # Тир и пол
+        draw.text((bar_x, info_y + 50), f"{tier} · {gender}", fill=accent, font=font_sub, anchor=text_anchor)
+
+        # Шкала PSL (как в оригинале, с делениями)
+        psl_val = float(psl) if isinstance(psl, str) and psl.replace('.', '').isdigit() else 1.0
+        psl_val = max(1.0, min(8.0, psl_val))
+        bar_w = photo_rect[2]  # ширина фото
+        bar_y = info_y + 95
+        bar_h = 20
+        if side == 1:
+            draw.rounded_rectangle((bar_x, bar_y, bar_x + bar_w, bar_y + bar_h), radius=10, fill=scale_bg)
             fill_w = int((psl_val - 1) / 7 * bar_w)
             if fill_w > 0:
-                draw.rounded_rectangle((bar_x, bar_y, bar_x + fill_w, bar_y + 12), radius=6, fill=get_tier_color(tier))
-            # Факторы (выравнивание по правому краю)
-            factor_y_start = bar_y + 20
-            factor_line_height = 24
-            for i, (factor_key, label) in enumerate(FACTOR_LABELS.items()):
-                if factor_key in factors:
-                    val = factors[factor_key]
-                    if isinstance(val, (int, float)):
-                        val = str(val)
-                    draw.text((text_x, factor_y_start + i * factor_line_height),
-                              f"{label}: {val}", fill=text_secondary, font=font_factor, anchor="ra")
+                draw.rounded_rectangle((bar_x, bar_y, bar_x + fill_w, bar_y + bar_h), radius=10, fill=get_tier_color(tier))
+            # Деления и цифры
+            for i in range(1, 9):
+                x = bar_x + (i - 1) / 7 * bar_w
+                draw.line([(x, bar_y - 6), (x, bar_y)], fill=text_tertiary, width=1)
+                num_str = str(i)
+                bbox = draw.textbbox((0, 0), num_str, font=font_scale)
+                tw = bbox[2] - bbox[0]
+                draw.text((x - tw / 2, bar_y - 24), num_str, fill=text_secondary, font=font_scale)
+        else:
+            # Для правого: рисуем шкалу справа налево
+            draw.rounded_rectangle((bar_x - bar_w, bar_y, bar_x, bar_y + bar_h), radius=10, fill=scale_bg)
+            fill_w = int((psl_val - 1) / 7 * bar_w)
+            if fill_w > 0:
+                draw.rounded_rectangle((bar_x - fill_w, bar_y, bar_x, bar_y + bar_h), radius=10, fill=get_tier_color(tier))
+            for i in range(1, 9):
+                x = bar_x - (i - 1) / 7 * bar_w
+                draw.line([(x, bar_y - 6), (x, bar_y)], fill=text_tertiary, width=1)
+                num_str = str(i)
+                bbox = draw.textbbox((0, 0), num_str, font=font_scale)
+                tw = bbox[2] - bbox[0]
+                draw.text((x - tw / 2, bar_y - 24), num_str, fill=text_secondary, font=font_scale)
+
+        # Оценки факторов
+        factor_y_start = bar_y + bar_h + 25
+        factor_line_height = 28
+        for i, (factor_key, label) in enumerate(FACTOR_LABELS.items()):
+            if factor_key in factors:
+                val = factors[factor_key]
+                if isinstance(val, (int, float)):
+                    val = str(val)
+                if side == 1:
+                    draw.text((bar_x, factor_y_start + i * factor_line_height),
+                              f"{label}: {val}", fill=text_secondary, font=font_text, anchor="ls")
+                else:
+                    draw.text((bar_x, factor_y_start + i * factor_line_height),
+                              f"{label}: {val}", fill=text_secondary, font=font_text, anchor="rs")
 
     output = BytesIO()
     image.save(output, format="PNG")
@@ -1535,7 +1568,6 @@ async def handle_tg_photo(message: telebot.types.Message) -> None:
             await tg_bot.reply_to(message, "Для баттла нужно два фото. Отправьте их в одном сообщении (альбомом).")
         return
 
-    # Если фото без подписи, но это часть баттл-группы
     if message.media_group_id and message.media_group_id in battle_photos:
         photo = message.photo[-1]
         image_bytes = await get_tg_image_bytes(tg_bot, photo.file_id)
