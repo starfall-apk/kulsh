@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.22.0 (battle infographic fully redesigned to match PSL style)
+# Kulsh GPT | v2.23.0 (fixed Telegram markdown, photo collection, battle infographic overlap)
 # by (main author):
 #     starfall-apk
 # coauthor & bot hosting:
@@ -804,12 +804,10 @@ async def create_battle_infographic(photo1_bytes: bytes, photo2_bytes: bytes, da
         mogged_text_color = "#E53E3E"
 
     canvas_w = 1300
-    # Высота рассчитана: заголовок (70) + фото (500) + промежуток + информация + факторы
-    canvas_h = 1100
+    canvas_h = 1300  # Увеличили высоту для запаса
     image = Image.new("RGBA", (canvas_w, canvas_h), bg_color)
     draw = ImageDraw.Draw(image)
 
-    # Шрифты (аналогично обычной инфографике)
     font_title = load_font(34)
     font_psl_num = load_font(56)
     font_sub = load_font(24)
@@ -820,11 +818,9 @@ async def create_battle_infographic(photo1_bytes: bytes, photo2_bytes: bytes, da
     font_winner = load_font(30)
     font_mogged = load_font(48)
 
-    # Заголовок
     draw.text((canvas_w//2, 25), TITLE, fill=text_tertiary, font=font_title, anchor="mm")
     draw.line([(40, 70), (canvas_w - 40, 70)], fill=line_color, width=1)
 
-    # Параметры колонок
     col_width = 550
     left_x = 50
     right_x = canvas_w - 50 - col_width
@@ -832,11 +828,9 @@ async def create_battle_infographic(photo1_bytes: bytes, photo2_bytes: bytes, da
     photo_width = col_width
     photo_height = 500
 
-    # Функция для скругления фото
-    def paste_rounded_photo(img_bytes, x, y, w, h, radius=20):
+    def paste_rounded_photo(img_bytes, x, y, w, h, radius=28):
         img = Image.open(BytesIO(img_bytes)).convert("RGBA")
         img.thumbnail((w, h), Image.Resampling.LANCZOS)
-        # Центрируем внутри области
         img_x = x + (w - img.width) // 2
         img_y = y + (h - img.height) // 2
         mask = Image.new("L", img.size, 0)
@@ -847,16 +841,14 @@ async def create_battle_infographic(photo1_bytes: bytes, photo2_bytes: bytes, da
         image.paste(rounded_img, (img_x, img_y), rounded_img)
         return img_x, img_y, img.width, img.height
 
-    # Вставляем фото
     left_img_rect = paste_rounded_photo(photo1_bytes, left_x, photo_y, photo_width, photo_height)
     right_img_rect = paste_rounded_photo(photo2_bytes, right_x, photo_y, photo_width, photo_height)
 
     winner_num = data.get("winner", "1")
     loser_num = "2" if winner_num == "1" else "1"
 
-    # Накладываем полосу на проигравшего
+    # Полоса на проигравшем
     loser_rect = left_img_rect if loser_num == "1" else right_img_rect
-    # Полоса горизонтальная по центру фото
     strip_height = 80
     strip_y = loser_rect[1] + (loser_rect[3] - strip_height) // 2
     overlay = Image.new("RGBA", (loser_rect[2], strip_height), mogged_color)
@@ -864,12 +856,15 @@ async def create_battle_infographic(photo1_bytes: bytes, photo2_bytes: bytes, da
     draw.text((loser_rect[0] + loser_rect[2]//2, strip_y + strip_height//2),
               MOGGED_TEXT, fill=mogged_text_color, font=font_mogged, anchor="mm")
 
-    # Подпись победителя
+    # Подпись победителя (увеличиваем отступ от фото)
     winner_rect = left_img_rect if winner_num == "1" else right_img_rect
-    draw.text((winner_rect[0] + winner_rect[2]//2, photo_y + photo_height + 15),
+    winner_y = photo_y + photo_height + 30  # Было 15, увеличили
+    draw.text((winner_rect[0] + winner_rect[2]//2, winner_y),
               WINNER_LABEL, fill=accent, font=font_winner, anchor="mm")
 
-    # Информация под каждым фото
+    # Информация под каждым фото (стартует ниже)
+    info_y = winner_y + 70  # Было photo_y + photo_height + 50, теперь ниже
+
     for side, photo_rect, photo_data_key in [(1, left_img_rect, "photo1"), (2, right_img_rect, "photo2")]:
         pd = data[photo_data_key]
         psl = pd.get("psl", "N/A")
@@ -877,30 +872,24 @@ async def create_battle_infographic(photo1_bytes: bytes, photo2_bytes: bytes, da
         gender = pd.get("gender", "N/A")
         factors = pd.get("factors", {})
 
-        # Определяем выравнивание
         if side == 1:
             align = "left"
             text_anchor = "ls"
-            bar_x = photo_rect[0]  # левый край фото
+            bar_x = photo_rect[0]
         else:
             align = "right"
             text_anchor = "rs"
-            bar_x = photo_rect[0] + photo_rect[2]  # правый край фото
-            # Для правого выравнивания текст будет рисоваться с якорем "rs" (right, baseline)
-            # Но для удобства мы будем рисовать текст с правого края, поэтому x будет правым краем
-
-        # Y после фото
-        info_y = photo_y + photo_height + 50
+            bar_x = photo_rect[0] + photo_rect[2]
 
         # PSL значение
         draw.text((bar_x, info_y), f"PSL: {psl}", fill=text_primary, font=font_psl_num, anchor=text_anchor)
         # Тир и пол
         draw.text((bar_x, info_y + 50), f"{tier} · {gender}", fill=accent, font=font_sub, anchor=text_anchor)
 
-        # Шкала PSL (как в оригинале, с делениями)
+        # Шкала PSL
         psl_val = float(psl) if isinstance(psl, str) and psl.replace('.', '').isdigit() else 1.0
         psl_val = max(1.0, min(8.0, psl_val))
-        bar_w = photo_rect[2]  # ширина фото
+        bar_w = photo_rect[2]
         bar_y = info_y + 95
         bar_h = 20
         if side == 1:
@@ -908,7 +897,6 @@ async def create_battle_infographic(photo1_bytes: bytes, photo2_bytes: bytes, da
             fill_w = int((psl_val - 1) / 7 * bar_w)
             if fill_w > 0:
                 draw.rounded_rectangle((bar_x, bar_y, bar_x + fill_w, bar_y + bar_h), radius=10, fill=get_tier_color(tier))
-            # Деления и цифры
             for i in range(1, 9):
                 x = bar_x + (i - 1) / 7 * bar_w
                 draw.line([(x, bar_y - 6), (x, bar_y)], fill=text_tertiary, width=1)
@@ -917,7 +905,6 @@ async def create_battle_infographic(photo1_bytes: bytes, photo2_bytes: bytes, da
                 tw = bbox[2] - bbox[0]
                 draw.text((x - tw / 2, bar_y - 24), num_str, fill=text_secondary, font=font_scale)
         else:
-            # Для правого: рисуем шкалу справа налево
             draw.rounded_rectangle((bar_x - bar_w, bar_y, bar_x, bar_y + bar_h), radius=10, fill=scale_bg)
             fill_w = int((psl_val - 1) / 7 * bar_w)
             if fill_w > 0:
@@ -1394,7 +1381,7 @@ async def handle_tg_text(message: telebot.types.Message) -> None:
                    f"Кастомный промпт: {prompt}\n"
                    f"Для изменения: `кульш конфиг <параметр> <значение>`\n"
                    f"Доступные параметры: серия, стикеры, промпт, сброс_памяти, автоответ, рандом")
-            await tg_bot.reply_to(message, msg)
+            await tg_bot.reply_to(message, msg, parse_mode='HTML')  # Исправлено
             return
         if len(parts) >= 3:
             param = parts[2].lower()
@@ -1468,7 +1455,7 @@ async def handle_tg_text(message: telebot.types.Message) -> None:
         lines = ["🏆 **Топ донатеров:**"]
         for i, (name, total) in enumerate(top, 1):
             lines.append(f"{i}. {name} — {total} очков")
-        await tg_bot.reply_to(message, "\n".join(lines))
+        await tg_bot.reply_to(message, "\n".join(lines), parse_mode='HTML')  # Исправлено
         return
 
     if text.lower().startswith("кульш настройки"):
@@ -1509,11 +1496,11 @@ async def handle_tg_text(message: telebot.types.Message) -> None:
             lang_display = "Русский" if current_lang == "ru" else "English"
             current_theme = get_user_theme("tg", message.chat.id)
             theme_display = "Тёмная" if current_theme == "dark" else "Светлая"
-            await tg_bot.reply_to(message,
-                f"⚙️ **Настройки**\n"
-                f"Язык инфографики: {lang_display}\n"
-                f"Тема: {theme_display}\n\n"
-                "Изменить: `кульш настройки язык ru/en`, `кульш настройки тема dark/light`")
+            msg = (f"⚙️ **Настройки**\n"
+                   f"Язык инфографики: {lang_display}\n"
+                   f"Тема: {theme_display}\n\n"
+                   "Изменить: `кульш настройки язык ru/en`, `кульш настройки тема dark/light`")
+            await tg_bot.reply_to(message, msg, parse_mode='HTML')  # Исправлено
         return
 
     if is_looksmaxxing_command(text):
@@ -1542,7 +1529,7 @@ async def handle_tg_text(message: telebot.types.Message) -> None:
             answer = await send_sticker_if_needed("tg", message, answer, chat_id)
             memory.append(f"{message.from_user.full_name}: {text}")
             memory.append(f"Кульш: {answer}")
-            await tg_bot.reply_to(message, answer)
+            await tg_bot.reply_to(message, answer, parse_mode='HTML')  # Используем HTML, если ответ содержит markdown
             asyncio.create_task(extract_memory(chat_id, f"{message.from_user.full_name}: {text}", answer))
     else:
         memory.append(f"{message.from_user.full_name}: {text}")
@@ -1558,6 +1545,7 @@ async def handle_tg_photo(message: telebot.types.Message) -> None:
             media_group_id = message.media_group_id
             if media_group_id not in battle_photos:
                 battle_photos[media_group_id] = []
+                # Запускаем задачу с ожиданием до 5 секунд
                 battle_media_groups[media_group_id] = asyncio.create_task(
                     process_battle_media_group(media_group_id, message.chat.id, memory)
                 )
@@ -1652,21 +1640,26 @@ async def handle_tg_photo(message: telebot.types.Message) -> None:
         answer = await send_sticker_if_needed("tg", message, answer, chat_id)
         memory.append(f"{message.from_user.full_name}: [изображение] {caption}")
         memory.append(f"Кульш: {answer}")
-        await tg_bot.reply_to(message, answer)
+        await tg_bot.reply_to(message, answer, parse_mode='HTML')
         asyncio.create_task(extract_memory(chat_id, f"{message.from_user.full_name}: [фото]", answer))
     except Exception as e:
         logger.info(f"Ошибка обработки фото в TG: {e}")
         await tg_bot.reply_to(message, "не вижу фотку, битая чтоли")
 
 async def process_battle_media_group(media_group_id, user_id, memory):
-    await asyncio.sleep(1.5)
-    if media_group_id not in battle_photos:
+    # Ожидаем до 5 секунд, пока не придёт 2 фото
+    for _ in range(10):
+        if media_group_id in battle_photos and len(battle_photos[media_group_id]) >= 2:
+            break
+        await asyncio.sleep(0.5)
+    if media_group_id not in battle_photos or len(battle_photos[media_group_id]) < 2:
+        if media_group_id in battle_photos:
+            battle_photos.pop(media_group_id, None)
+            battle_media_groups.pop(media_group_id, None)
+        await tg_bot.send_message(user_id, "Нужно два фото для баттла.")
         return
     photos = battle_photos.pop(media_group_id)
     battle_media_groups.pop(media_group_id, None)
-    if len(photos) < 2:
-        await tg_bot.send_message(user_id, "Нужно два фото для баттла.")
-        return
     photo1_bytes, photo2_bytes = photos[:2]
     lang = get_user_lang("tg", user_id)
     await tg_bot.send_chat_action(user_id, 'typing')
@@ -1689,7 +1682,7 @@ async def process_battle_media_group(media_group_id, user_id, memory):
     except Exception as e:
         logger.error(f"Ошибка отправки battle инфографики: {e}")
         await tg_bot.send_message(user_id, "Не удалось отправить инфографику.")
-    await tg_bot.send_message(user_id, report_text[:4096], parse_mode='HTML')
+    await tg_bot.send_message(user_id, markdown_like_to_telegram_html(report_text), parse_mode='HTML')
     await tg_bot.delete_message(user_id, status_msg.message_id)
     memory.append(f"Пользователь: [battle]")
     memory.append(f"Кульш: [battle результат]")
@@ -2126,19 +2119,19 @@ async def random_post_loop() -> None:
                 )
                 if answer and answer.strip() != "НЕТ":
                     try:
-                        await tg_bot.send_message(TG_TARGET_CHAT, answer)
+                        await tg_bot.send_message(TG_TARGET_CHAT, answer, parse_mode='HTML')
                     except Exception as e:
                         logger.info(f"Ошибка случайного ответа: {e}")
             else:
                 answer = await ask_ai_async(prompt=None, context_type="random")
                 try:
-                    await tg_bot.send_message(TG_TARGET_CHAT, answer)
+                    await tg_bot.send_message(TG_TARGET_CHAT, answer, parse_mode='HTML')
                 except Exception as e:
                     logger.info(f"Ошибка рандомного поста: {e}")
         else:
             answer = await ask_ai_async(prompt=None, context_type="random")
             try:
-                await tg_bot.send_message(TG_TARGET_CHAT, answer)
+                await tg_bot.send_message(TG_TARGET_CHAT, answer, parse_mode='HTML')
             except Exception as e:
                 logger.info(f"Ошибка рандомного поста: {e}")
 
