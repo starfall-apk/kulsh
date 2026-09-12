@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.24.0 (natural talk, user identity, HTML formatting, utilities)
+# Kulsh GPT | v2.25.0 (natural talk, user identity, HTML formatting, utilities, inline config)
 # by (main author):
 #     starfall-apk
 # coauthor & bot hosting:
@@ -29,7 +29,7 @@ from dotenv import load_dotenv
 from io import BytesIO
 from collections import deque, defaultdict
 from telebot.async_telebot import AsyncTeleBot
-from telebot.types import InputFile
+from telebot.types import InputFile, InlineKeyboardMarkup, InlineKeyboardButton
 
 # ============================================================
 # ЛОГГЕР
@@ -90,6 +90,8 @@ DS_SERIES_CHANNEL_ID = 1403828467014832270
 DS_SERIES_TARGET_USER_ID = 1364588699589021890
 
 MODEL_LIST = [
+    "gemini-3.8-flash",
+    "gemini-3.7-flash",
     "gemini-3.5-flash",
     "gemini-3.5-flash-lite",
     "gemini-2.5-flash",
@@ -132,17 +134,15 @@ except ImportError:
 # ============================================================
 # ГЛОБАЛЬНЫЕ СТРУКТУРЫ
 # ============================================================
-# Память чатов: deque словарей
 chat_memories: dict[str, deque[dict[str, Any]]] = {}
 voice_text_channels: dict[int, Any] = {}
 donations_data: dict[str, Any] = {}
 user_settings: defaultdict[str, dict[str, Any]] = defaultdict(dict)
 
-# История медиа в чате
 chat_media_history: dict[str, deque[dict[str, Any]]] = defaultdict(lambda: deque(maxlen=50))
 
-# Кулдаун для случайных ответов (chat_id -> timestamp)
 last_random_reply: dict[str, float] = {}
+last_old_reply: dict[str, float] = {}
 
 DONATIONS_FILE = 'donations.json'
 
@@ -182,7 +182,6 @@ def get_top_donators(top_n: int = 10) -> list[tuple[str, int]]:
 
 load_donations()
 
-# Долговременная память
 MEMORY_FILE = 'long_term_memory.json'
 
 def load_long_term_memory() -> dict:
@@ -200,7 +199,6 @@ def save_long_term_memory(data: dict) -> None:
 
 long_term_memory = load_long_term_memory()
 
-# Конфиг чатов
 DEFAULT_CHAT_CONFIG = {
     "series_reminder_enabled": True,
     "stickers_enabled": True,
@@ -289,27 +287,19 @@ def add_media_tag_to_last_memory(chat_id: str, tag: str) -> None:
 # ХЕЛПЕРЫ
 # ============================================================
 def markdown_like_to_telegram_html(text: str) -> str:
-    """Экранирует HTML и превращает markdown-подобную разметку в HTML теги Telegram."""
     if text is None:
         return ""
-    # Сначала экранируем HTML-спецсимволы
     text = html.escape(text, quote=False)
-    # Блок кода (```...```)
     text = re.sub(r'```([\s\S]*?)```', lambda m: '<pre>' + m.group(1) + '</pre>', text)
-    # Inline код
     text = re.sub(r'`([^`\n]+?)`', r'<code>\1</code>', text)
-    # Жирный
     text = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text, flags=re.DOTALL)
     text = re.sub(r'__(.+?)__', r'<b>\1</b>', text, flags=re.DOTALL)
-    # Курсив (одиночные * или _)
     text = re.sub(r'(?<!\*)\*(?!\*)([^*\n]+?)(?<!\*)\*(?!\*)', r'<i>\1</i>', text)
     text = re.sub(r'(?<!_)_(?!_)([^_\n]+?)(?<!_)_(?!_)', r'<i>\1</i>', text)
-    # Зачёркнутый
     text = re.sub(r'~~(.+?)~~', r'<s>\1</s>', text, flags=re.DOTALL)
     return text
 
 async def send_tg_html(chat_id: int, text: str, reply_to: int | None = None) -> None:
-    """Отправляет текст в TG с HTML-разметкой, разбивая при необходимости по 4096."""
     html_text = markdown_like_to_telegram_html(text)
     chunks = [html_text[i:i+4000] for i in range(0, max(len(html_text), 1), 4000)]
     for i, chunk in enumerate(chunks):
@@ -347,7 +337,6 @@ def image_bytes_to_base64(image_bytes: bytes, mime_type: str = "image/jpeg") -> 
     return encoded, mime_type
 
 async def extract_video_frame(video_bytes: bytes, ext_hint: str = ".mp4") -> bytes | None:
-    """Извлекает первый кадр видео через ffmpeg. Возвращает JPEG или None."""
     path = None
     out_path = None
     try:
@@ -375,6 +364,71 @@ async def extract_video_frame(video_bytes: bytes, ext_hint: str = ".mp4") -> byt
                     os.unlink(p)
                 except Exception:
                     pass
+
+# ============================================================
+# УТИЛИТЫ-МАРКЕРЫ (обрабатывают !avatar, !recall_media, !sticker, !gif, !separate)
+# ============================================================
+UTILITY_PATTERNS = {
+    "avatar": re.compile(r'!\s*avatar\b', re.IGNORECASE),
+    "recall_media": re.compile(r'!\s*recall_?media\b', re.IGNORECASE),
+    "sticker": re.compile(r'!\s*sticker\b', re.IGNORECASE),
+    "gif": re.compile(r'!\s*gif\b', re.IGNORECASE),
+}
+
+SEPARATOR_PATTERN = re.compile(r'!\s*separate\b', re.IGNORECASE)
+
+def split_by_separator(text: str) -> list[str]:
+    if not text:
+        return []
+    parts = SEPARATOR_PATTERN.split(text)
+    return [p.strip() for p in parts if p and p.strip()]
+
+def extract_utility_markers(text: str) -> tuple[str, list[str]]:
+    """Возвращает (очищенный_текст, список_маркеров_без_separate)."""
+    text = text or ""
+    markers: list[str] = []
+    for name, pat in UTILITY_PATTERNS.items():
+        if pat.search(text):
+            markers.append(name)
+        text = pat.sub('', text)
+    # чистим двойные пробелы / висящую пунктуацию
+    text = re.sub(r'[ \t]+', ' ', text)
+    text = re.sub(r' +([,.!?;:])', r'\1', text)
+    text = re.sub(r'\n{3,}', '\n\n', text).strip()
+    return text, markers
+
+async def execute_utility_tg(message: telebot.types.Message, marker: str, chat_id: str) -> None:
+    config = get_chat_config(chat_id)
+    if marker in ("sticker", "gif"):
+        if not config.get("stickers_enabled", True):
+            return
+    if marker == "avatar":
+        await tg_handle_avatar(message, chat_id)
+    elif marker == "recall_media":
+        await tg_handle_recall_media(message, chat_id, [])
+    elif marker == "sticker":
+        try:
+            sticker = random.choice(STICKER_POOL)
+            await tg_bot.send_sticker(message.chat.id, sticker)
+        except Exception as e:
+            logger.error(f"sticker error: {e}")
+
+async def execute_utility_ds(message: discord.Message, marker: str, chat_id: str) -> None:
+    config = get_chat_config(chat_id)
+    if marker in ("sticker", "gif"):
+        if not config.get("stickers_enabled", True):
+            return
+    if marker == "avatar":
+        await ds_handle_avatar(message, chat_id)
+    elif marker == "recall_media":
+        await ds_handle_recall_media(message, chat_id, [])
+    elif marker in ("sticker", "gif"):
+        try:
+            gif_url = random.choice(GIF_POOL)
+            embed = discord.Embed().set_image(url=gif_url)
+            await message.reply(embed=embed)
+        except Exception as e:
+            logger.error(f"gif error: {e}")
 
 # ============================================================
 # ОСНОВНОЙ ЗАПРОС К AI
@@ -413,9 +467,18 @@ async def ask_ai_async(
             "пользователи, НЕ путай их. Если видишь имя, которого нет в списке твоих кентов — не приписывай его к кентам, "
             "обращайся по этому имени. Не выдумывай, кто это. Если пользователь представился — запомни это имя и "
             "используй его дальше. Если по контексту непонятно, кто говорит — не догадывайся вслепую, спроси или "
-            "обращайся нейтрально.\n\n"
-            "Ты можешь отправлять стикеры в Telegram и гифки в Discord. Для этого в самом конце ответа добавь !sticker "
-            "или !gif. Не делай это слишком часто, только когда уместно и смешно.\n\n"
+            "обращайся нейтрально. Отвечай ТОЛЬКО последнему написавшему, не путай его с предыдущими собеседниками."
+            "\n\n"
+            "УТИЛИТЫ. В самом конце ответа (в крайнем случае — в начале) ты можешь поставить служебные маркеры "
+            "(они будут скрыты из текста и сработают как команда), пиши их строго слитно, без пробелов и без точки "
+            "перед ними:\n"
+            "• !avatar — посмотреть аватарку собеседника (можно сначала написать что-то вроде 'щас гляну');\n"
+            "• !recall_media — вспомнить последние медиа в чате;\n"
+            "• !sticker — отправить стикер в Telegram (или гифку в Discord);\n"
+            "• !gif — то же самое, только гифка (в Discord);\n"
+            "• !separate — если хочешь разделить ответ на несколько отдельных сообщений. Пример: 'ага, понял!separateа вот ещё что...'\n"
+            "Не пиши эти маркеры просто так. Только когда реально хочешь вызвать утилиту. "
+            "Никогда не пиши '! avatar' с пробелом, никогда не пиши точки внутри маркера.\n\n"
             "Если хочешь посмотреть аватарку собеседника, можешь написать !avatar — это вызовет утилиту в боте. "
             "Если хочешь вспомнить последние медиа в чате — можешь написать !recall_media."
         )
@@ -562,33 +625,6 @@ GIF_POOL = [
     "https://cdn.discordapp.com/attachments/1494583947664035913/1535766838070345829/freedom_20260808214842.gif?ex=6a78f5d3&is=6a77a453&hm=f3fb764b962e4a852ba51a98185a24d0c5dce94293efa6d4b316441dde6db059&",
     "https://cdn.discordapp.com/attachments/1494583947664035913/1535766837772427294/octopus_20260808214849.gif?ex=6a78f5d3&is=6a77a453&hm=28bfd8cbe5746dd2b0961c2c07ab73ed99efbc1261f12347df48dfe63acea776&"
 ]
-
-async def send_sticker_if_needed(platform: str, target, answer: str, chat_id: str) -> str:
-    config = get_chat_config(chat_id)
-    if not config.get("stickers_enabled", True):
-        # Убираем маркеры, чтобы не отправлялись
-        answer = answer.replace("!sticker", "").replace("!gif", "").strip()
-        return answer
-
-    if platform == "tg" and "!sticker" in answer:
-        try:
-            sticker = random.choice(STICKER_POOL)
-            await tg_bot.send_sticker(target.chat.id, sticker)
-        except Exception as e:
-            logger.error(f"Не удалось отправить стикер: {e}")
-        return answer.replace("!sticker", "").strip()
-
-    elif platform == "ds" and ("!sticker" in answer or "!gif" in answer):
-        try:
-            gif_url = random.choice(GIF_POOL)
-            embed = discord.Embed().set_image(url=gif_url)
-            await target.reply(embed=embed)
-        except Exception as e:
-            logger.error(f"Не удалось отправить гифку: {e}")
-        answer = answer.replace("!sticker", "").replace("!gif", "").strip()
-        return answer
-
-    return answer
 
 # ============================================================
 # LOOKSMAXXING
@@ -1240,12 +1276,126 @@ battle_media_groups = {}
 battle_photos = {}
 
 # ============================================================
+# ИНЛАЙН-КНОПКИ КОНФИГА
+# ============================================================
+def build_config_keyboard(chat_id: str) -> InlineKeyboardMarkup:
+    config = get_chat_config(chat_id)
+    kb = InlineKeyboardMarkup()
+    kb.row(
+        InlineKeyboardButton(f"Серия: {'✅' if config['series_reminder_enabled'] else '❌'}", callback_data="cfg:series"),
+        InlineKeyboardButton(f"Стикеры: {'✅' if config['stickers_enabled'] else '❌'}", callback_data="cfg:stickers"),
+    )
+    kb.row(
+        InlineKeyboardButton(f"Автоответ: {'✅' if config['random_reply_enabled'] else '❌'}", callback_data="cfg:autoreply"),
+        InlineKeyboardButton(f"Рандом: {'✅' if config['random_messages_enabled'] else '❌'}", callback_data="cfg:random"),
+    )
+    kb.row(InlineKeyboardButton("🧹 Сбросить память", callback_data="cfg:reset_memory"))
+    kb.row(InlineKeyboardButton("♻️ Сбросить промпт", callback_data="cfg:reset_prompt"))
+    return kb
+
+def _config_text(chat_id: str) -> str:
+    config = get_chat_config(chat_id)
+    prompt_safe = html.escape(config["custom_prompt"] or "стандартный")
+    return (
+        f"⚙️ <b>Конфигурация чата</b>\n"
+        f"Авто-серия (DS): {'вкл' if config['series_reminder_enabled'] else 'выкл'}\n"
+        f"Стикеры/гифки: {'вкл' if config['stickers_enabled'] else 'выкл'}\n"
+        f"Случайные ответы: {'вкл' if config['random_reply_enabled'] else 'выкл'}\n"
+        f"Случайные сообщения: {'вкл' if config['random_messages_enabled'] else 'выкл'}\n"
+        f"Кастомный промпт: {prompt_safe}"
+    )
+
+async def _can_manage_tg_config(message: telebot.types.Message) -> bool:
+    if message.chat.type == 'private':
+        return True
+    try:
+        member = await tg_bot.get_chat_member(message.chat.id, message.from_user.id)
+        return member.status in ('administrator', 'creator')
+    except Exception:
+        return False
+
+@tg_bot.callback_query_handler(func=lambda call: call.data.startswith("cfg:"))
+async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
+    chat_id = f"tg_{call.message.chat.id}"
+    config = get_chat_config(chat_id)
+    if call.message.chat.type != 'private':
+        try:
+            member = await tg_bot.get_chat_member(call.message.chat.id, call.from_user.id)
+            if member.status not in ('administrator', 'creator'):
+                await tg_bot.answer_callback_query(call.id, "Только админы могут менять настройки")
+                return
+        except Exception:
+            await tg_bot.answer_callback_query(call.id, "Не могу проверить права")
+            return
+
+    action = call.data.split(":", 1)[1]
+    toast = "Обновлено"
+    if action == "series":
+        config["series_reminder_enabled"] = not config["series_reminder_enabled"]
+    elif action == "stickers":
+        config["stickers_enabled"] = not config["stickers_enabled"]
+    elif action == "autoreply":
+        config["random_reply_enabled"] = not config["random_reply_enabled"]
+    elif action == "random":
+        config["random_messages_enabled"] = not config["random_messages_enabled"]
+    elif action == "reset_prompt":
+        config["custom_prompt"] = None
+        toast = "Промпт сброшен"
+    elif action == "reset_memory":
+        if chat_id in long_term_memory:
+            del long_term_memory[chat_id]
+            save_long_term_memory(long_term_memory)
+        chat_memories[chat_id] = deque(maxlen=20)
+        chat_media_history[chat_id].clear()
+        last_random_reply.pop(chat_id, None)
+        last_old_reply.pop(chat_id, None)
+        toast = "Память сброшена"
+
+    try:
+        await tg_bot.edit_message_text(
+            _config_text(chat_id),
+            call.message.chat.id,
+            call.message.message_id,
+            parse_mode='HTML',
+            reply_markup=build_config_keyboard(chat_id)
+        )
+    except Exception as e:
+        logger.warning(f"edit config msg fail: {e}")
+    await tg_bot.answer_callback_query(call.id, toast)
+
+# ============================================================
 # ТЕЛЕГРАМ: ОБРАБОТЧИКИ
 # ============================================================
+HELP_TEXT = (
+    "🍷🗿 <b>Команды Кульша:</b>\n\n"
+    "<b>Общие:</b>\n"
+    "/start — приветствие\n"
+    "/help — эта справка\n"
+    "/donate — поддержать проект\n\n"
+    "<b>Конфиг и настройки:</b>\n"
+    "<code>кульш конфиг</code> — настройки чата (инлайн-кнопки)\n"
+    "<code>кульш настройки</code> — личные настройки (язык, тема)\n"
+    "<code>кульш настройки язык ru|en</code>\n"
+    "<code>кульш настройки тема dark|light</code>\n\n"
+    "<b>Утилиты:</b>\n"
+    "<code>кульш аватарка</code> — посмотреть аватарку\n"
+    "<code>кульш вспомни медиа [N]</code> — вспомнить последние N медиа\n"
+    "<code>кульш логи</code> — логи (для админов)\n\n"
+    "<b>Развлечения:</b>\n"
+    "<code>кульш psl</code> — looksmaxxing анализ фото\n"
+    "<code>кульш psl совет</code> — анализ + рекомендации\n"
+    "<code>кульш battle</code> — баттл двух фото (альбомом)\n"
+    "<code>кульш донаты</code> — топ донатеров"
+)
+
 @tg_bot.message_handler(commands=['start'])
 async def handle_start(message: telebot.types.Message) -> None:
     args = telebot.util.extract_arguments(message.text)
     if not args:
+        await reply_tg_html(
+            message,
+            "🍷🗿 Кульш на связи. Напиши 'кульш' или обратись ко мне, и я отвечу. /help — список команд."
+        )
         return
     if args.startswith('donate_stars_'):
         try:
@@ -1265,6 +1415,17 @@ async def handle_start(message: telebot.types.Message) -> None:
         )
         logger.info(f"Выставлен счёт на {stars} звёзд для пользователя {message.chat.id}")
 
+@tg_bot.message_handler(commands=['help'])
+async def handle_help(message: telebot.types.Message) -> None:
+    try:
+        await tg_bot.send_message(message.chat.id, HELP_TEXT, parse_mode='HTML', reply_to_message_id=message.message_id)
+    except Exception:
+        await tg_bot.send_message(message.chat.id, re.sub(r'<[^>]+>', '', HELP_TEXT), reply_to_message_id=message.message_id)
+
+@tg_bot.message_handler(commands=['donate'])
+async def handle_donate(message: telebot.types.Message) -> None:
+    await reply_tg_html(message, "Поддержать Кульша: https://kulsh-ai.web.app/donate.html 🍷🗿")
+
 @tg_bot.pre_checkout_query_handler(func=lambda query: True)
 async def handle_pre_checkout(pre_checkout: telebot.types.PreCheckoutQuery) -> None:
     await tg_bot.answer_pre_checkout_query(pre_checkout.id, ok=True)
@@ -1282,78 +1443,21 @@ async def handle_successful_payment(message: telebot.types.Message) -> None:
 
 # -------- Хелперы для команд в TG --------
 async def tg_handle_config(message: telebot.types.Message, chat_id: str, parts: list[str]) -> None:
-    config = get_chat_config(chat_id)
-    if len(parts) == 2:
-        series = "вкл" if config["series_reminder_enabled"] else "выкл"
-        stickers = "вкл" if config["stickers_enabled"] else "выкл"
-        prompt_safe = html.escape(config["custom_prompt"] or "стандартный")
-        random_reply = "вкл" if config["random_reply_enabled"] else "выкл"
-        random_messages = "вкл" if config["random_messages_enabled"] else "выкл"
-        msg = (
-            f"⚙️ <b>Конфигурация чата</b>\n"
-            f"Авто-серия (DS): {series}\n"
-            f"Стикеры/гифки: {stickers}\n"
-            f"Случайные ответы (автоответ): {random_reply}\n"
-            f"Случайные сообщения (рандом): {random_messages}\n"
-            f"Кастомный промпт: {prompt_safe}\n"
-            f"Для изменения: <code>кульш конфиг &lt;параметр&gt; &lt;значение&gt;</code>\n"
-            f"Доступные параметры: серия, стикеры, промпт, сброс_памяти, автоответ, рандом"
+    if not await _can_manage_tg_config(message):
+        await reply_tg_html(message, "только админы могут менять конфиг")
+        return
+    kb = build_config_keyboard(chat_id)
+    try:
+        await tg_bot.send_message(
+            message.chat.id,
+            _config_text(chat_id),
+            parse_mode='HTML',
+            reply_to_message_id=message.message_id,
+            reply_markup=kb
         )
-        try:
-            await tg_bot.send_message(message.chat.id, msg, parse_mode='HTML', reply_to_message_id=message.message_id)
-        except Exception as e:
-            logger.warning(f"Config send failed: {e}")
-            await tg_bot.send_message(message.chat.id, re.sub(r'<[^>]+>', '', msg))
-        return
-
-    if len(parts) >= 3:
-        param = parts[2].lower()
-        val = parts[3].lower() if len(parts) >= 4 else ""
-        if param == "серия":
-            if val in ("вкл", "on", "1"):
-                config["series_reminder_enabled"] = True; await reply_tg_html(message, "Авто-серия включена")
-            elif val in ("выкл", "off", "0"):
-                config["series_reminder_enabled"] = False; await reply_tg_html(message, "Авто-серия выключена")
-            else:
-                await reply_tg_html(message, "Укажите: вкл/выкл")
-        elif param == "стикеры":
-            if val in ("вкл", "on", "1"):
-                config["stickers_enabled"] = True; await reply_tg_html(message, "Стикеры разрешены")
-            elif val in ("выкл", "off", "0"):
-                config["stickers_enabled"] = False; await reply_tg_html(message, "Стикеры запрещены")
-            else:
-                await reply_tg_html(message, "Укажите: вкл/выкл")
-        elif param == "автоответ":
-            if val in ("вкл", "on", "1"):
-                config["random_reply_enabled"] = True; await reply_tg_html(message, "Случайные ответы включены")
-            elif val in ("выкл", "off", "0"):
-                config["random_reply_enabled"] = False; await reply_tg_html(message, "Случайные ответы выключены")
-            else:
-                await reply_tg_html(message, "Укажите: вкл/выкл")
-        elif param == "рандом":
-            if val in ("вкл", "on", "1"):
-                config["random_messages_enabled"] = True; await reply_tg_html(message, "Рандом включён")
-            elif val in ("выкл", "off", "0"):
-                config["random_messages_enabled"] = False; await reply_tg_html(message, "Рандом выключен")
-            else:
-                await reply_tg_html(message, "Укажите: вкл/выкл")
-        elif param == "промпт":
-            new_prompt = " ".join(parts[3:]).strip()
-            if new_prompt.lower() in ("сброс", "убрать", "стандарт"):
-                config["custom_prompt"] = None; await reply_tg_html(message, "Кастомный промпт сброшен")
-            elif new_prompt:
-                config["custom_prompt"] = new_prompt; await reply_tg_html(message, "Кастомный промпт установлен")
-            else:
-                await reply_tg_html(message, "Введите текст промпта или 'сброс'")
-        elif param == "сброс_памяти":
-            if chat_id in long_term_memory:
-                del long_term_memory[chat_id]; save_long_term_memory(long_term_memory)
-                await reply_tg_html(message, "Долговременная память чата очищена")
-            else:
-                await reply_tg_html(message, "Память и так пуста")
-        else:
-            await reply_tg_html(message, "Неизвестный параметр. Доступно: серия, стикеры, промпт, сброс_памяти, автоответ, рандом")
-        return
+    except Exception as e:
+        logger.warning(f"Config send failed: {e}")
+        await tg_bot.send_message(message.chat.id, re.sub(r'<[^>]+>', '', _config_text(chat_id)), reply_to_message_id=message.message_id)
 
 async def tg_handle_settings(message: telebot.types.Message, parts: list[str]) -> None:
     user_key = get_user_key("tg", message.chat.id)
@@ -1403,7 +1507,6 @@ async def tg_handle_avatar(message: telebot.types.Message, chat_id: str) -> None
     if message.reply_to_message and message.reply_to_message.from_user:
         target_user = message.reply_to_message.from_user
     else:
-        # берём первого упомянутого
         for ent in (message.entities or []):
             if ent.type == "text_mention" and ent.user:
                 target_user = ent.user
@@ -1417,15 +1520,23 @@ async def tg_handle_avatar(message: telebot.types.Message, chat_id: str) -> None
             file_id = photos.photos[0][-1].file_id
             name = target_user.full_name
             uname = f"@{target_user.username}" if target_user.username else "нет username"
-            # Скачиваем аватарку и описываем через AI
-            img_bytes = await get_tg_file_bytes(tg_bot, file_id)
-            desc = await ask_ai_async(
-                prompt=f"Опиши кратко (1-2 предложения) аватарку пользователя {name} ({uname}) в стиле Кульша. Без markdown.",
-                image_bytes=img_bytes, image_mime="image/jpeg", chat_id=chat_id
-            )
-            await tg_bot.send_photo(message.chat.id, file_id, caption=f"Аватарка {name} ({uname}):", reply_to_message_id=message.message_id)
-            if desc:
-                await send_tg_html(message.chat.id, desc)
+            try:
+                await tg_bot.send_photo(
+                    message.chat.id, file_id,
+                    caption=f"Аватарка {name} ({uname}):"
+                )
+            except Exception as e:
+                logger.warning(f"avatar photo send failed: {e}")
+            try:
+                img_bytes = await get_tg_file_bytes(tg_bot, file_id)
+                desc = await ask_ai_async(
+                    prompt=f"Опиши кратко (1-2 предложения) аватарку пользователя {name} ({uname}) в стиле Кульша. Без markdown.",
+                    image_bytes=img_bytes, image_mime="image/jpeg", chat_id=chat_id
+                )
+                if desc:
+                    await send_tg_html(message.chat.id, desc)
+            except Exception as e:
+                logger.warning(f"avatar desc failed: {e}")
         else:
             await reply_tg_html(message, "у него аватарки нет, пусто")
     except Exception as e:
@@ -1471,19 +1582,73 @@ async def tg_handle_recall_media(message: telebot.types.Message, chat_id: str, p
         await reply_tg_html(message, "не смог переотправить последние медиа")
 
 # -------- Основной обработчик текста TG --------
+async def send_tg_ai_response(message: telebot.types.Message, chat_id: str, answer_raw: str) -> None:
+    """Отправляет ответ ИИ, разделяя по !separate и исполняя утилиты."""
+    segments = split_by_separator(answer_raw or "") or [answer_raw or ""]
+    all_markers: list[str] = []
+    first = True
+    for seg in segments:
+        clean_seg, markers = extract_utility_markers(seg)
+        all_markers.extend(markers)
+        if clean_seg:
+            await send_tg_html(
+                message.chat.id, clean_seg,
+                reply_to=message.message_id if first else None
+            )
+            add_bot_memory(chat_id, clean_seg)
+            first = False
+    for m in all_markers:
+        try:
+            await execute_utility_tg(message, m, chat_id)
+        except Exception as e:
+            logger.warning(f"utility {m} failed: {e}")
+
+async def maybe_reply_to_old_message_tg(message: telebot.types.Message, chat_id: str) -> None:
+    """С шансом ~12% отвечает на старое сообщение отдельным сообщением."""
+    now = time.time()
+    if now - last_old_reply.get(chat_id, 0) < 600:
+        return
+    if random.random() > 0.12:
+        return
+    mem = list(get_chat_memory(chat_id))
+    # берём только сообщения пользователей, не последние два (последние — текущий диалог)
+    candidates = [e for e in mem[:-2] if e.get("type") == "user" and e.get("text")]
+    if not candidates:
+        return
+    old = random.choice(candidates)
+    try:
+        comment = await ask_ai_async(
+            prompt=(
+                f"Ты видишь в истории чата старое сообщение от {old.get('display','?')} "
+                f"({old.get('time','')}): \"{old.get('text','')}\". Хочешь коротко прокомментировать, пошутить "
+                f"или поддержать беседу? Если да — напиши ОДНО короткое сообщение в стиле Кульша. "
+                f"Если не хочешь — ответь ровно 'НЕТ'."
+            ),
+            system_instruction_override="Ты Кульш. Отвечай одним коротким сообщением или 'НЕТ'. Без markdown.",
+            messages=None,
+            chat_id=chat_id
+        )
+        if comment and comment.strip() and comment.strip().upper() != "НЕТ":
+            last_old_reply[chat_id] = now
+            clean, _ = extract_utility_markers(comment)
+            if clean:
+                await send_tg_html(message.chat.id, clean)
+                add_bot_memory(chat_id, clean)
+    except Exception as e:
+        logger.warning(f"old reply tg fail: {e}")
+
 @tg_bot.message_handler(func=lambda m: m.text)
 async def handle_tg_text(message: telebot.types.Message) -> None:
     chat_id = f"tg_{message.chat.id}"
+    is_dm = message.chat.type == 'private'
     text = cast(str, message.text)
     tl = text.lower()
 
+    if message.from_user is None:
+        return
     display_name = message.from_user.full_name or "Unknown"
     username = message.from_user.username or ""
     user_id = message.from_user.id
-
-    # Сохраняем в память до обработки команд (кроме команд-команд, но пусть будет)
-    # Отдельно запоминаем после принятия решения об ответе — чтобы не засорять, но ок,
-    # запишем всё в конце.
 
     # --- Команды ---
     if tl.startswith("кульш конфиг"):
@@ -1507,11 +1672,11 @@ async def handle_tg_text(message: telebot.types.Message) -> None:
         await tg_bot.send_message(message.chat.id, "\n".join(lines), parse_mode='HTML', reply_to_message_id=message.message_id)
         return
 
-    if tl.startswith("кульш аватарк") or tl.startswith("кульш аватар"):
+    if tl.startswith("кульш аватарк") or tl.startswith("кульш аватар") or tl.strip() in ("!avatar", "! avatar"):
         await tg_handle_avatar(message, chat_id)
         return
 
-    if tl.startswith("кульш вспомни медиа") or "!recall_media" in tl:
+    if tl.startswith("кульш вспомни медиа") or "!recall_media" in tl or "! recall_media" in tl:
         parts = text.split()
         await tg_handle_recall_media(message, chat_id, parts)
         return
@@ -1541,7 +1706,7 @@ async def handle_tg_text(message: telebot.types.Message) -> None:
                        message.reply_to_message.from_user and
                        message.reply_to_message.from_user.id == tg_bot.user.id)
 
-    addressed = bool(is_reply_to_bot or re.search(r'(?i)\bкульш\b', text))
+    addressed = bool(is_reply_to_bot or re.search(r'(?i)\bкульш\b', text) or is_dm)
 
     if addressed:
         await tg_bot.send_chat_action(message.chat.id, 'typing')
@@ -1556,16 +1721,14 @@ async def handle_tg_text(message: telebot.types.Message) -> None:
         add_user_memory(chat_id, "TG", display_name, username, user_id, text)
         messages = memory_to_messages(get_chat_memory(chat_id))
         answer = await ask_ai_async(messages=messages, chat_id=chat_id)
-        answer = await send_sticker_if_needed("tg", message, answer, chat_id)
-        add_bot_memory(chat_id, answer)
-        await reply_tg_html(message, answer)
+        await send_tg_ai_response(message, chat_id, answer)
         asyncio.create_task(extract_memory(chat_id, f"{display_name}: {text}", answer))
+        asyncio.create_task(maybe_reply_to_old_message_tg(message, chat_id))
         return
 
     # Не обращён к боту — просто пишем в память
     add_user_memory(chat_id, "TG", display_name, username, user_id, text)
 
-    # Случайный ответ по ходу разговора
     if await should_random_reply(chat_id):
         try:
             answer = await ask_ai_async(
@@ -1576,9 +1739,7 @@ async def handle_tg_text(message: telebot.types.Message) -> None:
             )
             if answer and answer.strip() and answer.strip().upper() != "НЕТ":
                 last_random_reply[chat_id] = time.time()
-                answer = await send_sticker_if_needed("tg", message, answer, chat_id)
-                add_bot_memory(chat_id, answer)
-                await reply_tg_html(message, answer)
+                await send_tg_ai_response(message, chat_id, answer)
         except Exception as e:
             logger.warning(f"Random reply fail: {e}")
 
@@ -1589,7 +1750,6 @@ async def should_random_reply(chat_id: str) -> bool:
     now = time.time()
     if now - last_random_reply.get(chat_id, 0) < 900:
         return False
-    # 3% шанс на сообщение — при активном чате выходит регулярно, но не спамит
     if random.random() > 0.03:
         return False
     return True
@@ -1598,14 +1758,16 @@ async def should_random_reply(chat_id: str) -> bool:
 @tg_bot.message_handler(content_types=['photo', 'video', 'animation', 'document', 'sticker'])
 async def handle_tg_media(message: telebot.types.Message) -> None:
     chat_id = f"tg_{message.chat.id}"
+    is_dm = message.chat.type == 'private'
     caption = message.caption or ""
     cl = caption.lower()
 
+    if message.from_user is None:
+        return
     display_name = message.from_user.full_name or "Unknown"
     username = message.from_user.username or ""
     user_id = message.from_user.id
 
-    # --- Собираем медиа в историю ---
     media_tag = None
     file_id = None
     media_type = None
@@ -1696,7 +1858,6 @@ async def handle_tg_media(message: telebot.types.Message) -> None:
                 logger.error(f"Ошибка отправки инфографики: {e}")
                 await reply_tg_html(message, "Не удалось отправить инфографику, но вот текст анализа:")
 
-            # Отправляем текст по частям
             chunks = [report_text[i:i+3900] for i in range(0, len(report_text), 3900)]
             for chunk in chunks:
                 try:
@@ -1712,14 +1873,12 @@ async def handle_tg_media(message: telebot.types.Message) -> None:
             await reply_tg_html(message, f"🌋 Ошибка: {e}")
         return
 
-    # --- Обычное медиа с обращением к боту ---
     is_reply_to_bot = (message.reply_to_message and message.reply_to_message.from_user and
                        message.reply_to_message.from_user.id == tg_bot.user.id)
-    addressed = bool(is_reply_to_bot or re.search(r'(?i)\bкульш\b', caption))
+    addressed = bool(is_reply_to_bot or re.search(r'(?i)\bкульш\b', caption) or is_dm)
 
     if not addressed:
         add_user_memory(chat_id, "TG", display_name, username, user_id, caption or "", [media_tag or "медиа"])
-        # пробуем случайный ответ
         if await should_random_reply(chat_id):
             answer = await ask_ai_async(
                 context_type="observer",
@@ -1728,11 +1887,9 @@ async def handle_tg_media(message: telebot.types.Message) -> None:
             )
             if answer and answer.strip() and answer.strip().upper() != "НЕТ":
                 last_random_reply[chat_id] = time.time()
-                add_bot_memory(chat_id, answer)
-                await reply_tg_html(message, answer)
+                await send_tg_ai_response(message, chat_id, answer)
         return
 
-    # Если бот обратил внимание — скачиваем картинку/кадр
     await tg_bot.send_chat_action(message.chat.id, 'typing')
     image_bytes = None
     image_mime = "image/jpeg"
@@ -1760,9 +1917,7 @@ async def handle_tg_media(message: telebot.types.Message) -> None:
     add_user_memory(chat_id, "TG", display_name, username, user_id, f"{prompt} [с медиа: {media_tag}]", [media_tag or "медиа"])
     messages = memory_to_messages(get_chat_memory(chat_id))
     answer = await ask_ai_async(messages=messages, image_bytes=image_bytes, image_mime=image_mime, chat_id=chat_id)
-    answer = await send_sticker_if_needed("tg", message, answer, chat_id)
-    add_bot_memory(chat_id, answer)
-    await reply_tg_html(message, answer)
+    await send_tg_ai_response(message, chat_id, answer)
     asyncio.create_task(extract_memory(chat_id, f"{display_name}: [медиа] {caption}", answer))
 
 async def process_battle_media_group(media_group_id, tg_chat_id, chat_id):
@@ -1848,6 +2003,9 @@ AUTHORIZED_UPDATERS = [735217033867821098, 1193627300797878362]
 
 async def ds_handle_config(message: discord.Message, chat_id: str, parts: list[str]) -> None:
     config = get_chat_config(chat_id)
+    if message.guild and not message.author.guild_permissions.administrator:
+        await message.reply("только админы могут менять конфиг")
+        return
     if len(parts) == 2:
         series = "вкл" if config["series_reminder_enabled"] else "выкл"
         stickers = "вкл" if config["stickers_enabled"] else "выкл"
@@ -1889,32 +2047,40 @@ async def ds_handle_config(message: discord.Message, chat_id: str, parts: list[s
         elif param == "сброс_памяти":
             if chat_id in long_term_memory:
                 del long_term_memory[chat_id]; save_long_term_memory(long_term_memory)
-                await message.reply("Память очищена")
-            else:
-                await message.reply("Память пуста")
+            chat_memories[chat_id] = deque(maxlen=20)
+            chat_media_history[chat_id].clear()
+            last_random_reply.pop(chat_id, None)
+            last_old_reply.pop(chat_id, None)
+            await message.reply("Память очищена (в т.ч. список последних сообщений)")
         else:
             await message.reply("Неизвестный параметр.")
 
 async def ds_handle_avatar(message: discord.Message, chat_id: str) -> None:
-    target = message.mentions[0] if message.mentions else None
+    target = None
+    if message.mentions:
+        target = message.mentions[0]
     if message.reference and message.reference.resolved and isinstance(message.reference.resolved, discord.Message):
         target = message.reference.resolved.author
     if target is None:
         target = message.author
     avatar_url = target.display_avatar.url
     try:
+        embed = discord.Embed().set_image(url=avatar_url)
+        await message.reply(content=f"Аватарка {target.display_name}:", embed=embed)
+    except Exception as e:
+        logger.error(f"DS avatar send error: {e}")
+        await message.reply(f"не смог отправить аватарку: {e}")
+        return
+    try:
         img_bytes = await download_image_bytes(avatar_url)
         desc = await ask_ai_async(
             prompt=f"Опиши кратко аватарку пользователя {target.display_name} в стиле Кульша.",
             image_bytes=img_bytes, image_mime="image/jpeg", chat_id=chat_id
         )
-        embed = discord.Embed().set_image(url=avatar_url)
-        await message.reply(content=f"Аватарка {target.display_name}:", embed=embed)
         if desc:
             await message.channel.send(desc)
     except Exception as e:
-        logger.error(f"DS avatar error: {e}")
-        await message.reply(f"не смог: {e}")
+        logger.warning(f"DS avatar desc error: {e}")
 
 async def ds_handle_recall_media(message: discord.Message, chat_id: str, parts: list[str]) -> None:
     n = 3
@@ -1934,14 +2100,73 @@ async def ds_handle_recall_media(message: discord.Message, chat_id: str, parts: 
         except Exception as e:
             logger.warning(f"recall ds error: {e}")
 
+async def send_ds_ai_response(message: discord.Message, chat_id: str, answer_raw: str) -> None:
+    segments = split_by_separator(answer_raw or "") or [answer_raw or ""]
+    all_markers: list[str] = []
+    first = True
+    for seg in segments:
+        clean_seg, markers = extract_utility_markers(seg)
+        all_markers.extend(markers)
+        if clean_seg:
+            if first:
+                try:
+                    await message.reply(clean_seg)
+                except Exception:
+                    await message.channel.send(clean_seg)
+                first = False
+            else:
+                await message.channel.send(clean_seg)
+            add_bot_memory(chat_id, clean_seg)
+    for m in all_markers:
+        try:
+            await execute_utility_ds(message, m, chat_id)
+        except Exception as e:
+            logger.warning(f"ds utility {m} failed: {e}")
+
+async def maybe_reply_to_old_message_ds(message: discord.Message, chat_id: str) -> None:
+    now = time.time()
+    if now - last_old_reply.get(chat_id, 0) < 600:
+        return
+    if random.random() > 0.12:
+        return
+    mem = list(get_chat_memory(chat_id))
+    candidates = [e for e in mem[:-2] if e.get("type") == "user" and e.get("text")]
+    if not candidates:
+        return
+    old = random.choice(candidates)
+    try:
+        comment = await ask_ai_async(
+            prompt=(
+                f"Ты видишь в истории чата старое сообщение от {old.get('display','?')}: "
+                f"\"{old.get('text','')}\". Хочешь коротко прокомментировать или пошутить? "
+                f"Если да — напиши ОДНО короткое сообщение в стиле Кульша. Если нет — ответь ровно 'НЕТ'."
+            ),
+            system_instruction_override="Ты Кульш. Отвечай одним коротким сообщением или 'НЕТ'. Без markdown.",
+            messages=None,
+            chat_id=chat_id
+        )
+        if comment and comment.strip() and comment.strip().upper() != "НЕТ":
+            last_old_reply[chat_id] = now
+            clean, _ = extract_utility_markers(comment)
+            if clean:
+                await message.channel.send(clean)
+                add_bot_memory(chat_id, clean)
+    except Exception as e:
+        logger.warning(f"old reply ds fail: {e}")
+
 @ds_bot.event
 async def on_message(message: discord.Message) -> None:
     if message.author == ds_bot.user:
         return
-    if message.guild is None:
+    if message.author.bot:
         return
 
-    chat_id = f"ds_guild_{message.guild.id}"
+    is_dm = message.guild is None
+    if is_dm:
+        chat_id = f"ds_dm_{message.author.id}"
+    else:
+        chat_id = f"ds_guild_{message.guild.id}"
+
     content_lower = message.content.lower()
 
     display_name = getattr(message.author, "display_name", message.author.name)
@@ -1953,8 +2178,8 @@ async def on_message(message: discord.Message) -> None:
         if message.reference.resolved.author == ds_bot.user:
             is_reply_to_bot = True
 
-    # --- Команды ---
-    if content_lower.startswith("кульш обновись"):
+    # --- Команды (только в гильдиях) ---
+    if not is_dm and content_lower.startswith("кульш обновись"):
         if message.author.id not in AUTHORIZED_UPDATERS:
             await message.reply("ты кто бля, обновлять меня будешь?"); return
         await message.reply("ща попробую обновиться...")
@@ -1989,7 +2214,7 @@ async def on_message(message: discord.Message) -> None:
     if content_lower.startswith("кульш вспомни медиа") or "!recall_media" in content_lower:
         await ds_handle_recall_media(message, chat_id, message.content.split()); return
 
-    if "кульш серия" in content_lower:
+    if not is_dm and "кульш серия" in content_lower:
         async with message.channel.typing():
             try:
                 prompt = "Попроси пользователя @1364588699589021890 отправить Фолзу сообщение в TikTok чтобы продлить серию. Одно короткое сообщение в стиле Кульша."
@@ -2004,7 +2229,7 @@ async def on_message(message: discord.Message) -> None:
                 await message.reply(f"Ошибка: {e}")
         return
 
-    if "кульш логи" in content_lower:
+    if not is_dm and "кульш логи" in content_lower:
         if message.author.id not in AUTHORIZED_UPDATERS:
             await message.reply("ты кто бля"); return
         try:
@@ -2015,7 +2240,7 @@ async def on_message(message: discord.Message) -> None:
             await message.reply(f"Ошибка: {e}")
         return
 
-    if "кульш зайди в войс" in content_lower:
+    if not is_dm and "кульш зайди в войс" in content_lower:
         author = cast(discord.Member, message.author)
         if not (author.voice and author.voice.channel):
             await message.reply("ты не в войсе, куда заходить?"); return
@@ -2040,7 +2265,7 @@ async def on_message(message: discord.Message) -> None:
             await message.reply("не могу зайти.")
         return
 
-    if "кульш скажи в войсе" in content_lower:
+    if not is_dm and "кульш скажи в войсе" in content_lower:
         vc = cast(discord.VoiceChannel, message.guild.voice_client)
         if vc and vc.is_connected():
             phrase = content_lower.split("войсе", 1)[-1].strip()
@@ -2052,7 +2277,7 @@ async def on_message(message: discord.Message) -> None:
             await message.reply("я не в войсе")
         return
 
-    if "кульш выйди из войса" in content_lower:
+    if not is_dm and "кульш выйди из войса" in content_lower:
         vc = cast(discord.VoiceChannel, message.guild.voice_client)
         if vc and vc.is_connected():
             if hasattr(vc, "_recognition_sink"):
@@ -2074,7 +2299,6 @@ async def on_message(message: discord.Message) -> None:
         await message.reply("Для баттла пришлите два фото в одном сообщении.")
         return
 
-    # Медиа
     image_attachments = [a for a in message.attachments if a.content_type and a.content_type.startswith('image/')]
     video_attachments = [a for a in message.attachments if a.content_type and a.content_type.startswith('video/')]
     has_battle_cmd = is_battle_command(message.content)
@@ -2142,14 +2366,12 @@ async def on_message(message: discord.Message) -> None:
                 await message.reply(f"Ошибка: {e}")
         return
 
-    # Медиа в чат (без команд) — сохраняем в историю
     for att in image_attachments:
         add_media_history(chat_id, att.url, "photo", display_name, caption=message.content[:200])
     for att in video_attachments:
         add_media_history(chat_id, att.url, "video", display_name, caption=message.content[:200])
 
-    # Медиа с обращением к боту
-    addressed = bool(is_reply_to_bot or re.search(r'(?i)\bкульш\b', message.content))
+    addressed = bool(is_reply_to_bot or re.search(r'(?i)\bкульш\b', message.content) or is_dm)
     if (image_attachments or video_attachments) and addressed:
         async with message.channel.typing():
             try:
@@ -2167,18 +2389,17 @@ async def on_message(message: discord.Message) -> None:
                 add_user_memory(chat_id, "DS", display_name, username, user_id, f"{prompt} [с медиа]", ["photo" if image_attachments else "video"])
                 messages = memory_to_messages(get_chat_memory(chat_id))
                 answer = await ask_ai_async(messages=messages, image_bytes=img_bytes, image_mime=img_mime, chat_id=chat_id)
-                answer = await send_sticker_if_needed("ds", message, answer, chat_id)
-                add_bot_memory(chat_id, answer)
-                if message.guild.voice_client and message.guild.voice_client.is_connected():
-                    await say_in_voice(message.guild.voice_client, answer)
-                await message.reply(answer)
+                if message.guild and message.guild.voice_client and message.guild.voice_client.is_connected():
+                    clean_for_voice, _ = extract_utility_markers(answer)
+                    if clean_for_voice:
+                        await say_in_voice(message.guild.voice_client, clean_for_voice)
+                await send_ds_ai_response(message, chat_id, answer)
                 asyncio.create_task(extract_memory(chat_id, f"{display_name}: [медиа]", answer))
             except Exception as e:
                 logger.info(f"DS media error: {e}")
                 await message.reply("не могу глянуть, сломалась")
         return
 
-    # Текстовое сообщение
     if addressed:
         async with message.channel.typing():
             if wants_photo(message.content):
@@ -2191,15 +2412,15 @@ async def on_message(message: discord.Message) -> None:
             add_user_memory(chat_id, "DS", display_name, username, user_id, message.content)
             messages = memory_to_messages(get_chat_memory(chat_id))
             answer = await ask_ai_async(messages=messages, chat_id=chat_id)
-            answer = await send_sticker_if_needed("ds", message, answer, chat_id)
-            add_bot_memory(chat_id, answer)
-            if message.guild.voice_client and message.guild.voice_client.is_connected():
-                await say_in_voice(message.guild.voice_client, answer)
-            await message.reply(answer)
+            if message.guild and message.guild.voice_client and message.guild.voice_client.is_connected():
+                clean_for_voice, _ = extract_utility_markers(answer)
+                if clean_for_voice:
+                    await say_in_voice(message.guild.voice_client, clean_for_voice)
+            await send_ds_ai_response(message, chat_id, answer)
             asyncio.create_task(extract_memory(chat_id, f"{display_name}: {message.content}", answer))
+            asyncio.create_task(maybe_reply_to_old_message_ds(message, chat_id))
         return
 
-    # Просто пишем в память + возможный случайный ответ
     add_user_memory(chat_id, "DS", display_name, username, user_id, message.content)
     if await should_random_reply(chat_id):
         try:
@@ -2210,9 +2431,7 @@ async def on_message(message: discord.Message) -> None:
             )
             if answer and answer.strip() and answer.strip().upper() != "НЕТ":
                 last_random_reply[chat_id] = time.time()
-                answer = await send_sticker_if_needed("ds", message, answer, chat_id)
-                add_bot_memory(chat_id, answer)
-                await message.reply(answer)
+                await send_ds_ai_response(message, chat_id, answer)
         except Exception as e:
             logger.warning(f"DS random reply fail: {e}")
 
@@ -2253,12 +2472,16 @@ async def random_post_loop() -> None:
                     chat_id=chat_id
                 )
                 if answer and answer.strip() and answer.strip().upper() != "НЕТ":
-                    await send_tg_html(TG_TARGET_CHAT, answer)
-                    add_bot_memory(chat_id, answer)
+                    clean, _ = extract_utility_markers(answer)
+                    if clean:
+                        await send_tg_html(TG_TARGET_CHAT, clean)
+                        add_bot_memory(chat_id, clean)
             else:
                 answer = await ask_ai_async(prompt=None, context_type="random", chat_id=chat_id)
-                await send_tg_html(TG_TARGET_CHAT, answer)
-                add_bot_memory(chat_id, answer)
+                clean, _ = extract_utility_markers(answer)
+                if clean:
+                    await send_tg_html(TG_TARGET_CHAT, clean)
+                    add_bot_memory(chat_id, clean)
         except Exception as e:
             logger.info(f"Ошибка random_post_loop: {e}")
 
