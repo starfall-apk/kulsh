@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.25.0 (natural talk, user identity, HTML formatting, utilities, inline config)
+# Kulsh GPT | v2.25.1 (natural talk, user identity, HTML formatting, utilities, inline config)
 # by (main author):
 #     starfall-apk
 # coauthor & bot hosting:
@@ -523,6 +523,10 @@ async def ask_ai_async(
                 encoded, _ = image_bytes_to_base64(image_bytes, image_mime)
                 parts.append({"inline_data": {"mime_type": image_mime, "data": encoded}})
             contents.append({"role": role, "parts": parts})
+        # Если задан prompt (например, для observer/random), добавляем его отдельным user-turn,
+        # чтобы (а) инструкция реально попала в запрос, (б) запрос не заканчивался на model.
+        if prompt:
+            contents.append({"role": "user", "parts": [{"text": prompt}]})
     elif prompt:
         parts2: list[dict[str, Any]] = [{"text": prompt}]
         if image_bytes_list:
@@ -536,6 +540,11 @@ async def ask_ai_async(
         contents.append({"role": "user", "parts": parts2})
     else:
         contents.append({"role": "user", "parts": [{"text": "че надо?"}]})
+
+    # Финальная страховка: Gemini API не принимает запросы, заканчивающиеся на model turn.
+    if not contents or contents[-1].get("role") == "model":
+        fallback = prompt or "продолжи"
+        contents.append({"role": "user", "parts": [{"text": fallback}]})
 
     payload_base = {
         "system_instruction": {"parts": [{"text": base_context}]},
@@ -557,6 +566,11 @@ async def ask_ai_async(
                         logger.warning(f"Модель {model_name} ключ {api_key[:4]}... вернула 429.")
                         await asyncio.sleep(2 ** (attempt // len(AI_KEYS)))
                         continue
+                    elif status == 400:
+                        # 400 из-за структуры запроса — нет смысла долбить все модели/ключи одним и тем же телом
+                        text = await resp.text()
+                        logger.error(f"Модель {model_name} ключ {api_key[:4]}... вернула 400: {text}.")
+                        return "Ошибка запроса к API (400). Проверь логи."
                     elif status == 503 or status >= 500:
                         logger.warning(f"Модель {model_name} ключ {api_key[:4]}... вернула {status}.")
                         await asyncio.sleep(2 ** (attempt // len(AI_KEYS)))
@@ -2289,7 +2303,9 @@ async def on_message(message: discord.Message) -> None:
             await message.reply("я и так не там")
         return
 
-    if is_looksmaxxing_command(message.content):
+    # --- ВАЖНО: проверка PSL/battle должна учитывать наличие вложений.
+    # Раньше тут стоял безусловный return, из-за чего фото до обработки не доходило.
+    if is_looksmaxxing_command(message.content) and len(message.attachments) == 0:
         add_user_memory(chat_id, "DS", display_name, username, user_id, message.content)
         await message.reply("📸 Пришли фото с командой `кульш psl` (или прикрепи картинку).")
         return
@@ -2466,7 +2482,7 @@ async def random_post_loop() -> None:
             if memory:
                 answer = await ask_ai_async(
                     prompt="Посмотри на историю чата. Если хочешь что-то добавить или пошутить, напиши одно короткое сообщение. Если нет — ответь ровно 'НЕТ'.",
-                    context_type="default",
+                    context_type="observer",
                     messages=memory_to_messages(memory),
                     system_instruction_override="Ты Кульш. Отвечай одним сообщением или 'НЕТ'. Без markdown.",
                     chat_id=chat_id
