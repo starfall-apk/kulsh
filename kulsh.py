@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.26.1 (natural talk, human-like typing, split messages fix)
+# Kulsh GPT | v2.27.1 (model picker, dynamic config, delete on apply, 503->next model)
 # by (main author):
 #     starfall-apk
 # coauthor & bot hosting:
@@ -102,6 +102,24 @@ MODEL_LIST = [
     "gemini-3.1-flash-lite-preview"
 ]
 
+MODEL_DISPLAY: dict[str, str] = {
+    "gemini-3.8-flash":              "🚀 3.8 Flash",
+    "gemini-3.7-flash":              "⚡ 3.7 Flash",
+    "gemini-3.5-flash":              "💫 3.5 Flash",
+    "gemini-3.5-flash-lite":         "✨ 3.5 Flash Lite",
+    "gemini-2.5-flash":              "🌟 2.5 Flash",
+    "gemini-2.5-flash-lite":         "💡 2.5 Flash Lite",
+    "gemini-flash-latest":           "🔥 Flash Latest",
+    "gemini-flash-lite-latest":      "🌱 Flash Lite Latest",
+    "gemini-3-flash-preview":        "🧪 3 Flash Preview",
+    "gemini-3.1-flash-lite-preview": "🧬 3.1 Flash Lite Preview",
+}
+
+def model_display_name(model: str | None) -> str:
+    if not model:
+        return "🎲 авто (все подряд)"
+    return MODEL_DISPLAY.get(model, model)
+
 # voice_recv
 try:
     from discord.ext import voice_recv
@@ -143,6 +161,11 @@ chat_media_history: dict[str, deque[dict[str, Any]]] = defaultdict(lambda: deque
 
 last_random_reply: dict[str, float] = {}
 last_old_reply: dict[str, float] = {}
+
+# Одно динамически редактируемое сообщение-конфиг на чат (в TG)
+config_msg_ids: dict[str, int] = {}
+# ID сообщения-команды, которым пользователь открыл конфиг (для удаления при "Применить")
+config_trigger_msg_ids: dict[str, int] = {}
 
 DONATIONS_FILE = 'donations.json'
 
@@ -204,7 +227,8 @@ DEFAULT_CHAT_CONFIG = {
     "stickers_enabled": True,
     "custom_prompt": None,
     "random_reply_enabled": False,
-    "random_messages_enabled": True
+    "random_messages_enabled": True,
+    "model": None,
 }
 
 chat_configs: dict[str, dict] = defaultdict(lambda: DEFAULT_CHAT_CONFIG.copy())
@@ -372,7 +396,7 @@ async def extract_video_frame(video_bytes: bytes, ext_hint: str = ".mp4") -> byt
                     pass
 
 # ============================================================
-# РЕАЛИСТИЧНАЯ ПЕЧАТЬ (typing indicator + задержка)
+# РЕАЛИСТИЧНАЯ ПЕЧАТЬ
 # ============================================================
 TYPING_MS_PER_CHAR_MIN = 0.018
 TYPING_MS_PER_CHAR_MAX = 0.050
@@ -382,7 +406,6 @@ TYPING_JITTER_MIN = 0.85
 TYPING_JITTER_MAX = 1.25
 
 def calc_typing_delay(text: str) -> float:
-    """Задержка 'печати' для одного сообщения."""
     if not text:
         return TYPING_MIN_DELAY
     n = len(text)
@@ -427,9 +450,6 @@ async def typing_with_delay_ds(channel, text: str, delay: float | None = None) -
 # ============================================================
 # МАРКЕРЫ-УТИЛИТЫ
 # ============================================================
-# ВАЖНО: НЕ используем \b, потому что в Unicode-режиме Python \w включает
-# кириллицу, и \b не срабатывает между латиницей и кириллицей.
-# Пример: "!separateвот" — между 'e' и 'в' границы слова НЕТ.
 UTILITY_PATTERNS = {
     "avatar": re.compile(r'!\s*avatar', re.IGNORECASE),
     "recall_media": re.compile(r'!\s*recall_?\s*media', re.IGNORECASE),
@@ -437,7 +457,6 @@ UTILITY_PATTERNS = {
     "gif": re.compile(r'!\s*gif', re.IGNORECASE),
 }
 
-# !separate / !seperate (частая опечатка) / ! separate
 SEPARATOR_PATTERN = re.compile(r'!\s*sep[ae]rate', re.IGNORECASE)
 
 def split_by_separator(text: str) -> list[str]:
@@ -447,14 +466,12 @@ def split_by_separator(text: str) -> list[str]:
     return [p.strip() for p in parts if p and p.strip()]
 
 def extract_utility_markers(text: str) -> tuple[str, list[str]]:
-    """Возвращает (очищенный_текст, список_маркеров_без_separate)."""
     text = text or ""
     markers: list[str] = []
     for name, pat in UTILITY_PATTERNS.items():
         if pat.search(text):
             markers.append(name)
         text = pat.sub('', text)
-    # Чистим двойные пробелы / висящую пунктуацию
     text = re.sub(r'[ \t]+', ' ', text)
     text = re.sub(r' +([,.!?;:])', r'\1', text)
     text = re.sub(r'\n{3,}', '\n\n', text).strip()
@@ -624,53 +641,81 @@ async def ask_ai_async(
         "contents": contents
     }
 
-    combinations = [(model, key) for model in MODEL_LIST for key in AI_KEYS]
-    max_attempts = len(combinations)
-
-    for attempt, (model_name, api_key) in enumerate(combinations):
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
-        logger.info(f"🔄 Попытка {attempt+1}/{max_attempts}: модель {model_name}, ключ {api_key[:4]}...")
-
+    # Приоритет: выбранная в чате модель, затем все остальные
+    preferred_model = None
+    if chat_id:
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, json=payload_base, timeout=45) as resp:
-                    status = resp.status
-                    if status == 429:
-                        logger.warning(f"Модель {model_name} ключ {api_key[:4]}... вернула 429.")
-                        await asyncio.sleep(2 ** (attempt // len(AI_KEYS)))
-                        continue
-                    elif status == 400:
-                        text = await resp.text()
-                        logger.error(f"Модель {model_name} ключ {api_key[:4]}... вернула 400: {text}.")
-                        return "Ошибка запроса к API (400). Проверь логи."
-                    elif status == 503 or status >= 500:
-                        logger.warning(f"Модель {model_name} ключ {api_key[:4]}... вернула {status}.")
-                        await asyncio.sleep(2 ** (attempt // len(AI_KEYS)))
-                        continue
-                    elif status != 200:
-                        text = await resp.text()
-                        logger.error(f"Модель {model_name} ключ {api_key[:4]}... вернула {status}: {text}.")
-                        return "Ошибка API. Попробуйте позже."
+            preferred_model = get_chat_config(chat_id).get("model")
+        except Exception:
+            preferred_model = None
 
-                    data = await resp.json()
-                    if 'candidates' in data and data['candidates']:
-                        try:
-                            return data['candidates'][0]['content']['parts'][0]['text']
-                        except (KeyError, IndexError):
-                            logger.warning(f"Странный ответ от {model_name}, пробую следующую...")
+    models_to_try: list[str] = []
+    if preferred_model and preferred_model in MODEL_LIST:
+        models_to_try.append(preferred_model)
+    for m in MODEL_LIST:
+        if m != preferred_model:
+            models_to_try.append(m)
+
+    total_attempt = 0
+    total_max = len(models_to_try) * len(AI_KEYS)
+
+    for model_idx, model_name in enumerate(models_to_try):
+        backoff = 2 ** min(model_idx, 4)  # 1, 2, 4, 8, 16 — не растём бесконечно
+        for key_idx, api_key in enumerate(AI_KEYS):
+            total_attempt += 1
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+            logger.info(f"🔄 Попытка {total_attempt}/{total_max}: модель {model_name}, ключ {api_key[:4]}...")
+
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(url, json=payload_base, timeout=45) as resp:
+                        status = resp.status
+
+                        # ---- 503: меняем МОДЕЛЬ, не тратим остальные ключи ----
+                        if status == 503:
+                            logger.warning(f"503 на {model_name} — переключаюсь на другую модель")
+                            break  # выходим из цикла по ключам, идём к следующей модели
+
+                        if status == 429:
+                            logger.warning(f"Модель {model_name} ключ {api_key[:4]}... вернула 429.")
+                            await asyncio.sleep(backoff)
+                            continue  # следующий ключ той же модели
+
+                        if status == 400:
+                            text = await resp.text()
+                            logger.error(f"Модель {model_name} ключ {api_key[:4]}... вернула 400: {text}.")
+                            return "Ошибка запроса к API (400). Проверь логи."
+
+                        if status >= 500:
+                            # прочие 5xx (не 503) — как раньше, меняем ключ
+                            logger.warning(f"Модель {model_name} ключ {api_key[:4]}... вернула {status}.")
+                            await asyncio.sleep(backoff)
                             continue
-                    else:
-                        logger.warning(f"Модель {model_name} ключ {api_key[:4]}... ответила без candidates.")
-                        await asyncio.sleep(2 ** (attempt // len(AI_KEYS)))
-                        continue
 
-        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-            logger.warning(f"Сетевая ошибка для {model_name} ключ {api_key[:4]}...: {e}.")
-            await asyncio.sleep(2 ** (attempt // len(AI_KEYS)))
-            continue
-        except Exception as e:
-            logger.error(f"Непредвиденная ошибка для {model_name}: {e}.")
-            return "Ошибка. Что-то пошло не так."
+                        if status != 200:
+                            text = await resp.text()
+                            logger.error(f"Модель {model_name} ключ {api_key[:4]}... вернула {status}: {text}.")
+                            return "Ошибка API. Попробуйте позже."
+
+                        data = await resp.json()
+                        if 'candidates' in data and data['candidates']:
+                            try:
+                                return data['candidates'][0]['content']['parts'][0]['text']
+                            except (KeyError, IndexError):
+                                logger.warning(f"Странный ответ от {model_name}, пробую следующую...")
+                                continue
+                        else:
+                            logger.warning(f"Модель {model_name} ключ {api_key[:4]}... ответила без candidates.")
+                            await asyncio.sleep(backoff)
+                            continue
+
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                logger.warning(f"Сетевая ошибка для {model_name} ключ {api_key[:4]}...: {e}.")
+                await asyncio.sleep(backoff)
+                continue
+            except Exception as e:
+                logger.error(f"Непредвиденная ошибка для {model_name}: {e}.")
+                return "Ошибка. Что-то пошло не так."
 
     return "Все модели и ключи недоступны, попробуй позже 🍷🗿"
 
@@ -1362,33 +1407,74 @@ battle_media_groups = {}
 battle_photos = {}
 
 # ============================================================
-# ИНЛАЙН-КНОПКИ КОНФИГА
+# КОНФИГ: ТЕКСТ, КЛАВИАТУРА, ОБРАБОТЧИКИ TG
 # ============================================================
-def build_config_keyboard(chat_id: str) -> InlineKeyboardMarkup:
-    config = get_chat_config(chat_id)
-    kb = InlineKeyboardMarkup()
-    kb.row(
-        InlineKeyboardButton(f"Серия: {'✅' if config['series_reminder_enabled'] else '❌'}", callback_data="cfg:series"),
-        InlineKeyboardButton(f"Стикеры: {'✅' if config['stickers_enabled'] else '❌'}", callback_data="cfg:stickers"),
-    )
-    kb.row(
-        InlineKeyboardButton(f"Автоответ: {'✅' if config['random_reply_enabled'] else '❌'}", callback_data="cfg:autoreply"),
-        InlineKeyboardButton(f"Рандом: {'✅' if config['random_messages_enabled'] else '❌'}", callback_data="cfg:random"),
-    )
-    kb.row(InlineKeyboardButton("🧹 Сбросить память", callback_data="cfg:reset_memory"))
-    kb.row(InlineKeyboardButton("♻️ Сбросить промпт", callback_data="cfg:reset_prompt"))
-    return kb
-
 def _config_text(chat_id: str) -> str:
     config = get_chat_config(chat_id)
     prompt_safe = html.escape(config["custom_prompt"] or "стандартный")
     return (
         f"⚙️ <b>Конфигурация чата</b>\n"
-        f"Авто-серия (DS): {'вкл' if config['series_reminder_enabled'] else 'выкл'}\n"
-        f"Стикеры/гифки: {'вкл' if config['stickers_enabled'] else 'выкл'}\n"
-        f"Случайные ответы: {'вкл' if config['random_reply_enabled'] else 'выкл'}\n"
-        f"Случайные сообщения: {'вкл' if config['random_messages_enabled'] else 'выкл'}\n"
-        f"Кастомный промпт: {prompt_safe}"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"🎬 <b>Авто-серия (DS):</b> {'✅ вкл' if config['series_reminder_enabled'] else '❌ выкл'}\n"
+        f"🎨 <b>Стикеры/гифки:</b> {'✅ вкл' if config['stickers_enabled'] else '❌ выкл'}\n"
+        f"💬 <b>Случайные ответы:</b> {'✅ вкл' if config['random_reply_enabled'] else '❌ выкл'}\n"
+        f"📢 <b>Случайные сообщения:</b> {'✅ вкл' if config['random_messages_enabled'] else '❌ выкл'}\n"
+        f"🧠 <b>Модель:</b> {model_display_name(config.get('model'))}\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"📝 <b>Кастомный промпт:</b> {prompt_safe}"
+    )
+
+def build_main_config_keyboard(chat_id: str) -> InlineKeyboardMarkup:
+    config = get_chat_config(chat_id)
+    kb = InlineKeyboardMarkup()
+    kb.row(
+        InlineKeyboardButton(f"🎬 Серия: {'✅' if config['series_reminder_enabled'] else '❌'}", callback_data="cfg:series"),
+        InlineKeyboardButton(f"🎨 Стикеры: {'✅' if config['stickers_enabled'] else '❌'}", callback_data="cfg:stickers"),
+    )
+    kb.row(
+        InlineKeyboardButton(f"💬 Автоответ: {'✅' if config['random_reply_enabled'] else '❌'}", callback_data="cfg:autoreply"),
+        InlineKeyboardButton(f"📢 Рандом: {'✅' if config['random_messages_enabled'] else '❌'}", callback_data="cfg:random"),
+    )
+    kb.row(InlineKeyboardButton(
+        f"🧠 Модель: {model_display_name(config.get('model'))}",
+        callback_data="cfg:model"
+    ))
+    kb.row(
+        InlineKeyboardButton("🧹 Сбросить память", callback_data="cfg:reset_memory"),
+        InlineKeyboardButton("♻️ Сбросить промпт", callback_data="cfg:reset_prompt"),
+    )
+    kb.row(InlineKeyboardButton("✅ Применить и закрыть", callback_data="cfg:apply"))
+    return kb
+
+def build_model_keyboard(chat_id: str) -> InlineKeyboardMarkup:
+    config = get_chat_config(chat_id)
+    current = config.get("model")
+    kb = InlineKeyboardMarkup()
+    # Авто — первой строкой
+    auto_label = f"{'🔘' if not current else '▫️'} 🎲 Авто (все по очереди)"
+    kb.row(InlineKeyboardButton(auto_label, callback_data="cfg:model_set:auto"))
+    # По две модели в ряд
+    row: list[InlineKeyboardButton] = []
+    for idx, model in enumerate(MODEL_LIST):
+        mark = "🔘" if current == model else "▫️"
+        label = f"{mark} {MODEL_DISPLAY.get(model, model)}"
+        row.append(InlineKeyboardButton(label, callback_data=f"cfg:model_set:{idx}"))
+        if len(row) == 2:
+            kb.row(*row); row = []
+    if row:
+        kb.row(*row)
+    kb.row(InlineKeyboardButton("🔙 Назад", callback_data="cfg:model_back"))
+    return kb
+
+def _model_picker_text(chat_id: str) -> str:
+    config = get_chat_config(chat_id)
+    current = config.get("model")
+    return (
+        f"🧠 <b>Выбор модели</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"Текущая: {model_display_name(current)}\n\n"
+        f"🎲 <b>Авто</b> — бот сам перебирает все модели, пока не получит ответ.\n"
+        f"Или выбери конкретную — она будет пробоваться первой."
     )
 
 async def _can_manage_tg_config(message: telebot.types.Message) -> bool:
@@ -1404,6 +1490,8 @@ async def _can_manage_tg_config(message: telebot.types.Message) -> bool:
 async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
     chat_id = f"tg_{call.message.chat.id}"
     config = get_chat_config(chat_id)
+
+    # Проверка прав
     if call.message.chat.type != 'private':
         try:
             member = await tg_bot.get_chat_member(call.message.chat.id, call.from_user.id)
@@ -1414,8 +1502,88 @@ async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
             await tg_bot.answer_callback_query(call.id, "Не могу проверить права")
             return
 
-    action = call.data.split(":", 1)[1]
+    parts = call.data.split(":")
+    action = parts[1] if len(parts) > 1 else ""
     toast = "Обновлено"
+
+    # --- Установка модели ---
+    if action == "model_set":
+        value = parts[2] if len(parts) > 2 else "auto"
+        if value == "auto":
+            config["model"] = None
+            toast = "Модель: авто"
+        else:
+            try:
+                idx = int(value)
+                if 0 <= idx < len(MODEL_LIST):
+                    config["model"] = MODEL_LIST[idx]
+                    toast = f"Модель: {MODEL_DISPLAY.get(MODEL_LIST[idx], MODEL_LIST[idx])}"
+                else:
+                    toast = "Неверный индекс"
+            except ValueError:
+                toast = "Ошибка"
+        try:
+            await tg_bot.edit_message_text(
+                _model_picker_text(chat_id),
+                call.message.chat.id,
+                call.message.message_id,
+                parse_mode='HTML',
+                reply_markup=build_model_keyboard(chat_id)
+            )
+        except Exception as e:
+            logger.warning(f"edit model picker fail: {e}")
+        await tg_bot.answer_callback_query(call.id, toast)
+        return
+
+    # --- Открыть список моделей ---
+    if action == "model":
+        try:
+            await tg_bot.edit_message_text(
+                _model_picker_text(chat_id),
+                call.message.chat.id,
+                call.message.message_id,
+                parse_mode='HTML',
+                reply_markup=build_model_keyboard(chat_id)
+            )
+        except Exception as e:
+            logger.warning(f"open model picker fail: {e}")
+        await tg_bot.answer_callback_query(call.id)
+        return
+
+    # --- Назад из списка моделей ---
+    if action == "model_back":
+        try:
+            await tg_bot.edit_message_text(
+                _config_text(chat_id),
+                call.message.chat.id,
+                call.message.message_id,
+                parse_mode='HTML',
+                reply_markup=build_main_config_keyboard(chat_id)
+            )
+        except Exception as e:
+            logger.warning(f"back to config fail: {e}")
+        await tg_bot.answer_callback_query(call.id)
+        return
+
+    # --- Применить и закрыть ---
+    if action == "apply":
+        # Удаляем сообщение-конфиг
+        try:
+            await tg_bot.delete_message(call.message.chat.id, call.message.message_id)
+        except Exception as e:
+            logger.warning(f"delete config msg fail: {e}")
+        # Удаляем сообщение-команду пользователя
+        trig_id = config_trigger_msg_ids.pop(chat_id, None)
+        if trig_id:
+            try:
+                await tg_bot.delete_message(call.message.chat.id, trig_id)
+            except Exception as e:
+                logger.warning(f"delete trigger msg fail: {e}")
+        config_msg_ids.pop(chat_id, None)
+        await tg_bot.answer_callback_query(call.id, "Готово ✅")
+        return
+
+    # --- Обычные переключатели ---
     if action == "series":
         config["series_reminder_enabled"] = not config["series_reminder_enabled"]
     elif action == "stickers":
@@ -1443,7 +1611,7 @@ async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
             call.message.chat.id,
             call.message.message_id,
             parse_mode='HTML',
-            reply_markup=build_config_keyboard(chat_id)
+            reply_markup=build_main_config_keyboard(chat_id)
         )
     except Exception as e:
         logger.warning(f"edit config msg fail: {e}")
@@ -1528,22 +1696,38 @@ async def handle_successful_payment(message: telebot.types.Message) -> None:
     await reply_tg_html(message, f"🍷🗿 Спасибо за {stars} звёзд, кент! Ты сделал Кульша чуточку счастливее.")
 
 # -------- Хелперы для команд в TG --------
-async def tg_handle_config(message: telebot.types.Message, chat_id: str, parts: list[str]) -> None:
+async def tg_handle_config(message: telebot.types.Message, chat_id: str) -> None:
+    """Открывает (или переоткрывает) единственное динамическое сообщение-конфиг."""
     if not await _can_manage_tg_config(message):
         await reply_tg_html(message, "только админы могут менять конфиг")
         return
-    kb = build_config_keyboard(chat_id)
+
+    # Запоминаем id команды пользователя, чтобы удалить при "Применить"
+    config_trigger_msg_ids[chat_id] = message.message_id
+
+    # Если предыдущее сообщение-конфиг уже есть — удаляем его
+    old_id = config_msg_ids.get(chat_id)
+    if old_id:
+        try:
+            await tg_bot.delete_message(message.chat.id, old_id)
+        except Exception:
+            pass
+
     try:
-        await tg_bot.send_message(
+        sent = await tg_bot.send_message(
             message.chat.id,
             _config_text(chat_id),
             parse_mode='HTML',
-            reply_to_message_id=message.message_id,
-            reply_markup=kb
+            reply_markup=build_main_config_keyboard(chat_id)
         )
+        config_msg_ids[chat_id] = sent.message_id
     except Exception as e:
         logger.warning(f"Config send failed: {e}")
-        await tg_bot.send_message(message.chat.id, re.sub(r'<[^>]+>', '', _config_text(chat_id)), reply_to_message_id=message.message_id)
+        await tg_bot.send_message(
+            message.chat.id,
+            re.sub(r'<[^>]+>', '', _config_text(chat_id)),
+            reply_markup=build_main_config_keyboard(chat_id)
+        )
 
 async def tg_handle_settings(message: telebot.types.Message, parts: list[str]) -> None:
     user_key = get_user_key("tg", message.chat.id)
@@ -1667,19 +1851,11 @@ async def tg_handle_recall_media(message: telebot.types.Message, chat_id: str, p
     if not sent_any:
         await reply_tg_html(message, "не смог переотправить последние медиа")
 
-# -------- Основной обработчик ответа ИИ (TG) --------
+# -------- Отправка ответа ИИ (TG) --------
 async def send_tg_ai_response(message: telebot.types.Message, chat_id: str, answer_raw: str) -> None:
-    """Отправляет ответ ИИ, разбивая его по !separate и имитируя печать.
-
-    ВАЖНО: если после сплита не осталось непустых сегментов — просто выходим,
-    (например, если ответ состоял только из !separate), НЕ отправляя сырой текст.
-    """
     raw = answer_raw or ""
 
-    # 1) Пытаемся разбить по !separate
     segments = split_by_separator(raw)
-
-    # 2) Если сегментов нет — обрабатываем только утилиты (если есть) и выходим.
     if not segments:
         _, markers = extract_utility_markers(raw)
         for m in markers:
@@ -1689,7 +1865,6 @@ async def send_tg_ai_response(message: telebot.types.Message, chat_id: str, answ
                 logger.warning(f"utility {m} failed: {e}")
         return
 
-    # 3) Из каждого сегмента вырезаем утилиты-маркеры
     clean_segments: list[str] = []
     all_markers: list[str] = []
     for seg in segments:
@@ -1699,7 +1874,6 @@ async def send_tg_ai_response(message: telebot.types.Message, chat_id: str, answ
             clean_segments.append(clean_seg)
 
     if not clean_segments:
-        # Были только служебные маркеры — выполняем утилиты, текста нет
         for m in all_markers:
             try:
                 await execute_utility_tg(message, m, chat_id)
@@ -1707,7 +1881,6 @@ async def send_tg_ai_response(message: telebot.types.Message, chat_id: str, answ
                 logger.warning(f"utility {m} failed: {e}")
         return
 
-    # 4) Отправляем каждый сегмент с имитацией печати
     for i, clean_seg in enumerate(clean_segments):
         try:
             await typing_with_delay_tg(message.chat.id, clean_seg)
@@ -1720,7 +1893,6 @@ async def send_tg_ai_response(message: telebot.types.Message, chat_id: str, answ
             await send_tg_html(message.chat.id, clean_seg)
         add_bot_memory(chat_id, clean_seg)
 
-    # 5) Выполняем утилиты, если были
     for m in all_markers:
         try:
             await execute_utility_tg(message, m, chat_id)
@@ -1728,7 +1900,6 @@ async def send_tg_ai_response(message: telebot.types.Message, chat_id: str, answ
             logger.warning(f"utility {m} failed: {e}")
 
 async def maybe_reply_to_old_message_tg(message: telebot.types.Message, chat_id: str) -> None:
-    """С шансом ~12% отвечает на старое сообщение отдельным сообщением (reply'ем)."""
     now = time.time()
     if now - last_old_reply.get(chat_id, 0) < 600:
         return
@@ -1778,10 +1949,8 @@ async def handle_tg_text(message: telebot.types.Message) -> None:
     username = message.from_user.username or ""
     user_id = message.from_user.id
 
-    # --- Команды ---
     if tl.startswith("кульш конфиг"):
-        parts = text.split()
-        await tg_handle_config(message, chat_id, parts)
+        await tg_handle_config(message, chat_id)
         return
 
     if tl.startswith("кульш настройки"):
@@ -1923,7 +2092,6 @@ async def handle_tg_media(message: telebot.types.Message) -> None:
     if file_id and media_tag:
         add_media_history(chat_id, None, media_type, display_name, file_id=file_id, caption=caption)
 
-    # --- Баттл ---
     if is_battle_command(caption) and message.photo:
         if message.media_group_id:
             mgid = message.media_group_id
@@ -1943,7 +2111,6 @@ async def handle_tg_media(message: telebot.types.Message) -> None:
         battle_photos[message.media_group_id].append(img_bytes)
         return
 
-    # --- Looksmaxxing ---
     is_looksmaxxing = (
         is_looksmaxxing_command(caption) or
         (message.reply_to_message and message.reply_to_message.from_user and
@@ -2133,54 +2300,101 @@ async def ds_handle_config(message: discord.Message, chat_id: str, parts: list[s
     if message.guild and not message.author.guild_permissions.administrator:
         await message.reply("только админы могут менять конфиг")
         return
+
+    # --- Показ конфига (без доп. параметров) ---
     if len(parts) == 2:
-        series = "вкл" if config["series_reminder_enabled"] else "выкл"
-        stickers = "вкл" if config["stickers_enabled"] else "выкл"
+        series = "✅ вкл" if config["series_reminder_enabled"] else "❌ выкл"
+        stickers = "✅ вкл" if config["stickers_enabled"] else "❌ выкл"
         prompt = config["custom_prompt"] or "стандартный"
-        random_reply = "вкл" if config["random_reply_enabled"] else "выкл"
-        random_messages = "вкл" if config["random_messages_enabled"] else "выкл"
-        msg = (f"⚙️ **Конфигурация чата**\n"
-               f"Авто-серия (DS): {series}\n"
-               f"Стикеры/гифки: {stickers}\n"
-               f"Случайные ответы (автоответ): {random_reply}\n"
-               f"Случайные сообщения (рандом): {random_messages}\n"
-               f"Кастомный промпт: {prompt}\n"
-               f"Изменение: `кульш конфиг <параметр> <значение>`\n"
-               f"Параметры: серия, стикеры, промпт, сброс_памяти, автоответ, рандом")
-        await message.reply(msg); return
+        random_reply = "✅ вкл" if config["random_reply_enabled"] else "❌ выкл"
+        random_messages = "✅ вкл" if config["random_messages_enabled"] else "❌ выкл"
+        model_str = model_display_name(config.get("model"))
+        embed = discord.Embed(title="⚙️ Конфигурация чата", color=0x10b981)
+        embed.add_field(name="🎬 Авто-серия (DS)", value=series, inline=True)
+        embed.add_field(name="🎨 Стикеры/гифки", value=stickers, inline=True)
+        embed.add_field(name="💬 Случайные ответы", value=random_reply, inline=True)
+        embed.add_field(name="📢 Случайные сообщения", value=random_messages, inline=True)
+        embed.add_field(name="🧠 Модель", value=model_str, inline=False)
+        embed.add_field(name="📝 Кастомный промпт", value=prompt[:1000], inline=False)
+        embed.add_field(
+            name="Что можно менять",
+            value=(
+                "`кульш конфиг серия вкл|выкл`\n"
+                "`кульш конфиг стикеры вкл|выкл`\n"
+                "`кульш конфиг автоответ вкл|выкл`\n"
+                "`кульш конфиг рандом вкл|выкл`\n"
+                "`кульш конфиг промпт <текст | сброс>`\n"
+                "`кульш конфиг модель` — список моделей\n"
+                "`кульш конфиг модель <номер | авто>`\n"
+                "`кульш конфиг сброс_памяти`"
+            ),
+            inline=False,
+        )
+        await message.reply(embed=embed)
+        return
+
     if len(parts) >= 3:
         param = parts[2].lower()
         val = parts[3].lower() if len(parts) >= 4 else ""
+
         if param == "серия":
-            config["series_reminder_enabled"] = val in ("вкл","on","1")
-            await message.reply("Авто-серия: " + ("вкл" if config["series_reminder_enabled"] else "выкл"))
+            config["series_reminder_enabled"] = val in ("вкл", "on", "1")
+            await message.reply("🎬 Авто-серия: " + ("вкл" if config["series_reminder_enabled"] else "выкл"))
         elif param == "стикеры":
-            config["stickers_enabled"] = val in ("вкл","on","1")
-            await message.reply("Стикеры: " + ("вкл" if config["stickers_enabled"] else "выкл"))
+            config["stickers_enabled"] = val in ("вкл", "on", "1")
+            await message.reply("🎨 Стикеры: " + ("вкл" if config["stickers_enabled"] else "выкл"))
         elif param == "автоответ":
-            config["random_reply_enabled"] = val in ("вкл","on","1")
-            await message.reply("Автоответ: " + ("вкл" if config["random_reply_enabled"] else "выкл"))
+            config["random_reply_enabled"] = val in ("вкл", "on", "1")
+            await message.reply("💬 Автоответ: " + ("вкл" if config["random_reply_enabled"] else "выкл"))
         elif param == "рандом":
-            config["random_messages_enabled"] = val in ("вкл","on","1")
-            await message.reply("Рандом: " + ("вкл" if config["random_messages_enabled"] else "выкл"))
+            config["random_messages_enabled"] = val in ("вкл", "on", "1")
+            await message.reply("📢 Рандом: " + ("вкл" if config["random_messages_enabled"] else "выкл"))
         elif param == "промпт":
             new_prompt = " ".join(parts[3:]).strip()
-            if new_prompt.lower() in ("сброс","убрать","стандарт"):
-                config["custom_prompt"] = None; await message.reply("Промпт сброшен")
+            if new_prompt.lower() in ("сброс", "убрать", "стандарт"):
+                config["custom_prompt"] = None
+                await message.reply("📝 Промпт сброшен")
             elif new_prompt:
-                config["custom_prompt"] = new_prompt; await message.reply("Промпт установлен")
+                config["custom_prompt"] = new_prompt
+                await message.reply("📝 Промпт установлен")
             else:
                 await message.reply("Введите текст или 'сброс'")
+        elif param == "модель":
+            if not val:
+                lines = [f"`{i}` — {MODEL_DISPLAY.get(m, m)}" for i, m in enumerate(MODEL_LIST)]
+                cur = model_display_name(config.get("model"))
+                msg = (
+                    f"🧠 **Выбор модели**\n"
+                    f"Текущая: {cur}\n\n"
+                    + "\n".join(lines) +
+                    "\n\n`кульш конфиг модель <номер>` — установить\n"
+                    "`кульш конфиг модель авто` — авто (перебирать все)"
+                )
+                await message.reply(msg)
+            elif val in ("авто", "auto"):
+                config["model"] = None
+                await message.reply("🧠 Модель: 🎲 авто (все по очереди)")
+            else:
+                try:
+                    idx = int(val)
+                    if 0 <= idx < len(MODEL_LIST):
+                        config["model"] = MODEL_LIST[idx]
+                        await message.reply(f"🧠 Модель: {MODEL_DISPLAY.get(MODEL_LIST[idx], MODEL_LIST[idx])}")
+                    else:
+                        await message.reply("❌ Неверный номер. Список: `кульш конфиг модель`")
+                except ValueError:
+                    await message.reply("❌ Введите номер или 'авто'.")
         elif param == "сброс_памяти":
             if chat_id in long_term_memory:
-                del long_term_memory[chat_id]; save_long_term_memory(long_term_memory)
+                del long_term_memory[chat_id]
+                save_long_term_memory(long_term_memory)
             chat_memories[chat_id] = deque(maxlen=20)
             chat_media_history[chat_id].clear()
             last_random_reply.pop(chat_id, None)
             last_old_reply.pop(chat_id, None)
-            await message.reply("Память очищена (в т.ч. список последних сообщений)")
+            await message.reply("🧹 Память очищена")
         else:
-            await message.reply("Неизвестный параметр.")
+            await message.reply("❌ Неизвестный параметр. Список: `кульш конфиг`")
 
 async def ds_handle_avatar(message: discord.Message, chat_id: str) -> None:
     target = None
@@ -2228,7 +2442,6 @@ async def ds_handle_recall_media(message: discord.Message, chat_id: str, parts: 
             logger.warning(f"recall ds error: {e}")
 
 async def send_ds_ai_response(message: discord.Message, chat_id: str, answer_raw: str) -> None:
-    """Отправляет ответ ИИ в Discord, разбивая по !separate с имитацией печати."""
     raw = answer_raw or ""
 
     segments = split_by_separator(raw)
@@ -2348,7 +2561,6 @@ async def on_message(message: discord.Message) -> None:
         if message.reference.resolved.author == ds_bot.user:
             is_reply_to_bot = True
 
-    # --- Команды (только в гильдиях) ---
     if not is_dm and content_lower.startswith("кульш обновись"):
         if message.author.id not in AUTHORIZED_UPDATERS:
             await message.reply("ты кто бля, обновлять меня будешь?"); return
