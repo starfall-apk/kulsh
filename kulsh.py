@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.27.1 (model picker, dynamic config, delete on apply, 503->next model)
+# Kulsh GPT | v2.27.3 (3.6-flash, log send fix, log intro)
 # by (main author):
 #     starfall-apk
 # coauthor & bot hosting:
@@ -92,6 +92,7 @@ DS_SERIES_TARGET_USER_ID = 1364588699589021890
 MODEL_LIST = [
     "gemini-3.8-flash",
     "gemini-3.7-flash",
+    "gemini-3.6-flash",
     "gemini-3.5-flash",
     "gemini-3.5-flash-lite",
     "gemini-2.5-flash",
@@ -105,6 +106,7 @@ MODEL_LIST = [
 MODEL_DISPLAY: dict[str, str] = {
     "gemini-3.8-flash":              "🚀 3.8 Flash",
     "gemini-3.7-flash":              "⚡ 3.7 Flash",
+    "gemini-3.6-flash":              "🌠 3.6 Flash",
     "gemini-3.5-flash":              "💫 3.5 Flash",
     "gemini-3.5-flash-lite":         "✨ 3.5 Flash Lite",
     "gemini-2.5-flash":              "🌟 2.5 Flash",
@@ -119,6 +121,8 @@ def model_display_name(model: str | None) -> str:
     if not model:
         return "🎲 авто (все подряд)"
     return MODEL_DISPLAY.get(model, model)
+
+LOG_INTRO = "🍷🗿 Вот логи сервера, босс:"
 
 # voice_recv
 try:
@@ -162,9 +166,7 @@ chat_media_history: dict[str, deque[dict[str, Any]]] = defaultdict(lambda: deque
 last_random_reply: dict[str, float] = {}
 last_old_reply: dict[str, float] = {}
 
-# Одно динамически редактируемое сообщение-конфиг на чат (в TG)
 config_msg_ids: dict[str, int] = {}
-# ID сообщения-команды, которым пользователь открыл конфиг (для удаления при "Применить")
 config_trigger_msg_ids: dict[str, int] = {}
 
 DONATIONS_FILE = 'donations.json'
@@ -238,6 +240,44 @@ def get_chat_config(chat_id: str) -> dict:
 
 def set_chat_config(chat_id: str, key: str, value: Any) -> None:
     chat_configs[chat_id][key] = value
+
+# ============================================================
+# ЧТЕНИЕ ХВОСТА ЛОГА
+# ============================================================
+def read_log_tail(max_lines: int = 20) -> str:
+    """Читает последние max_lines строк из bot.log без обрезаний."""
+    try:
+        with open('bot.log', 'r', encoding='utf-8', errors='replace') as f:
+            lines = f.readlines()
+        if not lines:
+            return "Логи пусты."
+        return "".join(lines[-max_lines:]).rstrip('\n')
+    except FileNotFoundError:
+        return "Файл bot.log не найден."
+    except Exception as e:
+        return f"Ошибка чтения логов: {e}"
+
+def chunk_text(text: str, size: int) -> list[str]:
+    """Режет текст на чанки по size символов, не ломая строки посередине, если можно."""
+    if not text:
+        return [""]
+    if len(text) <= size:
+        return [text]
+    chunks: list[str] = []
+    current = ""
+    for line in text.splitlines(keepends=True):
+        if len(current) + len(line) <= size:
+            current += line
+        else:
+            if current:
+                chunks.append(current)
+            while len(line) > size:
+                chunks.append(line[:size])
+                line = line[size:]
+            current = line
+    if current:
+        chunks.append(current)
+    return chunks
 
 # ============================================================
 # ПАМЯТЬ ЧАТА
@@ -641,7 +681,6 @@ async def ask_ai_async(
         "contents": contents
     }
 
-    # Приоритет: выбранная в чате модель, затем все остальные
     preferred_model = None
     if chat_id:
         try:
@@ -660,7 +699,7 @@ async def ask_ai_async(
     total_max = len(models_to_try) * len(AI_KEYS)
 
     for model_idx, model_name in enumerate(models_to_try):
-        backoff = 2 ** min(model_idx, 4)  # 1, 2, 4, 8, 16 — не растём бесконечно
+        backoff = 2 ** min(model_idx, 4)
         for key_idx, api_key in enumerate(AI_KEYS):
             total_attempt += 1
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
@@ -671,15 +710,14 @@ async def ask_ai_async(
                     async with session.post(url, json=payload_base, timeout=45) as resp:
                         status = resp.status
 
-                        # ---- 503: меняем МОДЕЛЬ, не тратим остальные ключи ----
                         if status == 503:
                             logger.warning(f"503 на {model_name} — переключаюсь на другую модель")
-                            break  # выходим из цикла по ключам, идём к следующей модели
+                            break
 
                         if status == 429:
                             logger.warning(f"Модель {model_name} ключ {api_key[:4]}... вернула 429.")
                             await asyncio.sleep(backoff)
-                            continue  # следующий ключ той же модели
+                            continue
 
                         if status == 400:
                             text = await resp.text()
@@ -687,7 +725,6 @@ async def ask_ai_async(
                             return "Ошибка запроса к API (400). Проверь логи."
 
                         if status >= 500:
-                            # прочие 5xx (не 503) — как раньше, меняем ключ
                             logger.warning(f"Модель {model_name} ключ {api_key[:4]}... вернула {status}.")
                             await asyncio.sleep(backoff)
                             continue
@@ -1171,7 +1208,7 @@ async def create_battle_infographic(photo1_bytes: bytes, photo2_bytes: bytes, da
 
     output = BytesIO(); image.save(output, format="PNG"); output.seek(0)
     return output
-
+    
 async def get_looksmaxxing_data(photo_bytes: bytes, include_advice: bool, lang: str = "en") -> dict[str, Any]:
     if lang == "ru":
         prompt = (
@@ -1450,10 +1487,8 @@ def build_model_keyboard(chat_id: str) -> InlineKeyboardMarkup:
     config = get_chat_config(chat_id)
     current = config.get("model")
     kb = InlineKeyboardMarkup()
-    # Авто — первой строкой
     auto_label = f"{'🔘' if not current else '▫️'} 🎲 Авто (все по очереди)"
     kb.row(InlineKeyboardButton(auto_label, callback_data="cfg:model_set:auto"))
-    # По две модели в ряд
     row: list[InlineKeyboardButton] = []
     for idx, model in enumerate(MODEL_LIST):
         mark = "🔘" if current == model else "▫️"
@@ -1491,7 +1526,6 @@ async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
     chat_id = f"tg_{call.message.chat.id}"
     config = get_chat_config(chat_id)
 
-    # Проверка прав
     if call.message.chat.type != 'private':
         try:
             member = await tg_bot.get_chat_member(call.message.chat.id, call.from_user.id)
@@ -1506,7 +1540,6 @@ async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
     action = parts[1] if len(parts) > 1 else ""
     toast = "Обновлено"
 
-    # --- Установка модели ---
     if action == "model_set":
         value = parts[2] if len(parts) > 2 else "auto"
         if value == "auto":
@@ -1535,7 +1568,6 @@ async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
         await tg_bot.answer_callback_query(call.id, toast)
         return
 
-    # --- Открыть список моделей ---
     if action == "model":
         try:
             await tg_bot.edit_message_text(
@@ -1550,7 +1582,6 @@ async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
         await tg_bot.answer_callback_query(call.id)
         return
 
-    # --- Назад из списка моделей ---
     if action == "model_back":
         try:
             await tg_bot.edit_message_text(
@@ -1565,14 +1596,11 @@ async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
         await tg_bot.answer_callback_query(call.id)
         return
 
-    # --- Применить и закрыть ---
     if action == "apply":
-        # Удаляем сообщение-конфиг
         try:
             await tg_bot.delete_message(call.message.chat.id, call.message.message_id)
         except Exception as e:
             logger.warning(f"delete config msg fail: {e}")
-        # Удаляем сообщение-команду пользователя
         trig_id = config_trigger_msg_ids.pop(chat_id, None)
         if trig_id:
             try:
@@ -1583,7 +1611,6 @@ async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
         await tg_bot.answer_callback_query(call.id, "Готово ✅")
         return
 
-    # --- Обычные переключатели ---
     if action == "series":
         config["series_reminder_enabled"] = not config["series_reminder_enabled"]
     elif action == "stickers":
@@ -1697,15 +1724,12 @@ async def handle_successful_payment(message: telebot.types.Message) -> None:
 
 # -------- Хелперы для команд в TG --------
 async def tg_handle_config(message: telebot.types.Message, chat_id: str) -> None:
-    """Открывает (или переоткрывает) единственное динамическое сообщение-конфиг."""
     if not await _can_manage_tg_config(message):
         await reply_tg_html(message, "только админы могут менять конфиг")
         return
 
-    # Запоминаем id команды пользователя, чтобы удалить при "Применить"
     config_trigger_msg_ids[chat_id] = message.message_id
 
-    # Если предыдущее сообщение-конфиг уже есть — удаляем его
     old_id = config_msg_ids.get(chat_id)
     if old_id:
         try:
@@ -1980,10 +2004,28 @@ async def handle_tg_text(message: telebot.types.Message) -> None:
 
     if tl.startswith("кульш логи"):
         try:
-            with open('bot.log', 'r', encoding='utf-8') as f:
-                lines = f.readlines()
-            tail = "".join(lines[-20:]) or "Логи пусты."
-            await tg_bot.send_document(message.chat.id, InputFile(open('bot.log','rb')), caption=f"Логи:\n{tail[:900]}")
+            tail = read_log_tail(20)
+            # Отправляем файл bot.log + вступление + последние строки (без обрезаний)
+            try:
+                with open('bot.log', 'rb') as logf:
+                    await tg_bot.send_document(
+                        message.chat.id,
+                        InputFile(logf),
+                        caption=f"{LOG_INTRO}\n\n{tail}"
+                    )
+            except FileNotFoundError:
+                # Файла нет — только текст
+                await send_tg_html(message.chat.id, f"{LOG_INTRO}\n\n{tail}", reply_to=message.message_id)
+                return
+            # Если хвост не влез в caption (>1024 символов у TG) — досылаем отдельными сообщениями
+            tg_caption_limit = 1024
+            intro_len = len(LOG_INTRO) + 2
+            if intro_len + len(tail) > tg_caption_limit:
+                for chunk in chunk_text(tail, 3900):
+                    try:
+                        await tg_bot.send_message(message.chat.id, f"<pre>{html.escape(chunk)}</pre>", parse_mode='HTML')
+                    except Exception:
+                        await tg_bot.send_message(message.chat.id, chunk)
         except Exception as e:
             await reply_tg_html(message, f"Ошибка чтения логов: {e}")
         return
@@ -2301,7 +2343,6 @@ async def ds_handle_config(message: discord.Message, chat_id: str, parts: list[s
         await message.reply("только админы могут менять конфиг")
         return
 
-    # --- Показ конфига (без доп. параметров) ---
     if len(parts) == 2:
         series = "✅ вкл" if config["series_reminder_enabled"] else "❌ выкл"
         stickers = "✅ вкл" if config["stickers_enabled"] else "❌ выкл"
@@ -2615,9 +2656,20 @@ async def on_message(message: discord.Message) -> None:
         if message.author.id not in AUTHORIZED_UPDATERS:
             await message.reply("ты кто бля"); return
         try:
-            with open('bot.log','r',encoding='utf-8') as f:
-                tail = "".join(f.readlines()[-20:]) or "Логи пусты."
-            await message.reply(f"Логи, босс:\n```text\n{tail}\n```", file=discord.File('bot.log'))
+            tail = read_log_tail(20)
+            # Пытаемся отправить весь файл как вложение + вступление + хвост без обрезаний
+            try:
+                await message.reply(
+                    content=f"{LOG_INTRO}\n```\n{tail}\n```" if len(tail) <= 1900 else LOG_INTRO,
+                    file=discord.File('bot.log')
+                )
+            except FileNotFoundError:
+                await message.reply(f"{LOG_INTRO}\n```\n{tail}\n```" if len(tail) <= 1900 else f"{LOG_INTRO}\n\n{tail}")
+                return
+            # Если хвост длинный — шлём чанками отдельными сообщениями
+            if len(tail) > 1900:
+                for chunk in chunk_text(tail, 1900):
+                    await message.channel.send(f"```\n{chunk}\n```")
         except Exception as e:
             await message.reply(f"Ошибка: {e}")
         return
