@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.25.1 (natural talk, user identity, HTML formatting, utilities, inline config)
+# Kulsh GPT | v2.26.0 (natural talk, user identity, HTML formatting, utilities, inline config, human-like typing)
 # by (main author):
 #     starfall-apk
 # coauthor & bot hosting:
@@ -231,6 +231,7 @@ def add_user_memory(
     user_id: int | str,
     text: str,
     media: list[str] | None = None,
+    message_id: int | None = None,
 ) -> None:
     mem = get_chat_memory(chat_id)
     mem.append({
@@ -242,14 +243,16 @@ def add_user_memory(
         "id": str(user_id),
         "text": text or "",
         "media": media or [],
+        "message_id": message_id,
     })
 
-def add_bot_memory(chat_id: str, text: str) -> None:
+def add_bot_memory(chat_id: str, text: str, message_id: int | None = None) -> None:
     mem = get_chat_memory(chat_id)
     mem.append({
         "type": "bot",
         "time": msk_time_str(),
         "text": text or "",
+        "message_id": message_id,
     })
 
 def memory_to_messages(mem_deque: deque[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -312,7 +315,10 @@ async def send_tg_html(chat_id: int, text: str, reply_to: int | None = None) -> 
             logger.warning(f"HTML-отправка не удалась, отправляю как plain: {e}")
             plain = re.sub(r'<[^>]+>', '', chunk)
             if i == 0 and reply_to is not None:
-                await tg_bot.send_message(chat_id, plain, reply_to_message_id=reply_to)
+                try:
+                    await tg_bot.send_message(chat_id, plain, reply_to_message_id=reply_to)
+                except Exception:
+                    await tg_bot.send_message(chat_id, plain)
             else:
                 await tg_bot.send_message(chat_id, plain)
 
@@ -364,6 +370,70 @@ async def extract_video_frame(video_bytes: bytes, ext_hint: str = ".mp4") -> byt
                     os.unlink(p)
                 except Exception:
                     pass
+
+# ============================================================
+# РЕАЛИСТИЧНАЯ ПЕЧАТЬ (typing indicator + задержка)
+# ============================================================
+# Настройки скорости "печати" Кульша. Он — ИИ, поэтому печатает
+# намного быстрее среднего человека, но с реалистичным рандомом.
+TYPING_MS_PER_CHAR_MIN = 0.018   # 18 мс/символ — очень быстро
+TYPING_MS_PER_CHAR_MAX = 0.050   # 50 мс/символ — быстро, но по-человечески
+TYPING_MIN_DELAY = 0.35          # минимум секунды даже на очень короткое сообщение
+TYPING_MAX_DELAY = 5.0           # максимум секунд на одно сообщение
+TYPING_JITTER_MIN = 0.85         # случайный коэффициент "быстрее"
+TYPING_JITTER_MAX = 1.25         # случайный коэффициент "медленнее"
+
+def calc_typing_delay(text: str) -> float:
+    """Считает задержку печати для одного сообщения.
+
+    Формула: len(text) * random(per_char) * jitter, с обрезкой по min/max.
+    """
+    if not text:
+        return TYPING_MIN_DELAY
+    n = len(text)
+    per_char = random.uniform(TYPING_MS_PER_CHAR_MIN, TYPING_MS_PER_CHAR_MAX)
+    delay = n * per_char
+    delay *= random.uniform(TYPING_JITTER_MIN, TYPING_JITTER_MAX)
+    if delay < TYPING_MIN_DELAY:
+        delay = TYPING_MIN_DELAY
+    if delay > TYPING_MAX_DELAY:
+        delay = TYPING_MAX_DELAY
+    return delay
+
+async def typing_with_delay_tg(chat_id: int, text: str, delay: float | None = None) -> None:
+    """Показывает 'печатает...' в TG, пока идёт рассчитанная задержка.
+
+    Telegram сбрасывает индикатор примерно через 5 секунд, поэтому
+    периодически обновляем его.
+    """
+    if delay is None:
+        delay = calc_typing_delay(text)
+    elapsed = 0.0
+    chunk = 4.0
+    while elapsed < delay:
+        try:
+            await tg_bot.send_chat_action(chat_id, 'typing')
+        except Exception as e:
+            logger.debug(f"typing action tg fail: {e}")
+        step = min(chunk, delay - elapsed)
+        await asyncio.sleep(step)
+        elapsed += step
+
+async def typing_with_delay_ds(channel, text: str, delay: float | None = None) -> None:
+    """Показывает 'печатает...' в Discord, пока идёт рассчитанная задержка."""
+    if delay is None:
+        delay = calc_typing_delay(text)
+    elapsed = 0.0
+    chunk = 7.0  # discord.typing сам обновляется внутри контекста
+    while elapsed < delay:
+        step = min(chunk, delay - elapsed)
+        try:
+            async with channel.typing():
+                await asyncio.sleep(step)
+        except Exception as e:
+            logger.debug(f"typing action ds fail: {e}")
+            await asyncio.sleep(step)
+        elapsed += step
 
 # ============================================================
 # УТИЛИТЫ-МАРКЕРЫ (обрабатывают !avatar, !recall_media, !sticker, !gif, !separate)
@@ -469,6 +539,18 @@ async def ask_ai_async(
             "используй его дальше. Если по контексту непонятно, кто говорит — не догадывайся вслепую, спроси или "
             "обращайся нейтрально. Отвечай ТОЛЬКО последнему написавшему, не путай его с предыдущими собеседниками."
             "\n\n"
+            "РАЗБИВКА НА СООБЩЕНИЯ (очень важно для реализма). Живые люди в чатах почти никогда не пишут длинные "
+            "монологи одним сообщением. Ты можешь и должен разбивать свой ответ на 2-4 отдельных коротких сообщения, "
+            "если это звучит естественно, будто ты пишешь в живом чате, а не выдаёшь портянку. Между частями ставь "
+            "маркер !separate (слитно, без пробелов). Примеры:\n"
+            "• 'ну короч!separateчтобы у тебя в хойке дивки не подыхали от истощения, переключи приоритет снабжения "
+            "с иконки лошади на иконку двух грузовиков!separateи вообще, у тебя там ещё с топливом жопа'\n"
+            "• 'ахахаха!separateты чё реально это сделал?separateну ты даёшь'\n"
+            "• 'слушай, я тут подумал...!separateладно, забей, потом скажу'\n"
+            "• 'да не, норм тема!separateя бы сам так сделал'\n"
+            "Не бойся разбивать ответ даже на короткие куски типа 'ну', 'ага', 'короч', 'слушай', 'хм' — так живёт "
+            "реальный чат. НО не превращай это в спам из 10 сообщений подряд, 2-4 частей обычно достаточно. Если "
+            "ответ совсем короткий (1-2 слова) — можно вообще не разбивать.\n\n"
             "УТИЛИТЫ. В самом конце ответа (в крайнем случае — в начале) ты можешь поставить служебные маркеры "
             "(они будут скрыты из текста и сработают как команда), пиши их строго слитно, без пробелов и без точки "
             "перед ними:\n"
@@ -476,7 +558,7 @@ async def ask_ai_async(
             "• !recall_media — вспомнить последние медиа в чате;\n"
             "• !sticker — отправить стикер в Telegram (или гифку в Discord);\n"
             "• !gif — то же самое, только гифка (в Discord);\n"
-            "• !separate — если хочешь разделить ответ на несколько отдельных сообщений. Пример: 'ага, понял!separateа вот ещё что...'\n"
+            "• !separate — разделить ответ на несколько отдельных сообщений (см. выше).\n"
             "Не пиши эти маркеры просто так. Только когда реально хочешь вызвать утилиту. "
             "Никогда не пиши '! avatar' с пробелом, никогда не пиши точки внутри маркера.\n\n"
             "Если хочешь посмотреть аватарку собеседника, можешь написать !avatar — это вызовет утилиту в боте. "
@@ -498,7 +580,8 @@ async def ask_ai_async(
     if context_type == "random":
         prompt = (
             "Напиши рандомную мысль или шутку в чат, которую ты ранее не придумывал. Например, про кого-то из своих "
-            "кентов, или про что-то происходящее вокруг. Без разметки markdown."
+            "кентов, или про что-то происходящее вокруг. Без разметки markdown. Можно разбить на 1-2 сообщения через "
+            "!separate, если хочется."
         )
     elif context_type == "caption":
         prompt = "Пользователь попросил фото. Придумай короткую подпись к картинке в своём стиле."
@@ -1262,7 +1345,7 @@ if VOICE_RECOGNITION_ENABLED and VOICE_RECV_AVAILABLE:
 
         async def handle_voice_command(self, user, text):
             chat_id = f"ds_guild_{self.guild.id}"
-            add_user_memory(chat_id, "DS-Voice", user.display_name, user.name, user.id, text, ["voice"])
+            add_user_memory(chat_id, "DS-Voice", user.display_name, user.name, user.id, text, ["voice"], None)
             messages = memory_to_messages(get_chat_memory(chat_id))
             answer = await ask_ai_async(messages=messages)
             add_bot_memory(chat_id, answer)
@@ -1597,20 +1680,43 @@ async def tg_handle_recall_media(message: telebot.types.Message, chat_id: str, p
 
 # -------- Основной обработчик текста TG --------
 async def send_tg_ai_response(message: telebot.types.Message, chat_id: str, answer_raw: str) -> None:
-    """Отправляет ответ ИИ, разделяя по !separate и исполняя утилиты."""
+    """Отправляет ответ ИИ, разбивая его по !separate и имитируя печать.
+
+    Между частями показывается индикатор 'печатает...' в течение
+    calc_typing_delay(текст) секунд.
+    """
     segments = split_by_separator(answer_raw or "") or [answer_raw or ""]
+
+    clean_segments: list[str] = []
     all_markers: list[str] = []
-    first = True
     for seg in segments:
         clean_seg, markers = extract_utility_markers(seg)
         all_markers.extend(markers)
         if clean_seg:
-            await send_tg_html(
-                message.chat.id, clean_seg,
-                reply_to=message.message_id if first else None
-            )
-            add_bot_memory(chat_id, clean_seg)
-            first = False
+            clean_segments.append(clean_seg)
+
+    if not clean_segments:
+        # нечего отправлять (например, только маркеры-утилиты)
+        for m in all_markers:
+            try:
+                await execute_utility_tg(message, m, chat_id)
+            except Exception as e:
+                logger.warning(f"utility {m} failed: {e}")
+        return
+
+    for i, clean_seg in enumerate(clean_segments):
+        # Реалистичная задержка "печати" до отправки сообщения
+        try:
+            await typing_with_delay_tg(message.chat.id, clean_seg)
+        except Exception as e:
+            logger.debug(f"typing delay tg fail: {e}")
+
+        if i == 0:
+            await send_tg_html(message.chat.id, clean_seg, reply_to=message.message_id)
+        else:
+            await send_tg_html(message.chat.id, clean_seg)
+        add_bot_memory(chat_id, clean_seg)
+
     for m in all_markers:
         try:
             await execute_utility_tg(message, m, chat_id)
@@ -1618,7 +1724,7 @@ async def send_tg_ai_response(message: telebot.types.Message, chat_id: str, answ
             logger.warning(f"utility {m} failed: {e}")
 
 async def maybe_reply_to_old_message_tg(message: telebot.types.Message, chat_id: str) -> None:
-    """С шансом ~12% отвечает на старое сообщение отдельным сообщением."""
+    """С шансом ~12% отвечает на старое сообщение отдельным сообщением (reply'ем)."""
     now = time.time()
     if now - last_old_reply.get(chat_id, 0) < 600:
         return
@@ -1646,7 +1752,14 @@ async def maybe_reply_to_old_message_tg(message: telebot.types.Message, chat_id:
             last_old_reply[chat_id] = now
             clean, _ = extract_utility_markers(comment)
             if clean:
-                await send_tg_html(message.chat.id, clean)
+                # Имитируем "печатает" перед отправкой
+                try:
+                    await typing_with_delay_tg(message.chat.id, clean)
+                except Exception:
+                    pass
+                # Отвечаем именно на то старое сообщение, чтобы был reply
+                old_msg_id = old.get("message_id")
+                await send_tg_html(message.chat.id, clean, reply_to=old_msg_id)
                 add_bot_memory(chat_id, clean)
     except Exception as e:
         logger.warning(f"old reply tg fail: {e}")
@@ -1707,12 +1820,12 @@ async def handle_tg_text(message: telebot.types.Message) -> None:
 
     if is_looksmaxxing_command(text):
         user_looksmaxxing_state[message.chat.id] = True
-        add_user_memory(chat_id, "TG", display_name, username, user_id, text)
+        add_user_memory(chat_id, "TG", display_name, username, user_id, text, message_id=message.message_id)
         await reply_tg_html(message, "📸 Жду фото для анализа. Отправь его с пометкой 'looksmaxxing' или просто подпиши.")
         return
 
     if is_battle_command(text):
-        add_user_memory(chat_id, "TG", display_name, username, user_id, text)
+        add_user_memory(chat_id, "TG", display_name, username, user_id, text, message_id=message.message_id)
         await reply_tg_html(message, "Для баттла пришлите два фото в одном сообщении (альбомом) с командой 'кульш баттл'.")
         return
 
@@ -1728,11 +1841,11 @@ async def handle_tg_text(message: telebot.types.Message) -> None:
             photo_url = await get_random_photo_url()
             caption = await ask_ai_async(prompt=None, context_type="caption", chat_id=chat_id)
             await tg_bot.send_photo(message.chat.id, photo_url, caption=caption, reply_to_message_id=message.message_id)
-            add_user_memory(chat_id, "TG", display_name, username, user_id, text)
+            add_user_memory(chat_id, "TG", display_name, username, user_id, text, message_id=message.message_id)
             add_bot_memory(chat_id, f"[отправил фото: {caption}]")
             return
 
-        add_user_memory(chat_id, "TG", display_name, username, user_id, text)
+        add_user_memory(chat_id, "TG", display_name, username, user_id, text, message_id=message.message_id)
         messages = memory_to_messages(get_chat_memory(chat_id))
         answer = await ask_ai_async(messages=messages, chat_id=chat_id)
         await send_tg_ai_response(message, chat_id, answer)
@@ -1741,7 +1854,7 @@ async def handle_tg_text(message: telebot.types.Message) -> None:
         return
 
     # Не обращён к боту — просто пишем в память
-    add_user_memory(chat_id, "TG", display_name, username, user_id, text)
+    add_user_memory(chat_id, "TG", display_name, username, user_id, text, message_id=message.message_id)
 
     if await should_random_reply(chat_id):
         try:
@@ -1880,7 +1993,7 @@ async def handle_tg_media(message: telebot.types.Message) -> None:
                     await tg_bot.send_message(message.chat.id, re.sub(r'<[^>]+>', '', chunk))
 
             await tg_bot.delete_message(message.chat.id, status_msg.message_id)
-            add_user_memory(chat_id, "TG", display_name, username, user_id, f"[looksmaxxing фото] {caption}", ["photo"])
+            add_user_memory(chat_id, "TG", display_name, username, user_id, f"[looksmaxxing фото] {caption}", ["photo"], message_id=message.message_id)
             add_bot_memory(chat_id, "[looksmaxxing отчёт]")
         except Exception as e:
             logger.error(f"Ошибка в looksmaxxing: {e}")
@@ -1892,7 +2005,7 @@ async def handle_tg_media(message: telebot.types.Message) -> None:
     addressed = bool(is_reply_to_bot or re.search(r'(?i)\bкульш\b', caption) or is_dm)
 
     if not addressed:
-        add_user_memory(chat_id, "TG", display_name, username, user_id, caption or "", [media_tag or "медиа"])
+        add_user_memory(chat_id, "TG", display_name, username, user_id, caption or "", [media_tag or "медиа"], message_id=message.message_id)
         if await should_random_reply(chat_id):
             answer = await ask_ai_async(
                 context_type="observer",
@@ -1928,7 +2041,7 @@ async def handle_tg_media(message: telebot.types.Message) -> None:
         logger.warning(f"Не смог скачать медиа: {e}")
 
     prompt = caption.strip() or "че на этом?"
-    add_user_memory(chat_id, "TG", display_name, username, user_id, f"{prompt} [с медиа: {media_tag}]", [media_tag or "медиа"])
+    add_user_memory(chat_id, "TG", display_name, username, user_id, f"{prompt} [с медиа: {media_tag}]", [media_tag or "медиа"], message_id=message.message_id)
     messages = memory_to_messages(get_chat_memory(chat_id))
     answer = await ask_ai_async(messages=messages, image_bytes=image_bytes, image_mime=image_mime, chat_id=chat_id)
     await send_tg_ai_response(message, chat_id, answer)
@@ -2115,22 +2228,41 @@ async def ds_handle_recall_media(message: discord.Message, chat_id: str, parts: 
             logger.warning(f"recall ds error: {e}")
 
 async def send_ds_ai_response(message: discord.Message, chat_id: str, answer_raw: str) -> None:
+    """Отправляет ответ ИИ в Discord, разбивая по !separate с имитацией печати."""
     segments = split_by_separator(answer_raw or "") or [answer_raw or ""]
+
+    clean_segments: list[str] = []
     all_markers: list[str] = []
-    first = True
     for seg in segments:
         clean_seg, markers = extract_utility_markers(seg)
         all_markers.extend(markers)
         if clean_seg:
-            if first:
-                try:
-                    await message.reply(clean_seg)
-                except Exception:
-                    await message.channel.send(clean_seg)
-                first = False
-            else:
+            clean_segments.append(clean_seg)
+
+    if not clean_segments:
+        for m in all_markers:
+            try:
+                await execute_utility_ds(message, m, chat_id)
+            except Exception as e:
+                logger.warning(f"ds utility {m} failed: {e}")
+        return
+
+    for i, clean_seg in enumerate(clean_segments):
+        # Реалистичная задержка "печати" до отправки сообщения
+        try:
+            await typing_with_delay_ds(message.channel, clean_seg)
+        except Exception as e:
+            logger.debug(f"typing delay ds fail: {e}")
+
+        if i == 0:
+            try:
+                await message.reply(clean_seg)
+            except Exception:
                 await message.channel.send(clean_seg)
-            add_bot_memory(chat_id, clean_seg)
+        else:
+            await message.channel.send(clean_seg)
+        add_bot_memory(chat_id, clean_seg)
+
     for m in all_markers:
         try:
             await execute_utility_ds(message, m, chat_id)
@@ -2144,7 +2276,7 @@ async def maybe_reply_to_old_message_ds(message: discord.Message, chat_id: str) 
     if random.random() > 0.12:
         return
     mem = list(get_chat_memory(chat_id))
-    candidates = [e for e in mem[:-2] if e.get("type") == "user" and e.get("text")]
+    candidates = [e for e in mem[:-2] if e.get("type") == "user" and e.get("text") and e.get("message_id")]
     if not candidates:
         return
     old = random.choice(candidates)
@@ -2162,9 +2294,24 @@ async def maybe_reply_to_old_message_ds(message: discord.Message, chat_id: str) 
         if comment and comment.strip() and comment.strip().upper() != "НЕТ":
             last_old_reply[chat_id] = now
             clean, _ = extract_utility_markers(comment)
-            if clean:
+            if not clean:
+                return
+            try:
+                await typing_with_delay_ds(message.channel, clean)
+            except Exception:
+                pass
+            old_msg_id = old.get("message_id")
+            sent_as_reply = False
+            if old_msg_id:
+                try:
+                    old_msg = await message.channel.fetch_message(int(old_msg_id))
+                    await old_msg.reply(clean)
+                    sent_as_reply = True
+                except Exception as e:
+                    logger.warning(f"DS old reply fetch failed (id={old_msg_id}): {e}")
+            if not sent_as_reply:
                 await message.channel.send(clean)
-                add_bot_memory(chat_id, clean)
+            add_bot_memory(chat_id, clean)
     except Exception as e:
         logger.warning(f"old reply ds fail: {e}")
 
@@ -2306,12 +2453,12 @@ async def on_message(message: discord.Message) -> None:
     # --- ВАЖНО: проверка PSL/battle должна учитывать наличие вложений.
     # Раньше тут стоял безусловный return, из-за чего фото до обработки не доходило.
     if is_looksmaxxing_command(message.content) and len(message.attachments) == 0:
-        add_user_memory(chat_id, "DS", display_name, username, user_id, message.content)
+        add_user_memory(chat_id, "DS", display_name, username, user_id, message.content, message_id=message.id)
         await message.reply("📸 Пришли фото с командой `кульш psl` (или прикрепи картинку).")
         return
 
     if is_battle_command(message.content) and len(message.attachments) == 0:
-        add_user_memory(chat_id, "DS", display_name, username, user_id, message.content)
+        add_user_memory(chat_id, "DS", display_name, username, user_id, message.content, message_id=message.id)
         await message.reply("Для баттла пришлите два фото в одном сообщении.")
         return
 
@@ -2342,7 +2489,7 @@ async def on_message(message: discord.Message) -> None:
                 )
                 await message.reply(file=discord.File(fp=img, filename="battle.png"), content=report[:1900])
                 await status.delete()
-                add_user_memory(chat_id, "DS", display_name, username, user_id, "[battle]")
+                add_user_memory(chat_id, "DS", display_name, username, user_id, "[battle]", message_id=message.id)
                 add_bot_memory(chat_id, "[battle результат]")
             except Exception as e:
                 logger.error(f"DS battle error: {e}")
@@ -2375,7 +2522,7 @@ async def on_message(message: discord.Message) -> None:
                 await message.reply(file=discord.File(fp=infographic, filename="psl.png"), content=report[:1900])
                 if len(report) > 1900:
                     await message.channel.send(report[1900:])
-                add_user_memory(chat_id, "DS", display_name, username, user_id, f"[looksmaxxing] {message.content}")
+                add_user_memory(chat_id, "DS", display_name, username, user_id, f"[looksmaxxing] {message.content}", message_id=message.id)
                 add_bot_memory(chat_id, "[looksmaxxing report]")
             except Exception as e:
                 logger.error(f"DS looksmaxxing error: {e}")
@@ -2402,7 +2549,7 @@ async def on_message(message: discord.Message) -> None:
                     if frame:
                         img_bytes = frame; img_mime = "image/jpeg"
                 prompt = message.content.strip() or "че на этом?"
-                add_user_memory(chat_id, "DS", display_name, username, user_id, f"{prompt} [с медиа]", ["photo" if image_attachments else "video"])
+                add_user_memory(chat_id, "DS", display_name, username, user_id, f"{prompt} [с медиа]", ["photo" if image_attachments else "video"], message_id=message.id)
                 messages = memory_to_messages(get_chat_memory(chat_id))
                 answer = await ask_ai_async(messages=messages, image_bytes=img_bytes, image_mime=img_mime, chat_id=chat_id)
                 if message.guild and message.guild.voice_client and message.guild.voice_client.is_connected():
@@ -2421,11 +2568,11 @@ async def on_message(message: discord.Message) -> None:
             if wants_photo(message.content):
                 photo_url = await get_random_photo_url()
                 caption = await ask_ai_async(prompt=None, context_type="caption", chat_id=chat_id)
-                add_user_memory(chat_id, "DS", display_name, username, user_id, message.content)
+                add_user_memory(chat_id, "DS", display_name, username, user_id, message.content, message_id=message.id)
                 add_bot_memory(chat_id, f"[фото: {caption}]")
                 await message.reply(f"{caption}\n{photo_url}")
                 return
-            add_user_memory(chat_id, "DS", display_name, username, user_id, message.content)
+            add_user_memory(chat_id, "DS", display_name, username, user_id, message.content, message_id=message.id)
             messages = memory_to_messages(get_chat_memory(chat_id))
             answer = await ask_ai_async(messages=messages, chat_id=chat_id)
             if message.guild and message.guild.voice_client and message.guild.voice_client.is_connected():
@@ -2437,7 +2584,7 @@ async def on_message(message: discord.Message) -> None:
             asyncio.create_task(maybe_reply_to_old_message_ds(message, chat_id))
         return
 
-    add_user_memory(chat_id, "DS", display_name, username, user_id, message.content)
+    add_user_memory(chat_id, "DS", display_name, username, user_id, message.content, message_id=message.id)
     if await should_random_reply(chat_id):
         try:
             answer = await ask_ai_async(
