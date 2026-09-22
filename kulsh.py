@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.26.0 (natural talk, user identity, HTML formatting, utilities, inline config, human-like typing)
+# Kulsh GPT | v2.26.1 (natural talk, human-like typing, split messages fix)
 # by (main author):
 #     starfall-apk
 # coauthor & bot hosting:
@@ -374,20 +374,15 @@ async def extract_video_frame(video_bytes: bytes, ext_hint: str = ".mp4") -> byt
 # ============================================================
 # РЕАЛИСТИЧНАЯ ПЕЧАТЬ (typing indicator + задержка)
 # ============================================================
-# Настройки скорости "печати" Кульша. Он — ИИ, поэтому печатает
-# намного быстрее среднего человека, но с реалистичным рандомом.
-TYPING_MS_PER_CHAR_MIN = 0.018   # 18 мс/символ — очень быстро
-TYPING_MS_PER_CHAR_MAX = 0.050   # 50 мс/символ — быстро, но по-человечески
-TYPING_MIN_DELAY = 0.35          # минимум секунды даже на очень короткое сообщение
-TYPING_MAX_DELAY = 5.0           # максимум секунд на одно сообщение
-TYPING_JITTER_MIN = 0.85         # случайный коэффициент "быстрее"
-TYPING_JITTER_MAX = 1.25         # случайный коэффициент "медленнее"
+TYPING_MS_PER_CHAR_MIN = 0.018
+TYPING_MS_PER_CHAR_MAX = 0.050
+TYPING_MIN_DELAY = 0.35
+TYPING_MAX_DELAY = 5.0
+TYPING_JITTER_MIN = 0.85
+TYPING_JITTER_MAX = 1.25
 
 def calc_typing_delay(text: str) -> float:
-    """Считает задержку печати для одного сообщения.
-
-    Формула: len(text) * random(per_char) * jitter, с обрезкой по min/max.
-    """
+    """Задержка 'печати' для одного сообщения."""
     if not text:
         return TYPING_MIN_DELAY
     n = len(text)
@@ -401,11 +396,6 @@ def calc_typing_delay(text: str) -> float:
     return delay
 
 async def typing_with_delay_tg(chat_id: int, text: str, delay: float | None = None) -> None:
-    """Показывает 'печатает...' в TG, пока идёт рассчитанная задержка.
-
-    Telegram сбрасывает индикатор примерно через 5 секунд, поэтому
-    периодически обновляем его.
-    """
     if delay is None:
         delay = calc_typing_delay(text)
     elapsed = 0.0
@@ -420,11 +410,10 @@ async def typing_with_delay_tg(chat_id: int, text: str, delay: float | None = No
         elapsed += step
 
 async def typing_with_delay_ds(channel, text: str, delay: float | None = None) -> None:
-    """Показывает 'печатает...' в Discord, пока идёт рассчитанная задержка."""
     if delay is None:
         delay = calc_typing_delay(text)
     elapsed = 0.0
-    chunk = 7.0  # discord.typing сам обновляется внутри контекста
+    chunk = 7.0
     while elapsed < delay:
         step = min(chunk, delay - elapsed)
         try:
@@ -436,16 +425,20 @@ async def typing_with_delay_ds(channel, text: str, delay: float | None = None) -
         elapsed += step
 
 # ============================================================
-# УТИЛИТЫ-МАРКЕРЫ (обрабатывают !avatar, !recall_media, !sticker, !gif, !separate)
+# МАРКЕРЫ-УТИЛИТЫ
 # ============================================================
+# ВАЖНО: НЕ используем \b, потому что в Unicode-режиме Python \w включает
+# кириллицу, и \b не срабатывает между латиницей и кириллицей.
+# Пример: "!separateвот" — между 'e' и 'в' границы слова НЕТ.
 UTILITY_PATTERNS = {
-    "avatar": re.compile(r'!\s*avatar\b', re.IGNORECASE),
-    "recall_media": re.compile(r'!\s*recall_?media\b', re.IGNORECASE),
-    "sticker": re.compile(r'!\s*sticker\b', re.IGNORECASE),
-    "gif": re.compile(r'!\s*gif\b', re.IGNORECASE),
+    "avatar": re.compile(r'!\s*avatar', re.IGNORECASE),
+    "recall_media": re.compile(r'!\s*recall_?\s*media', re.IGNORECASE),
+    "sticker": re.compile(r'!\s*sticker', re.IGNORECASE),
+    "gif": re.compile(r'!\s*gif', re.IGNORECASE),
 }
 
-SEPARATOR_PATTERN = re.compile(r'!\s*separate\b', re.IGNORECASE)
+# !separate / !seperate (частая опечатка) / ! separate
+SEPARATOR_PATTERN = re.compile(r'!\s*sep[ae]rate', re.IGNORECASE)
 
 def split_by_separator(text: str) -> list[str]:
     if not text:
@@ -461,7 +454,7 @@ def extract_utility_markers(text: str) -> tuple[str, list[str]]:
         if pat.search(text):
             markers.append(name)
         text = pat.sub('', text)
-    # чистим двойные пробелы / висящую пунктуацию
+    # Чистим двойные пробелы / висящую пунктуацию
     text = re.sub(r'[ \t]+', ' ', text)
     text = re.sub(r' +([,.!?;:])', r'\1', text)
     text = re.sub(r'\n{3,}', '\n\n', text).strip()
@@ -606,8 +599,6 @@ async def ask_ai_async(
                 encoded, _ = image_bytes_to_base64(image_bytes, image_mime)
                 parts.append({"inline_data": {"mime_type": image_mime, "data": encoded}})
             contents.append({"role": role, "parts": parts})
-        # Если задан prompt (например, для observer/random), добавляем его отдельным user-turn,
-        # чтобы (а) инструкция реально попала в запрос, (б) запрос не заканчивался на model.
         if prompt:
             contents.append({"role": "user", "parts": [{"text": prompt}]})
     elif prompt:
@@ -624,7 +615,6 @@ async def ask_ai_async(
     else:
         contents.append({"role": "user", "parts": [{"text": "че надо?"}]})
 
-    # Финальная страховка: Gemini API не принимает запросы, заканчивающиеся на model turn.
     if not contents or contents[-1].get("role") == "model":
         fallback = prompt or "продолжи"
         contents.append({"role": "user", "parts": [{"text": fallback}]})
@@ -650,7 +640,6 @@ async def ask_ai_async(
                         await asyncio.sleep(2 ** (attempt // len(AI_KEYS)))
                         continue
                     elif status == 400:
-                        # 400 из-за структуры запроса — нет смысла долбить все модели/ключи одним и тем же телом
                         text = await resp.text()
                         logger.error(f"Модель {model_name} ключ {api_key[:4]}... вернула 400: {text}.")
                         return "Ошибка запроса к API (400). Проверь логи."
@@ -1678,15 +1667,29 @@ async def tg_handle_recall_media(message: telebot.types.Message, chat_id: str, p
     if not sent_any:
         await reply_tg_html(message, "не смог переотправить последние медиа")
 
-# -------- Основной обработчик текста TG --------
+# -------- Основной обработчик ответа ИИ (TG) --------
 async def send_tg_ai_response(message: telebot.types.Message, chat_id: str, answer_raw: str) -> None:
     """Отправляет ответ ИИ, разбивая его по !separate и имитируя печать.
 
-    Между частями показывается индикатор 'печатает...' в течение
-    calc_typing_delay(текст) секунд.
+    ВАЖНО: если после сплита не осталось непустых сегментов — просто выходим,
+    (например, если ответ состоял только из !separate), НЕ отправляя сырой текст.
     """
-    segments = split_by_separator(answer_raw or "") or [answer_raw or ""]
+    raw = answer_raw or ""
 
+    # 1) Пытаемся разбить по !separate
+    segments = split_by_separator(raw)
+
+    # 2) Если сегментов нет — обрабатываем только утилиты (если есть) и выходим.
+    if not segments:
+        _, markers = extract_utility_markers(raw)
+        for m in markers:
+            try:
+                await execute_utility_tg(message, m, chat_id)
+            except Exception as e:
+                logger.warning(f"utility {m} failed: {e}")
+        return
+
+    # 3) Из каждого сегмента вырезаем утилиты-маркеры
     clean_segments: list[str] = []
     all_markers: list[str] = []
     for seg in segments:
@@ -1696,7 +1699,7 @@ async def send_tg_ai_response(message: telebot.types.Message, chat_id: str, answ
             clean_segments.append(clean_seg)
 
     if not clean_segments:
-        # нечего отправлять (например, только маркеры-утилиты)
+        # Были только служебные маркеры — выполняем утилиты, текста нет
         for m in all_markers:
             try:
                 await execute_utility_tg(message, m, chat_id)
@@ -1704,8 +1707,8 @@ async def send_tg_ai_response(message: telebot.types.Message, chat_id: str, answ
                 logger.warning(f"utility {m} failed: {e}")
         return
 
+    # 4) Отправляем каждый сегмент с имитацией печати
     for i, clean_seg in enumerate(clean_segments):
-        # Реалистичная задержка "печати" до отправки сообщения
         try:
             await typing_with_delay_tg(message.chat.id, clean_seg)
         except Exception as e:
@@ -1717,6 +1720,7 @@ async def send_tg_ai_response(message: telebot.types.Message, chat_id: str, answ
             await send_tg_html(message.chat.id, clean_seg)
         add_bot_memory(chat_id, clean_seg)
 
+    # 5) Выполняем утилиты, если были
     for m in all_markers:
         try:
             await execute_utility_tg(message, m, chat_id)
@@ -1731,7 +1735,6 @@ async def maybe_reply_to_old_message_tg(message: telebot.types.Message, chat_id:
     if random.random() > 0.12:
         return
     mem = list(get_chat_memory(chat_id))
-    # берём только сообщения пользователей, не последние два (последние — текущий диалог)
     candidates = [e for e in mem[:-2] if e.get("type") == "user" and e.get("text")]
     if not candidates:
         return
@@ -1752,12 +1755,10 @@ async def maybe_reply_to_old_message_tg(message: telebot.types.Message, chat_id:
             last_old_reply[chat_id] = now
             clean, _ = extract_utility_markers(comment)
             if clean:
-                # Имитируем "печатает" перед отправкой
                 try:
                     await typing_with_delay_tg(message.chat.id, clean)
                 except Exception:
                     pass
-                # Отвечаем именно на то старое сообщение, чтобы был reply
                 old_msg_id = old.get("message_id")
                 await send_tg_html(message.chat.id, clean, reply_to=old_msg_id)
                 add_bot_memory(chat_id, clean)
@@ -1853,7 +1854,6 @@ async def handle_tg_text(message: telebot.types.Message) -> None:
         asyncio.create_task(maybe_reply_to_old_message_tg(message, chat_id))
         return
 
-    # Не обращён к боту — просто пишем в память
     add_user_memory(chat_id, "TG", display_name, username, user_id, text, message_id=message.message_id)
 
     if await should_random_reply(chat_id):
@@ -2229,7 +2229,17 @@ async def ds_handle_recall_media(message: discord.Message, chat_id: str, parts: 
 
 async def send_ds_ai_response(message: discord.Message, chat_id: str, answer_raw: str) -> None:
     """Отправляет ответ ИИ в Discord, разбивая по !separate с имитацией печати."""
-    segments = split_by_separator(answer_raw or "") or [answer_raw or ""]
+    raw = answer_raw or ""
+
+    segments = split_by_separator(raw)
+    if not segments:
+        _, markers = extract_utility_markers(raw)
+        for m in markers:
+            try:
+                await execute_utility_ds(message, m, chat_id)
+            except Exception as e:
+                logger.warning(f"ds utility {m} failed: {e}")
+        return
 
     clean_segments: list[str] = []
     all_markers: list[str] = []
@@ -2248,7 +2258,6 @@ async def send_ds_ai_response(message: discord.Message, chat_id: str, answer_raw
         return
 
     for i, clean_seg in enumerate(clean_segments):
-        # Реалистичная задержка "печати" до отправки сообщения
         try:
             await typing_with_delay_ds(message.channel, clean_seg)
         except Exception as e:
@@ -2450,8 +2459,6 @@ async def on_message(message: discord.Message) -> None:
             await message.reply("я и так не там")
         return
 
-    # --- ВАЖНО: проверка PSL/battle должна учитывать наличие вложений.
-    # Раньше тут стоял безусловный return, из-за чего фото до обработки не доходило.
     if is_looksmaxxing_command(message.content) and len(message.attachments) == 0:
         add_user_memory(chat_id, "DS", display_name, username, user_id, message.content, message_id=message.id)
         await message.reply("📸 Пришли фото с командой `кульш psl` (или прикрепи картинку).")
