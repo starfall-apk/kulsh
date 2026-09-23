@@ -490,14 +490,15 @@ async def typing_with_delay_ds(channel, text: str, delay: float | None = None) -
 # ============================================================
 # МАРКЕРЫ-УТИЛИТЫ
 # ============================================================
+# \b после ключевого слова, чтобы не цеплять случайные "avatarwat" и т.п.
 UTILITY_PATTERNS = {
-    "avatar": re.compile(r'!\s*avatar', re.IGNORECASE),
-    "recall_media": re.compile(r'!\s*recall_?\s*media', re.IGNORECASE),
-    "sticker": re.compile(r'!\s*sticker', re.IGNORECASE),
-    "gif": re.compile(r'!\s*gif', re.IGNORECASE),
+    "avatar": re.compile(r'!\s*avatar\b', re.IGNORECASE),
+    "recall_media": re.compile(r'!\s*recall[\s_]*media\b', re.IGNORECASE),
+    "sticker": re.compile(r'!\s*sticker\b', re.IGNORECASE),
+    "gif": re.compile(r'!\s*gif\b', re.IGNORECASE),
 }
 
-SEPARATOR_PATTERN = re.compile(r'!\s*sep[ae]rate', re.IGNORECASE)
+SEPARATOR_PATTERN = re.compile(r'!\s*sep[ae]rate\b', re.IGNORECASE)
 
 def split_by_separator(text: str) -> list[str]:
     if not text:
@@ -506,27 +507,39 @@ def split_by_separator(text: str) -> list[str]:
     return [p.strip() for p in parts if p and p.strip()]
 
 def extract_utility_markers(text: str) -> tuple[str, list[str]]:
+    """Убирает маркеры утилит из текста и возвращает (чистый_текст, список_маркеров).
+    Заменяем маркеры на пробел, чтобы не склеивать слова, потом чистим двойные пробелы."""
     text = text or ""
     markers: list[str] = []
     for name, pat in UTILITY_PATTERNS.items():
         if pat.search(text):
             markers.append(name)
-        text = pat.sub('', text)
-    text = re.sub(r'[ \t]+', ' ', text)
-    text = re.sub(r' +([,.!?;:])', r'\1', text)
-    text = re.sub(r'\n{3,}', '\n\n', text).strip()
+        text = pat.sub(' ', text)
+    # убираем двойные пробелы, но не трогаем переводы строк
+    text = re.sub(r'[ \t]{2,}', ' ', text)
+    text = re.sub(r'[ \t]+([,.!?;:])', r'\1', text)
+    text = re.sub(r'[ \t]+\n', '\n', text)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    text = text.strip()
     return text, markers
 
+def dedupe_markers(markers: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for m in markers:
+        if m not in seen:
+            seen.add(m)
+            result.append(m)
+    return result
+
 async def execute_utility_tg(message: telebot.types.Message, marker: str, chat_id: str) -> None:
+    """Обрабатывает ТОЛЬКО sticker/gif. Аватарка и recall_media теперь обрабатываются
+    внутри send_tg_ai_response, чтобы не слать лишние сообщения."""
     config = get_chat_config(chat_id)
     if marker in ("sticker", "gif"):
         if not config.get("stickers_enabled", True):
             return
-    if marker == "avatar":
-        await tg_handle_avatar(message, chat_id)
-    elif marker == "recall_media":
-        await tg_handle_recall_media(message, chat_id, [])
-    elif marker == "sticker":
+    if marker == "sticker":
         try:
             sticker = random.choice(STICKER_POOL)
             await tg_bot.send_sticker(message.chat.id, sticker)
@@ -544,11 +557,7 @@ async def execute_utility_ds(message: discord.Message, marker: str, chat_id: str
     if marker in ("sticker", "gif"):
         if not config.get("stickers_enabled", True):
             return
-    if marker == "avatar":
-        await ds_handle_avatar(message, chat_id)
-    elif marker == "recall_media":
-        await ds_handle_recall_media(message, chat_id, [])
-    elif marker in ("sticker", "gif"):
+    if marker in ("sticker", "gif"):
         try:
             gif_url = random.choice(GIF_POOL)
             embed = discord.Embed().set_image(url=gif_url)
@@ -556,74 +565,204 @@ async def execute_utility_ds(message: discord.Message, marker: str, chat_id: str
         except Exception as e:
             logger.error(f"gif error: {e}")
 
-# -------- Утилиты для сообщений без исходного message (рандом/observer/напоминания) --------
-async def execute_utility_tg_no_message(chat_id: str, tg_chat_id: int, marker: str) -> None:
-    config = get_chat_config(chat_id)
-    if marker in ("sticker", "gif"):
-        if not config.get("stickers_enabled", True):
-            return
-    if marker == "sticker":
-        try:
-            sticker = random.choice(STICKER_POOL)
-            await tg_bot.send_sticker(tg_chat_id, sticker)
-        except Exception as e:
-            logger.error(f"tg no-msg sticker error: {e}")
-    elif marker == "gif":
-        try:
-            sticker = random.choice(STICKER_POOL)
-            await tg_bot.send_sticker(tg_chat_id, sticker)
-        except Exception as e:
-            logger.error(f"tg no-msg gif error: {e}")
-    elif marker == "recall_media":
-        history = list(chat_media_history.get(chat_id, []))
-        if not history:
-            return
-        item = history[-1]
-        f_id = item.get("file_id")
-        mtype = item.get("type", "photo")
-        sender = item.get("sender", "?")
-        when = item.get("time", "")
-        caption = f"от {sender} ({when})"
-        if not f_id:
-            return
-        try:
-            if mtype == "photo":
-                await tg_bot.send_photo(tg_chat_id, f_id, caption=caption)
-            elif mtype == "video":
-                await tg_bot.send_video(tg_chat_id, f_id, caption=caption)
-            elif mtype == "animation":
-                await tg_bot.send_animation(tg_chat_id, f_id, caption=caption)
-            elif mtype == "document":
-                await tg_bot.send_document(tg_chat_id, f_id, caption=caption)
-            elif mtype == "sticker":
-                await tg_bot.send_sticker(tg_chat_id, f_id)
-        except Exception as e:
-            logger.warning(f"tg no-msg recall error: {e}")
+# ============================================================
+# ОПИСАНИЕ АВАТАРКИ / RECALL_MEDIA (без отправки самих медиа)
+# ============================================================
+def _tg_bot_id() -> int | None:
+    try:
+        return tg_bot.user.id if tg_bot.user else None
+    except Exception:
+        return None
 
-async def execute_utility_ds_no_message(chat_id: str, channel, marker: str) -> None:
-    config = get_chat_config(chat_id)
-    if marker in ("sticker", "gif"):
-        if not config.get("stickers_enabled", True):
-            return
-    if marker in ("sticker", "gif"):
+def resolve_avatar_target_tg(message: telebot.types.Message):
+    """Кого реально спрашивают. Никогда не возвращаем самого бота."""
+    bot_id = _tg_bot_id()
+
+    # 1) reply target (если это не бот)
+    if message.reply_to_message and message.reply_to_message.from_user:
+        rt = message.reply_to_message.from_user
+        if bot_id is None or rt.id != bot_id:
+            return rt
+
+    # 2) text_mention
+    for ent in (message.entities or []):
+        if ent.type == "text_mention" and ent.user:
+            if bot_id is None or ent.user.id != bot_id:
+                return ent.user
+
+    # 3) сам автор сообщения
+    if message.from_user and (bot_id is None or message.from_user.id != bot_id):
+        return message.from_user
+
+    return None
+
+async def get_avatar_description_tg(message: telebot.types.Message, chat_id: str) -> str | None:
+    """Возвращает текстовое описание аватарки (без отправки самой аватарки)."""
+    target = resolve_avatar_target_tg(message)
+    if target is None:
+        return None
+    name = target.full_name or "человек"
+    uname = f"@{target.username}" if target.username else ""
+    try:
+        photos = await tg_bot.get_user_profile_photos(target.id, limit=1)
+    except Exception as e:
+        logger.warning(f"avatar fetch list failed: {e}")
+        return None
+
+    if not (photos.total_count > 0 and photos.photos):
+        return f"у {name} аватарки нет, пусто"
+
+    try:
+        file_id = photos.photos[0][-1].file_id
+        img_bytes = await get_tg_file_bytes(tg_bot, file_id)
+        desc = await ask_ai_async(
+            prompt=(
+                f"Ты только что посмотрел аватарку пользователя {name} {uname}. "
+                f"Опиши коротко (1-2 предложения), что на ней, в стиле Кульша — так, будто ты говоришь ему лично, "
+                f"типа 'у тебя на аватарке ...'. Без markdown, без префикса 'Аватарка:'."
+            ),
+            image_bytes=img_bytes,
+            image_mime="image/jpeg",
+            chat_id=chat_id
+        )
+        return desc
+    except Exception as e:
+        logger.warning(f"avatar desc error: {e}")
+        return None
+
+async def get_avatar_description_ds(message: discord.Message, chat_id: str) -> str | None:
+    target = None
+    if message.mentions:
+        for m in message.mentions:
+            if m.id != ds_bot.user.id:
+                target = m
+                break
+    if target is None and message.reference and message.reference.resolved and isinstance(message.reference.resolved, discord.Message):
+        ref_auth = message.reference.resolved.author
+        if ref_auth.id != ds_bot.user.id:
+            target = ref_auth
+    if target is None and message.author.id != ds_bot.user.id:
+        target = message.author
+    if target is None:
+        return None
+
+    name = target.display_name
+    try:
+        img_bytes = await download_image_bytes(target.display_avatar.url)
+        desc = await ask_ai_async(
+            prompt=(
+                f"Ты только что посмотрел аватарку пользователя {name}. "
+                f"Опиши коротко (1-2 предложения), что на ней, в стиле Кульша — так, будто ты говоришь ему лично. "
+                f"Без markdown."
+            ),
+            image_bytes=img_bytes,
+            image_mime="image/jpeg",
+            chat_id=chat_id
+        )
+        return desc
+    except Exception as e:
+        logger.warning(f"DS avatar desc error: {e}")
+        return None
+
+async def get_recall_media_description_tg(message: telebot.types.Message, chat_id: str, n: int = 3) -> str | None:
+    """Возвращает текстовое описание последних медиа (без отправки самих медиа)."""
+    history = list(chat_media_history.get(chat_id, []))
+    if not history:
+        return None
+    last = history[-n:]
+
+    # Пробуем получить картинку последнего фото/видео и скормить AI
+    img_bytes = None
+    img_mime = "image/jpeg"
+    last_item = last[-1]
+    if last_item.get("type") == "photo" and last_item.get("file_id"):
         try:
-            gif_url = random.choice(GIF_POOL)
-            embed = discord.Embed().set_image(url=gif_url)
-            await channel.send(embed=embed)
+            img_bytes = await get_tg_file_bytes(tg_bot, last_item["file_id"])
         except Exception as e:
-            logger.error(f"ds no-msg gif error: {e}")
-    elif marker == "recall_media":
-        history = list(chat_media_history.get(chat_id, []))
-        if not history:
-            return
-        item = history[-1]
-        url = item.get("url")
-        if not url:
-            return
+            logger.warning(f"recall media fetch error: {e}")
+
+    # Если картинку достать не удалось — просто рассказываем по метаданным
+    if img_bytes is None:
+        lines = []
+        for item in last:
+            mtype = item.get("type", "media")
+            sender = item.get("sender", "?")
+            when = item.get("time", "")
+            cap = (item.get("caption") or "")[:120]
+            lines.append(f"- {mtype} от {sender} ({when}): {cap}")
+        meta = "\n".join(lines)
         try:
-            await channel.send(f"от {item.get('sender','?')} ({item.get('time','')}): {url}")
+            desc = await ask_ai_async(
+                prompt=(
+                    f"Ты вспоминаешь недавние медиа в чате. Вот их список:\n{meta}\n\n"
+                    f"Коротко (1-2 предложения) прокомментируй в стиле Кульша, будто вспомнил эти штуки. "
+                    f"Без markdown."
+                ),
+                chat_id=chat_id
+            )
+            return desc
         except Exception as e:
-            logger.warning(f"ds no-msg recall error: {e}")
+            logger.warning(f"recall meta desc error: {e}")
+            return None
+
+    try:
+        desc = await ask_ai_async(
+            prompt=(
+                "Ты вспоминаешь последнее медиа из чата. Опиши коротко (1-2 предложения), что на нём, "
+                "в стиле Кульша, будто ты вспомнил. Без markdown."
+            ),
+            image_bytes=img_bytes,
+            image_mime=img_mime,
+            chat_id=chat_id
+        )
+        return desc
+    except Exception as e:
+        logger.warning(f"recall image desc error: {e}")
+        return None
+
+async def get_recall_media_description_ds(message: discord.Message, chat_id: str, n: int = 3) -> str | None:
+    history = list(chat_media_history.get(chat_id, []))
+    if not history:
+        return None
+    last = history[-n:]
+    img_bytes = None
+    last_item = last[-1]
+    if last_item.get("url") and last_item.get("type") == "photo":
+        try:
+            img_bytes = await download_image_bytes(last_item["url"])
+        except Exception as e:
+            logger.warning(f"DS recall fetch error: {e}")
+
+    if img_bytes is None:
+        lines = []
+        for item in last:
+            mtype = item.get("type", "media")
+            sender = item.get("sender", "?")
+            when = item.get("time", "")
+            cap = (item.get("caption") or "")[:120]
+            lines.append(f"- {mtype} от {sender} ({when}): {cap}")
+        meta = "\n".join(lines)
+        try:
+            desc = await ask_ai_async(
+                prompt=f"Ты вспоминаешь недавние медиа в чате:\n{meta}\n\nКоротко прокомментируй в стиле Кульша. Без markdown.",
+                chat_id=chat_id
+            )
+            return desc
+        except Exception as e:
+            logger.warning(f"DS recall meta error: {e}")
+            return None
+
+    try:
+        desc = await ask_ai_async(
+            prompt="Ты вспоминаешь последнее медиа из чата. Опиши коротко (1-2 предложения) в стиле Кульша. Без markdown.",
+            image_bytes=img_bytes,
+            image_mime="image/jpeg",
+            chat_id=chat_id
+        )
+        return desc
+    except Exception as e:
+        logger.warning(f"DS recall image error: {e}")
+        return None
 
 # ============================================================
 # ОСНОВНОЙ ЗАПРОС К AI
@@ -676,18 +815,23 @@ async def ask_ai_async(
             "Не бойся разбивать ответ даже на короткие куски типа 'ну', 'ага', 'короч', 'слушай', 'хм' — так живёт "
             "реальный чат. НО не превращай это в спам из 10 сообщений подряд, 2-4 частей обычно достаточно. Если "
             "ответ совсем короткий (1-2 слова) — можно вообще не разбивать.\n\n"
-            "УТИЛИТЫ. В самом конце ответа (в крайнем случае — в начале) ты можешь поставить служебные маркеры "
-            "(они будут скрыты из текста и сработают как команда), пиши их строго слитно, без пробелов и без точки "
-            "перед ними:\n"
-            "• !avatar — посмотреть аватарку собеседника (можно сначала написать что-то вроде 'щас гляну');\n"
-            "• !recall_media — вспомнить последние медиа в чате;\n"
-            "• !sticker — отправить стикер в Telegram (или гифку в Discord);\n"
-            "• !gif — то же самое, только гифка (в Discord);\n"
+            "УТИЛИТЫ. Ты можешь вызвать встроенные утилиты бота, написав служебный маркер. Эти маркеры НЕ видны "
+            "пользователю (бот их вырежет), но они запускают нужное действие. Пиши их строго слитно, без пробелов "
+            "внутри, без точки перед ними. ИСПОЛЬЗУЙ КАЖДЫЙ МАРКЕР НЕ БОЛЕЕ ОДНОГО РАЗА за ответ. Никогда не "
+            "повторяй маркер дважды, не пиши его вслух, не объясняй его. Утилиты:\n"
+            "• !avatar — посмотреть аватарку собеседника. Бот НЕ отправляет саму картинку в чат, а только "
+            "присылает ТЕКСТОВОЕ описание от твоего имени. То есть ты сам как бы только что посмотрел и "
+            "комментируешь: 'о, у тебя на аватарке...'. Если хочешь это сделать — в ответе напиши что-то "
+            "вроде 'щас гляну' и поставь !avatar, дальше бот сам добавит описание к твоему сообщению. "
+            "Никаких отдельных сообщений с картинками не будет.\n"
+            "• !recall_media — вспомнить последние медиа в чате. Работает так же: бот НЕ пересылает сами фото, "
+            "а даёт тебе их текстовое описание, чтобы ты прокомментировал. Использовать только если реально "
+            "хочешь вспомнить, что недавно кидали. Не повторяй маркер.\n"
+            "• !sticker — отправить стикер в Telegram (или гифку в Discord).\n"
+            "• !gif — то же самое, только гифка (в Discord).\n"
             "• !separate — разделить ответ на несколько отдельных сообщений (см. выше).\n"
-            "Не пиши эти маркеры просто так. Только когда реально хочешь вызвать утилиту. "
-            "Никогда не пиши '! avatar' с пробелом, никогда не пиши точки внутри маркера.\n\n"
-            "Если хочешь посмотреть аватарку собеседника, можешь написать !avatar — это вызовет утилиту в боте. "
-            "Если хочешь вспомнить последние медиа в чате — можешь написать !recall_media."
+            "ВАЖНО: если ты уже вызвал утилиту, НЕ пиши этот маркер снова в следующих сообщениях. Один вызов — "
+            "один маркер. Если бот не может выполнить утилиту (например, нет аватарки) — не страшно, он сам скажет."
         )
         if chat_id and chat_id in long_term_memory:
             mem_data = long_term_memory[chat_id]
@@ -817,7 +961,13 @@ async def ask_ai_async(
                                 logger.warning(f"Странный ответ от {model_name}, пробую следующую...")
                                 continue
                         else:
+                            if 'promptFeedback' in data:
+                                block_reason = data['promptFeedback'].get('blockReason', 'UNKNOWN')
+                                logger.error(f"❌ Модель {model_name} ЗАБЛОКИРОВАЛА запрос! Причина: {block_reason}")
+                                logger.debug(f"Полный ответ API: {data}")
+                                return "Блокировка контента. Я не могу это обсуждать."
                             logger.warning(f"Модель {model_name} ключ {api_key[:4]}... ответила без candidates.")
+                            logger.debug(f"Полный JSON ответа: {data}")
                             await asyncio.sleep(backoff)
                             continue
 
@@ -1734,7 +1884,7 @@ HELP_TEXT = (
     "<code>кульш настройки язык ru|en</code>\n"
     "<code>кульш настройки тема dark|light</code>\n\n"
     "<b>Утилиты:</b>\n"
-    "<code>кульш аватарка</code> — посмотреть аватарку\n"
+    "<code>кульш аватарка</code> — описать аватарку\n"
     "<code>кульш вспомни медиа [N]</code> — вспомнить последние N медиа\n"
     "<code>кульш логи</code> — логи (для админов)\n\n"
     "<b>Развлечения:</b>\n"
@@ -1872,91 +2022,70 @@ async def tg_handle_settings(message: telebot.types.Message, parts: list[str]) -
         await tg_bot.send_message(message.chat.id, msg, parse_mode='HTML', reply_to_message_id=message.message_id)
 
 async def tg_handle_avatar(message: telebot.types.Message, chat_id: str) -> None:
-    target_user = None
-    if message.reply_to_message and message.reply_to_message.from_user:
-        target_user = message.reply_to_message.from_user
+    """Ручная команда 'кульш аватарка'. Отправляет только текстовое описание."""
+    desc = await get_avatar_description_tg(message, chat_id)
+    if desc:
+        await reply_tg_html(message, desc)
     else:
-        for ent in (message.entities or []):
-            if ent.type == "text_mention" and ent.user:
-                target_user = ent.user
-                break
-    if target_user is None:
-        target_user = message.from_user
-
-    try:
-        photos = await tg_bot.get_user_profile_photos(target_user.id, limit=1)
-        if photos.total_count > 0 and photos.photos:
-            file_id = photos.photos[0][-1].file_id
-            name = target_user.full_name
-            uname = f"@{target_user.username}" if target_user.username else "нет username"
-            try:
-                await tg_bot.send_photo(
-                    message.chat.id, file_id,
-                    caption=f"Аватарка {name} ({uname}):"
-                )
-            except Exception as e:
-                logger.warning(f"avatar photo send failed: {e}")
-            try:
-                img_bytes = await get_tg_file_bytes(tg_bot, file_id)
-                desc = await ask_ai_async(
-                    prompt=f"Опиши кратко (1-2 предложения) аватарку пользователя {name} ({uname}) в стиле Кульша. Без markdown.",
-                    image_bytes=img_bytes, image_mime="image/jpeg", chat_id=chat_id
-                )
-                if desc:
-                    await send_tg_html(message.chat.id, desc)
-            except Exception as e:
-                logger.warning(f"avatar desc failed: {e}")
-        else:
-            await reply_tg_html(message, "у него аватарки нет, пусто")
-    except Exception as e:
-        logger.error(f"Аватарка ошибка: {e}")
-        await reply_tg_html(message, f"не смог получить аватарку: {e}")
+        await reply_tg_html(message, "не смог получить аватарку")
 
 async def tg_handle_recall_media(message: telebot.types.Message, chat_id: str, parts: list[str]) -> None:
+    """Ручная команда 'кульш вспомни медиа'. Отправляет только текстовое описание."""
     n = 3
     for p in parts:
         if p.isdigit():
             n = min(int(p), 10); break
-    history = list(chat_media_history[chat_id])
-    if not history:
+    desc = await get_recall_media_description_tg(message, chat_id, n)
+    if desc:
+        await reply_tg_html(message, desc)
+    else:
         await reply_tg_html(message, "не нашёл ничего в памяти")
-        return
-    last = history[-n:]
-    sent_any = False
-    for item in last:
-        try:
-            f_id = item.get("file_id")
-            mtype = item.get("type", "photo")
-            sender = item.get("sender", "?")
-            when = item.get("time", "")
-            caption = f"от {sender} ({when}): {item.get('caption','')[:200]}"
-            if not f_id:
-                continue
-            if mtype == "photo":
-                await tg_bot.send_photo(message.chat.id, f_id, caption=caption)
-            elif mtype == "video":
-                await tg_bot.send_video(message.chat.id, f_id, caption=caption)
-            elif mtype == "animation":
-                await tg_bot.send_animation(message.chat.id, f_id, caption=caption)
-            elif mtype == "document":
-                await tg_bot.send_document(message.chat.id, f_id, caption=caption)
-            elif mtype == "sticker":
-                await tg_bot.send_sticker(message.chat.id, f_id)
-            else:
-                continue
-            sent_any = True
-        except Exception as e:
-            logger.warning(f"recall send error: {e}")
-    if not sent_any:
-        await reply_tg_html(message, "не смог переотправить последние медиа")
 
 # -------- Отправка ответа ИИ (TG) --------
 async def send_tg_ai_response(message: telebot.types.Message, chat_id: str, answer_raw: str) -> None:
     raw = answer_raw or ""
 
-    segments = split_by_separator(raw)
-    if not segments:
-        _, markers = extract_utility_markers(raw)
+    # 1) Сначала вырезаем ВСЕ маркеры утилит из всего текста (до разделения на !separate),
+    #    чтобы случайные обрывки не попадали в сообщения.
+    raw_clean, markers = extract_utility_markers(raw)
+    markers = dedupe_markers(markers)
+
+    # 2) Особые утилиты — смотрим аватарку / вспоминаем медиа. НЕ шлём сами медиа,
+    #    а получаем ТЕКСТ и вклеиваем его в ответ.
+    extra_text_parts: list[str] = []
+
+    if "avatar" in markers:
+        markers.remove("avatar")
+        try:
+            avatar_desc = await get_avatar_description_tg(message, chat_id)
+            if avatar_desc:
+                extra_text_parts.append(avatar_desc)
+        except Exception as e:
+            logger.warning(f"avatar desc failed: {e}")
+
+    if "recall_media" in markers:
+        markers.remove("recall_media")
+        try:
+            recall_desc = await get_recall_media_description_tg(message, chat_id, 3)
+            if recall_desc:
+                extra_text_parts.append(recall_desc)
+        except Exception as e:
+            logger.warning(f"recall desc failed: {e}")
+
+    # 3) Теперь делим на отдельные сообщения по !separate
+    segments = split_by_separator(raw_clean)
+    clean_segments = [s.strip() for s in segments if s and s.strip()]
+
+    # 4) Если есть доп. текст от утилит — приклеиваем к последнему сегменту
+    if extra_text_parts:
+        merged_extra = "\n\n".join(extra_text_parts)
+        if clean_segments:
+            clean_segments[-1] = clean_segments[-1].rstrip() + "\n\n" + merged_extra
+        else:
+            clean_segments = [merged_extra]
+
+    # 5) Если вообще ничего не осталось (только стикер/гифка) — просто выполним
+    if not clean_segments:
         for m in markers:
             try:
                 await execute_utility_tg(message, m, chat_id)
@@ -1964,22 +2093,7 @@ async def send_tg_ai_response(message: telebot.types.Message, chat_id: str, answ
                 logger.warning(f"utility {m} failed: {e}")
         return
 
-    clean_segments: list[str] = []
-    all_markers: list[str] = []
-    for seg in segments:
-        clean_seg, markers = extract_utility_markers(seg)
-        all_markers.extend(markers)
-        if clean_seg:
-            clean_segments.append(clean_seg)
-
-    if not clean_segments:
-        for m in all_markers:
-            try:
-                await execute_utility_tg(message, m, chat_id)
-            except Exception as e:
-                logger.warning(f"utility {m} failed: {e}")
-        return
-
+    # 6) Отправляем всё по очереди
     for i, clean_seg in enumerate(clean_segments):
         try:
             await typing_with_delay_tg(message.chat.id, clean_seg)
@@ -1992,7 +2106,8 @@ async def send_tg_ai_response(message: telebot.types.Message, chat_id: str, answ
             await send_tg_html(message.chat.id, clean_seg)
         add_bot_memory(chat_id, clean_seg)
 
-    for m in all_markers:
+    # 7) Остальные утилиты (sticker/gif)
+    for m in markers:
         try:
             await execute_utility_tg(message, m, chat_id)
         except Exception as e:
@@ -2024,6 +2139,7 @@ async def maybe_reply_to_old_message_tg(message: telebot.types.Message, chat_id:
         if comment and comment.strip() and comment.strip().upper() != "НЕТ":
             last_old_reply[chat_id] = now
             clean, markers = extract_utility_markers(comment)
+            markers = dedupe_markers(markers)
             old_msg_id = old.get("message_id")
             if clean and clean.strip():
                 try:
@@ -2032,11 +2148,13 @@ async def maybe_reply_to_old_message_tg(message: telebot.types.Message, chat_id:
                     pass
                 await send_tg_html(message.chat.id, clean, reply_to=old_msg_id)
                 add_bot_memory(chat_id, clean)
+            # sticker/gif можно, avatar/recall не трогаем — это одиночный коммент
             for m in markers:
-                try:
-                    await execute_utility_tg_no_message(chat_id, message.chat.id, m)
-                except Exception as e:
-                    logger.warning(f"old-reply utility {m} failed: {e}")
+                if m in ("sticker", "gif"):
+                    try:
+                        await execute_utility_tg(message, m, chat_id)
+                    except Exception as e:
+                        logger.warning(f"old-reply utility {m} failed: {e}")
     except Exception as e:
         logger.warning(f"old reply tg fail: {e}")
 
@@ -2515,73 +2633,63 @@ async def ds_handle_config(message: discord.Message, chat_id: str, parts: list[s
             await message.reply("❌ Неизвестный параметр. Список: `кульш конфиг`")
 
 async def ds_handle_avatar(message: discord.Message, chat_id: str) -> None:
-    target = None
-    if message.mentions:
-        target = message.mentions[0]
-    if message.reference and message.reference.resolved and isinstance(message.reference.resolved, discord.Message):
-        target = message.reference.resolved.author
-    if target is None:
-        target = message.author
-    avatar_url = target.display_avatar.url
-    try:
-        embed = discord.Embed().set_image(url=avatar_url)
-        await message.reply(content=f"Аватарка {target.display_name}:", embed=embed)
-    except Exception as e:
-        logger.error(f"DS avatar send error: {e}")
-        await message.reply(f"не смог отправить аватарку: {e}")
-        return
-    try:
-        img_bytes = await download_image_bytes(avatar_url)
-        desc = await ask_ai_async(
-            prompt=f"Опиши кратко аватарку пользователя {target.display_name} в стиле Кульша.",
-            image_bytes=img_bytes, image_mime="image/jpeg", chat_id=chat_id
-        )
-        if desc:
-            await message.channel.send(desc)
-    except Exception as e:
-        logger.warning(f"DS avatar desc error: {e}")
+    desc = await get_avatar_description_ds(message, chat_id)
+    if desc:
+        await message.reply(desc)
+    else:
+        await message.reply("не смог получить аватарку")
 
 async def ds_handle_recall_media(message: discord.Message, chat_id: str, parts: list[str]) -> None:
     n = 3
     for p in parts:
         if p.isdigit():
             n = min(int(p), 10); break
-    history = list(chat_media_history[chat_id])
-    if not history:
-        await message.reply("не нашёл ничего в памяти"); return
-    last = history[-n:]
-    for item in last:
-        url = item.get("url")
-        if not url:
-            continue
-        try:
-            await message.channel.send(f"от {item.get('sender','?')} ({item.get('time','')}): {url}")
-        except Exception as e:
-            logger.warning(f"recall ds error: {e}")
+    desc = await get_recall_media_description_ds(message, chat_id, n)
+    if desc:
+        await message.reply(desc)
+    else:
+        await message.reply("не нашёл ничего в памяти")
 
 async def send_ds_ai_response(message: discord.Message, chat_id: str, answer_raw: str) -> None:
     raw = answer_raw or ""
 
-    segments = split_by_separator(raw)
-    if not segments:
-        _, markers = extract_utility_markers(raw)
-        for m in markers:
-            try:
-                await execute_utility_ds(message, m, chat_id)
-            except Exception as e:
-                logger.warning(f"ds utility {m} failed: {e}")
-        return
+    # 1) Вырезаем маркеры утилит до разделения
+    raw_clean, markers = extract_utility_markers(raw)
+    markers = dedupe_markers(markers)
 
-    clean_segments: list[str] = []
-    all_markers: list[str] = []
-    for seg in segments:
-        clean_seg, markers = extract_utility_markers(seg)
-        all_markers.extend(markers)
-        if clean_seg:
-            clean_segments.append(clean_seg)
+    extra_text_parts: list[str] = []
+
+    if "avatar" in markers:
+        markers.remove("avatar")
+        try:
+            avatar_desc = await get_avatar_description_ds(message, chat_id)
+            if avatar_desc:
+                extra_text_parts.append(avatar_desc)
+        except Exception as e:
+            logger.warning(f"DS avatar desc failed: {e}")
+
+    if "recall_media" in markers:
+        markers.remove("recall_media")
+        try:
+            recall_desc = await get_recall_media_description_ds(message, chat_id, 3)
+            if recall_desc:
+                extra_text_parts.append(recall_desc)
+        except Exception as e:
+            logger.warning(f"DS recall desc failed: {e}")
+
+    # 2) Разделяем по !separate
+    segments = split_by_separator(raw_clean)
+    clean_segments = [s.strip() for s in segments if s and s.strip()]
+
+    if extra_text_parts:
+        merged_extra = "\n\n".join(extra_text_parts)
+        if clean_segments:
+            clean_segments[-1] = clean_segments[-1].rstrip() + "\n\n" + merged_extra
+        else:
+            clean_segments = [merged_extra]
 
     if not clean_segments:
-        for m in all_markers:
+        for m in markers:
             try:
                 await execute_utility_ds(message, m, chat_id)
             except Exception as e:
@@ -2603,7 +2711,7 @@ async def send_ds_ai_response(message: discord.Message, chat_id: str, answer_raw
             await message.channel.send(clean_seg)
         add_bot_memory(chat_id, clean_seg)
 
-    for m in all_markers:
+    for m in markers:
         try:
             await execute_utility_ds(message, m, chat_id)
         except Exception as e:
@@ -2634,6 +2742,7 @@ async def maybe_reply_to_old_message_ds(message: discord.Message, chat_id: str) 
         if comment and comment.strip() and comment.strip().upper() != "НЕТ":
             last_old_reply[chat_id] = now
             clean, markers = extract_utility_markers(comment)
+            markers = dedupe_markers(markers)
             old_msg_id = old.get("message_id")
             sent_any = False
             if clean and clean.strip():
@@ -2653,11 +2762,12 @@ async def maybe_reply_to_old_message_ds(message: discord.Message, chat_id: str) 
                 add_bot_memory(chat_id, clean)
                 sent_any = True
             for m in markers:
-                try:
-                    await execute_utility_ds_no_message(chat_id, message.channel, m)
-                    sent_any = True
-                except Exception as e:
-                    logger.warning(f"ds old-reply utility {m} failed: {e}")
+                if m in ("sticker", "gif"):
+                    try:
+                        await execute_utility_ds(message, m, chat_id)
+                        sent_any = True
+                    except Exception as e:
+                        logger.warning(f"ds old-reply utility {m} failed: {e}")
             if not sent_any:
                 return
     except Exception as e:
@@ -2728,12 +2838,19 @@ async def on_message(message: discord.Message) -> None:
                 prompt = "Попроси пользователя @1364588699589021890 отправить Фолзу сообщение в TikTok чтобы продлить серию. Одно короткое сообщение в стиле Кульша."
                 answer = await ask_ai_async(prompt=prompt, context_type="default", chat_id=chat_id)
                 clean, markers = extract_utility_markers(answer)
+                markers = dedupe_markers(markers)
                 target_channel = cast(discord.TextChannel, ds_bot.get_channel(DS_SERIES_CHANNEL_ID))
                 if target_channel:
                     if clean and clean.strip():
                         await target_channel.send(f"<@{DS_SERIES_TARGET_USER_ID}> {clean}")
                     for m in markers:
-                        await execute_utility_ds_no_message(chat_id, target_channel, m)
+                        if m in ("sticker", "gif"):
+                            try:
+                                gif_url = random.choice(GIF_POOL)
+                                embed = discord.Embed().set_image(url=gif_url)
+                                await target_channel.send(embed=embed)
+                            except Exception as e:
+                                logger.warning(f"series utility {m} failed: {e}")
                     await message.reply("Напоминание отправлено 🍷🗿")
                 else:
                     await message.reply("Целевой канал не найден.")
@@ -2992,27 +3109,30 @@ async def random_post_loop() -> None:
                     system_instruction_override=None,
                     chat_id=chat_id
                 )
-                if answer and answer.strip() and answer.strip().upper() != "НЕТ":
-                    clean, markers = extract_utility_markers(answer)
-                    if clean and clean.strip():
-                        await send_tg_html(TG_TARGET_CHAT, clean)
-                        add_bot_memory(chat_id, clean)
-                    for m in markers:
-                        try:
-                            await execute_utility_tg_no_message(chat_id, TG_TARGET_CHAT, m)
-                        except Exception as e:
-                            logger.warning(f"random_post utility {m} failed: {e}")
             else:
                 answer = await ask_ai_async(prompt=None, context_type="random", chat_id=chat_id)
-                clean, markers = extract_utility_markers(answer)
-                if clean and clean.strip():
-                    await send_tg_html(TG_TARGET_CHAT, clean)
-                    add_bot_memory(chat_id, clean)
-                for m in markers:
-                    try:
-                        await execute_utility_tg_no_message(chat_id, TG_TARGET_CHAT, m)
-                    except Exception as e:
-                        logger.warning(f"random_post utility {m} failed: {e}")
+
+            if not answer or not answer.strip() or answer.strip().upper() == "НЕТ":
+                continue
+
+            clean, markers = extract_utility_markers(answer)
+            markers = dedupe_markers(markers)
+            # В автономных сообщениях не делаем avatar/recall — там некому это показывать.
+            markers = [m for m in markers if m in ("sticker", "gif")]
+
+            if clean and clean.strip():
+                await send_tg_html(TG_TARGET_CHAT, clean)
+                add_bot_memory(chat_id, clean)
+            for m in markers:
+                try:
+                    if m == "sticker":
+                        sticker = random.choice(STICKER_POOL)
+                        await tg_bot.send_sticker(TG_TARGET_CHAT, sticker)
+                    elif m == "gif":
+                        sticker = random.choice(STICKER_POOL)
+                        await tg_bot.send_sticker(TG_TARGET_CHAT, sticker)
+                except Exception as e:
+                    logger.warning(f"random_post utility {m} failed: {e}")
         except Exception as e:
             logger.info(f"Ошибка random_post_loop: {e}")
 
@@ -3029,11 +3149,15 @@ async def series_reminder_loop() -> None:
                 prompt = "Попроси Антона отправить Фолзу сообщение в TikTok чтобы продлить серию. Одно короткое сообщение в стиле Кульша."
                 answer = await ask_ai_async(prompt=prompt, context_type="default")
                 clean, markers = extract_utility_markers(answer)
+                markers = dedupe_markers(markers)
+                markers = [m for m in markers if m in ("sticker", "gif")]
                 if clean and clean.strip():
                     await channel.send(f"<@{DS_SERIES_TARGET_USER_ID}> {clean}")
                 for m in markers:
                     try:
-                        await execute_utility_ds_no_message(f"ds_guild_{DS_SERIES_GUILD_ID}", channel, m)
+                        gif_url = random.choice(GIF_POOL)
+                        embed = discord.Embed().set_image(url=gif_url)
+                        await channel.send(embed=embed)
                     except Exception as e:
                         logger.warning(f"series utility {m} failed: {e}")
             except Exception as e:
