@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.27.5 (avatar/recall desc cleaned, logs caption fix)
+# Kulsh GPT | v2.27.6 (markers without "!", auto-strip)
 # by (main author):
 #     starfall-apk
 # coauthor & bot hosting:
@@ -488,14 +488,17 @@ async def typing_with_delay_ds(channel, text: str, delay: float | None = None) -
 # ============================================================
 # МАРКЕРЫ-УТИЛИТЫ
 # ============================================================
+# !separate → ловим как с "!", так и без. Если без "!", требуем чтобы по краям
+# не было латинских букв (чтобы не откусить кусок от английского слова).
+# С "!" — матчим в любом контексте, даже если маркер приклеен к русскому слову.
 UTILITY_PATTERNS = {
-    "avatar": re.compile(r'!\s*avatar', re.IGNORECASE),
-    "recall_media": re.compile(r'!\s*recall[\s_]*media', re.IGNORECASE),
-    "sticker": re.compile(r'!\s*sticker', re.IGNORECASE),
-    "gif": re.compile(r'!\s*gif', re.IGNORECASE),
+    "avatar": re.compile(r'!\s*avatar|(?<![A-Za-z])avatar(?![A-Za-z])', re.IGNORECASE),
+    "recall_media": re.compile(r'!\s*recall[\s_]*media|(?<![A-Za-z])recall[\s_]*media(?![A-Za-z])', re.IGNORECASE),
+    "sticker": re.compile(r'!\s*sticker|(?<![A-Za-z])sticker(?![A-Za-z])', re.IGNORECASE),
+    "gif": re.compile(r'!\s*gif|(?<![A-Za-z])gif(?![A-Za-z])', re.IGNORECASE),
 }
 
-SEPARATOR_PATTERN = re.compile(r'!\s*sep[ae]rate', re.IGNORECASE)
+SEPARATOR_PATTERN = re.compile(r'!\s*sep[ae]rate|(?<![A-Za-z])sep[ae]rate(?![A-Za-z])', re.IGNORECASE)
 
 def split_by_separator(text: str) -> list[str]:
     if not text:
@@ -2062,7 +2065,6 @@ async def tg_handle_settings(message: telebot.types.Message, parts: list[str]) -
         await tg_bot.send_message(message.chat.id, msg, parse_mode='HTML', reply_to_message_id=message.message_id)
 
 async def tg_handle_avatar(message: telebot.types.Message, chat_id: str) -> None:
-    """Ручная команда 'кульш аватарка'. Отправляет только текстовое описание (с чисткой маркеров)."""
     raw = await get_avatar_description_tg(message, chat_id)
     if not raw:
         await reply_tg_html(message, "не смог получить аватарку")
@@ -2078,7 +2080,6 @@ async def tg_handle_avatar(message: telebot.types.Message, chat_id: str) -> None
             await send_tg_html(message.chat.id, seg)
 
 async def tg_handle_recall_media(message: telebot.types.Message, chat_id: str, parts: list[str]) -> None:
-    """Ручная команда 'кульш вспомни медиа'. Отправляет только текстовое описание (с чисткой маркеров)."""
     n = 3
     for p in parts:
         if p.isdigit():
@@ -2101,10 +2102,8 @@ async def tg_handle_recall_media(message: telebot.types.Message, chat_id: str, p
 async def send_tg_ai_response(message: telebot.types.Message, chat_id: str, answer_raw: str) -> None:
     raw = answer_raw or ""
 
-    # 1) Полная очистка основного ответа от маркеров + разбиение по !separate
     clean_segments, markers = process_ai_response(raw)
 
-    # 2) Особые утилиты — получаем доп. текст и ТОЖЕ чистим его и режем по !separate
     extra_segments: list[str] = []
 
     if "avatar" in markers:
@@ -2125,10 +2124,8 @@ async def send_tg_ai_response(message: telebot.types.Message, chat_id: str, answ
         except Exception as e:
             logger.warning(f"recall desc failed: {e}")
 
-    # 3) Сливаем сегменты: сначала основной ответ, потом доп. от утилит
     all_segments = clean_segments + extra_segments
 
-    # 4) Если совсем ничего — только стикер/гифка
     if not all_segments:
         for m in markers:
             try:
@@ -2137,7 +2134,6 @@ async def send_tg_ai_response(message: telebot.types.Message, chat_id: str, answ
                 logger.warning(f"utility {m} failed: {e}")
         return
 
-    # 5) Отправляем всё по очереди
     for i, seg in enumerate(all_segments):
         try:
             await typing_with_delay_tg(message.chat.id, seg)
@@ -2150,7 +2146,6 @@ async def send_tg_ai_response(message: telebot.types.Message, chat_id: str, answ
             await send_tg_html(message.chat.id, seg)
         add_bot_memory(chat_id, seg)
 
-    # 6) Остальные утилиты (sticker/gif)
     for m in markers:
         try:
             await execute_utility_tg(message, m, chat_id)
@@ -2252,13 +2247,11 @@ async def handle_tg_text(message: telebot.types.Message) -> None:
             max_caption_len = 1024
             full_caption = f"{intro}\n\n{tail}"
 
-            # Если капшн влезает — просто шлём как есть
             if len(full_caption) <= max_caption_len:
                 caption = full_caption
                 extra_text = None
             else:
-                # Иначе обрезаем tail в капшене и шлём полный tail отдельными сообщениями
-                header_len = len(intro) + 2  # "\n\n"
+                header_len = len(intro) + 2
                 reserved_for_ellipsis = 3
                 available = max_caption_len - header_len - reserved_for_ellipsis
                 if available < 50:
@@ -2279,7 +2272,6 @@ async def handle_tg_text(message: telebot.types.Message) -> None:
                 await send_tg_html(message.chat.id, full_caption[:4000], reply_to=message.message_id)
                 return
 
-            # Если хвост не влез в caption — досылаем отдельными сообщениями
             if extra_text:
                 for chunk in chunk_text(extra_text, 3900):
                     try:
@@ -3186,7 +3178,6 @@ async def random_post_loop() -> None:
                 continue
 
             segments, markers = process_ai_response(answer)
-            # В автономных сообщениях avatar/recall не имеют смысла
             markers = [m for m in markers if m in ("sticker", "gif")]
 
             for seg in segments:
