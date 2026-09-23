@@ -532,6 +532,12 @@ async def execute_utility_tg(message: telebot.types.Message, marker: str, chat_i
             await tg_bot.send_sticker(message.chat.id, sticker)
         except Exception as e:
             logger.error(f"sticker error: {e}")
+    elif marker == "gif":
+        try:
+            sticker = random.choice(STICKER_POOL)
+            await tg_bot.send_sticker(message.chat.id, sticker)
+        except Exception as e:
+            logger.error(f"gif->sticker error: {e}")
 
 async def execute_utility_ds(message: discord.Message, marker: str, chat_id: str) -> None:
     config = get_chat_config(chat_id)
@@ -549,6 +555,75 @@ async def execute_utility_ds(message: discord.Message, marker: str, chat_id: str
             await message.reply(embed=embed)
         except Exception as e:
             logger.error(f"gif error: {e}")
+
+# -------- Утилиты для сообщений без исходного message (рандом/observer/напоминания) --------
+async def execute_utility_tg_no_message(chat_id: str, tg_chat_id: int, marker: str) -> None:
+    config = get_chat_config(chat_id)
+    if marker in ("sticker", "gif"):
+        if not config.get("stickers_enabled", True):
+            return
+    if marker == "sticker":
+        try:
+            sticker = random.choice(STICKER_POOL)
+            await tg_bot.send_sticker(tg_chat_id, sticker)
+        except Exception as e:
+            logger.error(f"tg no-msg sticker error: {e}")
+    elif marker == "gif":
+        try:
+            sticker = random.choice(STICKER_POOL)
+            await tg_bot.send_sticker(tg_chat_id, sticker)
+        except Exception as e:
+            logger.error(f"tg no-msg gif error: {e}")
+    elif marker == "recall_media":
+        history = list(chat_media_history.get(chat_id, []))
+        if not history:
+            return
+        item = history[-1]
+        f_id = item.get("file_id")
+        mtype = item.get("type", "photo")
+        sender = item.get("sender", "?")
+        when = item.get("time", "")
+        caption = f"от {sender} ({when})"
+        if not f_id:
+            return
+        try:
+            if mtype == "photo":
+                await tg_bot.send_photo(tg_chat_id, f_id, caption=caption)
+            elif mtype == "video":
+                await tg_bot.send_video(tg_chat_id, f_id, caption=caption)
+            elif mtype == "animation":
+                await tg_bot.send_animation(tg_chat_id, f_id, caption=caption)
+            elif mtype == "document":
+                await tg_bot.send_document(tg_chat_id, f_id, caption=caption)
+            elif mtype == "sticker":
+                await tg_bot.send_sticker(tg_chat_id, f_id)
+        except Exception as e:
+            logger.warning(f"tg no-msg recall error: {e}")
+
+async def execute_utility_ds_no_message(chat_id: str, channel, marker: str) -> None:
+    config = get_chat_config(chat_id)
+    if marker in ("sticker", "gif"):
+        if not config.get("stickers_enabled", True):
+            return
+    if marker in ("sticker", "gif"):
+        try:
+            gif_url = random.choice(GIF_POOL)
+            embed = discord.Embed().set_image(url=gif_url)
+            await channel.send(embed=embed)
+        except Exception as e:
+            logger.error(f"ds no-msg gif error: {e}")
+    elif marker == "recall_media":
+        history = list(chat_media_history.get(chat_id, []))
+        if not history:
+            return
+        item = history[-1]
+        url = item.get("url")
+        if not url:
+            return
+        try:
+            await channel.send(f"от {item.get('sender','?')} ({item.get('time','')}): {url}")
+        except Exception as e:
+            logger.warning(f"ds no-msg recall error: {e}")
 
 # ============================================================
 # ОСНОВНОЙ ЗАПРОС К AI
@@ -1948,15 +2023,20 @@ async def maybe_reply_to_old_message_tg(message: telebot.types.Message, chat_id:
         )
         if comment and comment.strip() and comment.strip().upper() != "НЕТ":
             last_old_reply[chat_id] = now
-            clean, _ = extract_utility_markers(comment)
-            if clean:
+            clean, markers = extract_utility_markers(comment)
+            old_msg_id = old.get("message_id")
+            if clean and clean.strip():
                 try:
                     await typing_with_delay_tg(message.chat.id, clean)
                 except Exception:
                     pass
-                old_msg_id = old.get("message_id")
                 await send_tg_html(message.chat.id, clean, reply_to=old_msg_id)
                 add_bot_memory(chat_id, clean)
+            for m in markers:
+                try:
+                    await execute_utility_tg_no_message(chat_id, message.chat.id, m)
+                except Exception as e:
+                    logger.warning(f"old-reply utility {m} failed: {e}")
     except Exception as e:
         logger.warning(f"old reply tg fail: {e}")
 
@@ -2005,7 +2085,6 @@ async def handle_tg_text(message: telebot.types.Message) -> None:
     if tl.startswith("кульш логи"):
         try:
             tail = read_log_tail(20)
-            # Отправляем файл bot.log + вступление + последние строки (без обрезаний)
             try:
                 with open('bot.log', 'rb') as logf:
                     await tg_bot.send_document(
@@ -2014,10 +2093,8 @@ async def handle_tg_text(message: telebot.types.Message) -> None:
                         caption=f"{LOG_INTRO}\n\n{tail}"
                     )
             except FileNotFoundError:
-                # Файла нет — только текст
                 await send_tg_html(message.chat.id, f"{LOG_INTRO}\n\n{tail}", reply_to=message.message_id)
                 return
-            # Если хвост не влез в caption (>1024 символов у TG) — досылаем отдельными сообщениями
             tg_caption_limit = 1024
             intro_len = len(LOG_INTRO) + 2
             if intro_len + len(tail) > tg_caption_limit:
@@ -2556,25 +2633,33 @@ async def maybe_reply_to_old_message_ds(message: discord.Message, chat_id: str) 
         )
         if comment and comment.strip() and comment.strip().upper() != "НЕТ":
             last_old_reply[chat_id] = now
-            clean, _ = extract_utility_markers(comment)
-            if not clean:
-                return
-            try:
-                await typing_with_delay_ds(message.channel, clean)
-            except Exception:
-                pass
+            clean, markers = extract_utility_markers(comment)
             old_msg_id = old.get("message_id")
-            sent_as_reply = False
-            if old_msg_id:
+            sent_any = False
+            if clean and clean.strip():
                 try:
-                    old_msg = await message.channel.fetch_message(int(old_msg_id))
-                    await old_msg.reply(clean)
-                    sent_as_reply = True
+                    await typing_with_delay_ds(message.channel, clean)
+                except Exception:
+                    pass
+                if old_msg_id:
+                    try:
+                        old_msg = await message.channel.fetch_message(int(old_msg_id))
+                        await old_msg.reply(clean)
+                    except Exception as e:
+                        logger.warning(f"DS old reply fetch failed (id={old_msg_id}): {e}")
+                        await message.channel.send(clean)
+                else:
+                    await message.channel.send(clean)
+                add_bot_memory(chat_id, clean)
+                sent_any = True
+            for m in markers:
+                try:
+                    await execute_utility_ds_no_message(chat_id, message.channel, m)
+                    sent_any = True
                 except Exception as e:
-                    logger.warning(f"DS old reply fetch failed (id={old_msg_id}): {e}")
-            if not sent_as_reply:
-                await message.channel.send(clean)
-            add_bot_memory(chat_id, clean)
+                    logger.warning(f"ds old-reply utility {m} failed: {e}")
+            if not sent_any:
+                return
     except Exception as e:
         logger.warning(f"old reply ds fail: {e}")
 
@@ -2642,9 +2727,13 @@ async def on_message(message: discord.Message) -> None:
             try:
                 prompt = "Попроси пользователя @1364588699589021890 отправить Фолзу сообщение в TikTok чтобы продлить серию. Одно короткое сообщение в стиле Кульша."
                 answer = await ask_ai_async(prompt=prompt, context_type="default", chat_id=chat_id)
+                clean, markers = extract_utility_markers(answer)
                 target_channel = cast(discord.TextChannel, ds_bot.get_channel(DS_SERIES_CHANNEL_ID))
                 if target_channel:
-                    await target_channel.send(f"<@{DS_SERIES_TARGET_USER_ID}> {answer}")
+                    if clean and clean.strip():
+                        await target_channel.send(f"<@{DS_SERIES_TARGET_USER_ID}> {clean}")
+                    for m in markers:
+                        await execute_utility_ds_no_message(chat_id, target_channel, m)
                     await message.reply("Напоминание отправлено 🍷🗿")
                 else:
                     await message.reply("Целевой канал не найден.")
@@ -2657,7 +2746,6 @@ async def on_message(message: discord.Message) -> None:
             await message.reply("ты кто бля"); return
         try:
             tail = read_log_tail(20)
-            # Пытаемся отправить весь файл как вложение + вступление + хвост без обрезаний
             try:
                 await message.reply(
                     content=f"{LOG_INTRO}\n```\n{tail}\n```" if len(tail) <= 1900 else LOG_INTRO,
@@ -2666,7 +2754,6 @@ async def on_message(message: discord.Message) -> None:
             except FileNotFoundError:
                 await message.reply(f"{LOG_INTRO}\n```\n{tail}\n```" if len(tail) <= 1900 else f"{LOG_INTRO}\n\n{tail}")
                 return
-            # Если хвост длинный — шлём чанками отдельными сообщениями
             if len(tail) > 1900:
                 for chunk in chunk_text(tail, 1900):
                     await message.channel.send(f"```\n{chunk}\n```")
@@ -2902,20 +2989,30 @@ async def random_post_loop() -> None:
                     prompt="Посмотри на историю чата. Если хочешь что-то добавить или пошутить, напиши одно короткое сообщение. Если нет — ответь ровно 'НЕТ'.",
                     context_type="observer",
                     messages=memory_to_messages(memory),
-                    system_instruction_override="Ты Кульш. Отвечай одним сообщением или 'НЕТ'. Без markdown.",
+                    system_instruction_override=None,
                     chat_id=chat_id
                 )
                 if answer and answer.strip() and answer.strip().upper() != "НЕТ":
-                    clean, _ = extract_utility_markers(answer)
-                    if clean:
+                    clean, markers = extract_utility_markers(answer)
+                    if clean and clean.strip():
                         await send_tg_html(TG_TARGET_CHAT, clean)
                         add_bot_memory(chat_id, clean)
+                    for m in markers:
+                        try:
+                            await execute_utility_tg_no_message(chat_id, TG_TARGET_CHAT, m)
+                        except Exception as e:
+                            logger.warning(f"random_post utility {m} failed: {e}")
             else:
                 answer = await ask_ai_async(prompt=None, context_type="random", chat_id=chat_id)
-                clean, _ = extract_utility_markers(answer)
-                if clean:
+                clean, markers = extract_utility_markers(answer)
+                if clean and clean.strip():
                     await send_tg_html(TG_TARGET_CHAT, clean)
                     add_bot_memory(chat_id, clean)
+                for m in markers:
+                    try:
+                        await execute_utility_tg_no_message(chat_id, TG_TARGET_CHAT, m)
+                    except Exception as e:
+                        logger.warning(f"random_post utility {m} failed: {e}")
         except Exception as e:
             logger.info(f"Ошибка random_post_loop: {e}")
 
@@ -2931,7 +3028,14 @@ async def series_reminder_loop() -> None:
             try:
                 prompt = "Попроси Антона отправить Фолзу сообщение в TikTok чтобы продлить серию. Одно короткое сообщение в стиле Кульша."
                 answer = await ask_ai_async(prompt=prompt, context_type="default")
-                await channel.send(f"<@{DS_SERIES_TARGET_USER_ID}> {answer}")
+                clean, markers = extract_utility_markers(answer)
+                if clean and clean.strip():
+                    await channel.send(f"<@{DS_SERIES_TARGET_USER_ID}> {clean}")
+                for m in markers:
+                    try:
+                        await execute_utility_ds_no_message(f"ds_guild_{DS_SERIES_GUILD_ID}", channel, m)
+                    except Exception as e:
+                        logger.warning(f"series utility {m} failed: {e}")
             except Exception as e:
                 logger.error(f"Ошибка серии: {e}")
         await asyncio.sleep(86400)
