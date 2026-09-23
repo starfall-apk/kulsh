@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.27.3 (3.6-flash, log send fix, log intro)
+# Kulsh GPT | v2.27.5 (avatar/recall desc cleaned, logs caption fix)
 # by (main author):
 #     starfall-apk
 # coauthor & bot hosting:
@@ -245,7 +245,6 @@ def set_chat_config(chat_id: str, key: str, value: Any) -> None:
 # ЧТЕНИЕ ХВОСТА ЛОГА
 # ============================================================
 def read_log_tail(max_lines: int = 20) -> str:
-    """Читает последние max_lines строк из bot.log без обрезаний."""
     try:
         with open('bot.log', 'r', encoding='utf-8', errors='replace') as f:
             lines = f.readlines()
@@ -258,7 +257,6 @@ def read_log_tail(max_lines: int = 20) -> str:
         return f"Ошибка чтения логов: {e}"
 
 def chunk_text(text: str, size: int) -> list[str]:
-    """Режет текст на чанки по size символов, не ломая строки посередине, если можно."""
     if not text:
         return [""]
     if len(text) <= size:
@@ -490,15 +488,14 @@ async def typing_with_delay_ds(channel, text: str, delay: float | None = None) -
 # ============================================================
 # МАРКЕРЫ-УТИЛИТЫ
 # ============================================================
-# \b после ключевого слова, чтобы не цеплять случайные "avatarwat" и т.п.
 UTILITY_PATTERNS = {
-    "avatar": re.compile(r'!\s*avatar\b', re.IGNORECASE),
-    "recall_media": re.compile(r'!\s*recall[\s_]*media\b', re.IGNORECASE),
-    "sticker": re.compile(r'!\s*sticker\b', re.IGNORECASE),
-    "gif": re.compile(r'!\s*gif\b', re.IGNORECASE),
+    "avatar": re.compile(r'!\s*avatar', re.IGNORECASE),
+    "recall_media": re.compile(r'!\s*recall[\s_]*media', re.IGNORECASE),
+    "sticker": re.compile(r'!\s*sticker', re.IGNORECASE),
+    "gif": re.compile(r'!\s*gif', re.IGNORECASE),
 }
 
-SEPARATOR_PATTERN = re.compile(r'!\s*sep[ae]rate\b', re.IGNORECASE)
+SEPARATOR_PATTERN = re.compile(r'!\s*sep[ae]rate', re.IGNORECASE)
 
 def split_by_separator(text: str) -> list[str]:
     if not text:
@@ -507,15 +504,12 @@ def split_by_separator(text: str) -> list[str]:
     return [p.strip() for p in parts if p and p.strip()]
 
 def extract_utility_markers(text: str) -> tuple[str, list[str]]:
-    """Убирает маркеры утилит из текста и возвращает (чистый_текст, список_маркеров).
-    Заменяем маркеры на пробел, чтобы не склеивать слова, потом чистим двойные пробелы."""
     text = text or ""
     markers: list[str] = []
     for name, pat in UTILITY_PATTERNS.items():
         if pat.search(text):
             markers.append(name)
         text = pat.sub(' ', text)
-    # убираем двойные пробелы, но не трогаем переводы строк
     text = re.sub(r'[ \t]{2,}', ' ', text)
     text = re.sub(r'[ \t]+([,.!?;:])', r'\1', text)
     text = re.sub(r'[ \t]+\n', '\n', text)
@@ -532,9 +526,23 @@ def dedupe_markers(markers: list[str]) -> list[str]:
             result.append(m)
     return result
 
+def process_ai_response(raw: str) -> tuple[list[str], list[str]]:
+    """Полная очистка ответа ИИ от маркеров и разделение по !separate."""
+    raw_clean, markers = extract_utility_markers(raw or "")
+    markers = dedupe_markers(markers)
+    segments = split_by_separator(raw_clean)
+    clean_segments = [s.strip() for s in segments if s and s.strip()]
+    return clean_segments, markers
+
+def clean_extra_text(raw: str) -> list[str]:
+    """Очистка доп. текста (от аватарки/recall) от маркеров и разделение по !separate."""
+    if not raw:
+        return []
+    cleaned, _ = extract_utility_markers(raw)
+    segments = split_by_separator(cleaned)
+    return [s.strip() for s in segments if s and s.strip()]
+
 async def execute_utility_tg(message: telebot.types.Message, marker: str, chat_id: str) -> None:
-    """Обрабатывает ТОЛЬКО sticker/gif. Аватарка и recall_media теперь обрабатываются
-    внутри send_tg_ai_response, чтобы не слать лишние сообщения."""
     config = get_chat_config(chat_id)
     if marker in ("sticker", "gif"):
         if not config.get("stickers_enabled", True):
@@ -565,6 +573,37 @@ async def execute_utility_ds(message: discord.Message, marker: str, chat_id: str
         except Exception as e:
             logger.error(f"gif error: {e}")
 
+async def execute_utility_tg_no_message(chat_id: str, tg_chat_id: int, marker: str) -> None:
+    config = get_chat_config(chat_id)
+    if marker in ("sticker", "gif"):
+        if not config.get("stickers_enabled", True):
+            return
+    if marker == "sticker":
+        try:
+            sticker = random.choice(STICKER_POOL)
+            await tg_bot.send_sticker(tg_chat_id, sticker)
+        except Exception as e:
+            logger.error(f"tg no-msg sticker error: {e}")
+    elif marker == "gif":
+        try:
+            sticker = random.choice(STICKER_POOL)
+            await tg_bot.send_sticker(tg_chat_id, sticker)
+        except Exception as e:
+            logger.error(f"tg no-msg gif error: {e}")
+
+async def execute_utility_ds_no_message(chat_id: str, channel, marker: str) -> None:
+    config = get_chat_config(chat_id)
+    if marker in ("sticker", "gif"):
+        if not config.get("stickers_enabled", True):
+            return
+    if marker in ("sticker", "gif"):
+        try:
+            gif_url = random.choice(GIF_POOL)
+            embed = discord.Embed().set_image(url=gif_url)
+            await channel.send(embed=embed)
+        except Exception as e:
+            logger.error(f"ds no-msg gif error: {e}")
+
 # ============================================================
 # ОПИСАНИЕ АВАТАРКИ / RECALL_MEDIA (без отправки самих медиа)
 # ============================================================
@@ -575,29 +614,24 @@ def _tg_bot_id() -> int | None:
         return None
 
 def resolve_avatar_target_tg(message: telebot.types.Message):
-    """Кого реально спрашивают. Никогда не возвращаем самого бота."""
     bot_id = _tg_bot_id()
 
-    # 1) reply target (если это не бот)
     if message.reply_to_message and message.reply_to_message.from_user:
         rt = message.reply_to_message.from_user
         if bot_id is None or rt.id != bot_id:
             return rt
 
-    # 2) text_mention
     for ent in (message.entities or []):
         if ent.type == "text_mention" and ent.user:
             if bot_id is None or ent.user.id != bot_id:
                 return ent.user
 
-    # 3) сам автор сообщения
     if message.from_user and (bot_id is None or message.from_user.id != bot_id):
         return message.from_user
 
     return None
 
 async def get_avatar_description_tg(message: telebot.types.Message, chat_id: str) -> str | None:
-    """Возвращает текстовое описание аватарки (без отправки самой аватарки)."""
     target = resolve_avatar_target_tg(message)
     if target is None:
         return None
@@ -619,7 +653,8 @@ async def get_avatar_description_tg(message: telebot.types.Message, chat_id: str
             prompt=(
                 f"Ты только что посмотрел аватарку пользователя {name} {uname}. "
                 f"Опиши коротко (1-2 предложения), что на ней, в стиле Кульша — так, будто ты говоришь ему лично, "
-                f"типа 'у тебя на аватарке ...'. Без markdown, без префикса 'Аватарка:'."
+                f"типа 'у тебя на аватарке ...'. Без markdown, без префикса 'Аватарка:'. "
+                f"НЕ используй маркеры !separate, !avatar, !recall_media, !sticker, !gif в ответе."
             ),
             image_bytes=img_bytes,
             image_mime="image/jpeg",
@@ -653,7 +688,7 @@ async def get_avatar_description_ds(message: discord.Message, chat_id: str) -> s
             prompt=(
                 f"Ты только что посмотрел аватарку пользователя {name}. "
                 f"Опиши коротко (1-2 предложения), что на ней, в стиле Кульша — так, будто ты говоришь ему лично. "
-                f"Без markdown."
+                f"Без markdown. НЕ используй маркеры !separate, !avatar, !recall_media, !sticker, !gif в ответе."
             ),
             image_bytes=img_bytes,
             image_mime="image/jpeg",
@@ -665,13 +700,11 @@ async def get_avatar_description_ds(message: discord.Message, chat_id: str) -> s
         return None
 
 async def get_recall_media_description_tg(message: telebot.types.Message, chat_id: str, n: int = 3) -> str | None:
-    """Возвращает текстовое описание последних медиа (без отправки самих медиа)."""
     history = list(chat_media_history.get(chat_id, []))
     if not history:
         return None
     last = history[-n:]
 
-    # Пробуем получить картинку последнего фото/видео и скормить AI
     img_bytes = None
     img_mime = "image/jpeg"
     last_item = last[-1]
@@ -681,7 +714,6 @@ async def get_recall_media_description_tg(message: telebot.types.Message, chat_i
         except Exception as e:
             logger.warning(f"recall media fetch error: {e}")
 
-    # Если картинку достать не удалось — просто рассказываем по метаданным
     if img_bytes is None:
         lines = []
         for item in last:
@@ -696,7 +728,7 @@ async def get_recall_media_description_tg(message: telebot.types.Message, chat_i
                 prompt=(
                     f"Ты вспоминаешь недавние медиа в чате. Вот их список:\n{meta}\n\n"
                     f"Коротко (1-2 предложения) прокомментируй в стиле Кульша, будто вспомнил эти штуки. "
-                    f"Без markdown."
+                    f"Без markdown. НЕ используй маркеры !separate, !avatar, !recall_media, !sticker, !gif."
                 ),
                 chat_id=chat_id
             )
@@ -709,7 +741,8 @@ async def get_recall_media_description_tg(message: telebot.types.Message, chat_i
         desc = await ask_ai_async(
             prompt=(
                 "Ты вспоминаешь последнее медиа из чата. Опиши коротко (1-2 предложения), что на нём, "
-                "в стиле Кульша, будто ты вспомнил. Без markdown."
+                "в стиле Кульша, будто ты вспомнил. Без markdown. "
+                "НЕ используй маркеры !separate, !avatar, !recall_media, !sticker, !gif."
             ),
             image_bytes=img_bytes,
             image_mime=img_mime,
@@ -744,7 +777,11 @@ async def get_recall_media_description_ds(message: discord.Message, chat_id: str
         meta = "\n".join(lines)
         try:
             desc = await ask_ai_async(
-                prompt=f"Ты вспоминаешь недавние медиа в чате:\n{meta}\n\nКоротко прокомментируй в стиле Кульша. Без markdown.",
+                prompt=(
+                    f"Ты вспоминаешь недавние медиа в чате:\n{meta}\n\n"
+                    f"Коротко прокомментируй в стиле Кульша. Без markdown. "
+                    f"НЕ используй маркеры !separate, !avatar, !recall_media, !sticker, !gif."
+                ),
                 chat_id=chat_id
             )
             return desc
@@ -754,7 +791,10 @@ async def get_recall_media_description_ds(message: discord.Message, chat_id: str
 
     try:
         desc = await ask_ai_async(
-            prompt="Ты вспоминаешь последнее медиа из чата. Опиши коротко (1-2 предложения) в стиле Кульша. Без markdown.",
+            prompt=(
+                "Ты вспоминаешь последнее медиа из чата. Опиши коротко (1-2 предложения) в стиле Кульша. "
+                "Без markdown. НЕ используй маркеры !separate, !avatar, !recall_media, !sticker, !gif."
+            ),
             image_bytes=img_bytes,
             image_mime="image/jpeg",
             chat_id=chat_id
@@ -2022,70 +2062,74 @@ async def tg_handle_settings(message: telebot.types.Message, parts: list[str]) -
         await tg_bot.send_message(message.chat.id, msg, parse_mode='HTML', reply_to_message_id=message.message_id)
 
 async def tg_handle_avatar(message: telebot.types.Message, chat_id: str) -> None:
-    """Ручная команда 'кульш аватарка'. Отправляет только текстовое описание."""
-    desc = await get_avatar_description_tg(message, chat_id)
-    if desc:
-        await reply_tg_html(message, desc)
-    else:
+    """Ручная команда 'кульш аватарка'. Отправляет только текстовое описание (с чисткой маркеров)."""
+    raw = await get_avatar_description_tg(message, chat_id)
+    if not raw:
         await reply_tg_html(message, "не смог получить аватарку")
+        return
+    segments = clean_extra_text(raw)
+    if not segments:
+        await reply_tg_html(message, "не смог получить аватарку")
+        return
+    for i, seg in enumerate(segments):
+        if i == 0:
+            await reply_tg_html(message, seg)
+        else:
+            await send_tg_html(message.chat.id, seg)
 
 async def tg_handle_recall_media(message: telebot.types.Message, chat_id: str, parts: list[str]) -> None:
-    """Ручная команда 'кульш вспомни медиа'. Отправляет только текстовое описание."""
+    """Ручная команда 'кульш вспомни медиа'. Отправляет только текстовое описание (с чисткой маркеров)."""
     n = 3
     for p in parts:
         if p.isdigit():
             n = min(int(p), 10); break
-    desc = await get_recall_media_description_tg(message, chat_id, n)
-    if desc:
-        await reply_tg_html(message, desc)
-    else:
+    raw = await get_recall_media_description_tg(message, chat_id, n)
+    if not raw:
         await reply_tg_html(message, "не нашёл ничего в памяти")
+        return
+    segments = clean_extra_text(raw)
+    if not segments:
+        await reply_tg_html(message, "не нашёл ничего в памяти")
+        return
+    for i, seg in enumerate(segments):
+        if i == 0:
+            await reply_tg_html(message, seg)
+        else:
+            await send_tg_html(message.chat.id, seg)
 
 # -------- Отправка ответа ИИ (TG) --------
 async def send_tg_ai_response(message: telebot.types.Message, chat_id: str, answer_raw: str) -> None:
     raw = answer_raw or ""
 
-    # 1) Сначала вырезаем ВСЕ маркеры утилит из всего текста (до разделения на !separate),
-    #    чтобы случайные обрывки не попадали в сообщения.
-    raw_clean, markers = extract_utility_markers(raw)
-    markers = dedupe_markers(markers)
+    # 1) Полная очистка основного ответа от маркеров + разбиение по !separate
+    clean_segments, markers = process_ai_response(raw)
 
-    # 2) Особые утилиты — смотрим аватарку / вспоминаем медиа. НЕ шлём сами медиа,
-    #    а получаем ТЕКСТ и вклеиваем его в ответ.
-    extra_text_parts: list[str] = []
+    # 2) Особые утилиты — получаем доп. текст и ТОЖЕ чистим его и режем по !separate
+    extra_segments: list[str] = []
 
     if "avatar" in markers:
         markers.remove("avatar")
         try:
-            avatar_desc = await get_avatar_description_tg(message, chat_id)
-            if avatar_desc:
-                extra_text_parts.append(avatar_desc)
+            avatar_raw = await get_avatar_description_tg(message, chat_id)
+            if avatar_raw:
+                extra_segments.extend(clean_extra_text(avatar_raw))
         except Exception as e:
             logger.warning(f"avatar desc failed: {e}")
 
     if "recall_media" in markers:
         markers.remove("recall_media")
         try:
-            recall_desc = await get_recall_media_description_tg(message, chat_id, 3)
-            if recall_desc:
-                extra_text_parts.append(recall_desc)
+            recall_raw = await get_recall_media_description_tg(message, chat_id, 3)
+            if recall_raw:
+                extra_segments.extend(clean_extra_text(recall_raw))
         except Exception as e:
             logger.warning(f"recall desc failed: {e}")
 
-    # 3) Теперь делим на отдельные сообщения по !separate
-    segments = split_by_separator(raw_clean)
-    clean_segments = [s.strip() for s in segments if s and s.strip()]
+    # 3) Сливаем сегменты: сначала основной ответ, потом доп. от утилит
+    all_segments = clean_segments + extra_segments
 
-    # 4) Если есть доп. текст от утилит — приклеиваем к последнему сегменту
-    if extra_text_parts:
-        merged_extra = "\n\n".join(extra_text_parts)
-        if clean_segments:
-            clean_segments[-1] = clean_segments[-1].rstrip() + "\n\n" + merged_extra
-        else:
-            clean_segments = [merged_extra]
-
-    # 5) Если вообще ничего не осталось (только стикер/гифка) — просто выполним
-    if not clean_segments:
+    # 4) Если совсем ничего — только стикер/гифка
+    if not all_segments:
         for m in markers:
             try:
                 await execute_utility_tg(message, m, chat_id)
@@ -2093,20 +2137,20 @@ async def send_tg_ai_response(message: telebot.types.Message, chat_id: str, answ
                 logger.warning(f"utility {m} failed: {e}")
         return
 
-    # 6) Отправляем всё по очереди
-    for i, clean_seg in enumerate(clean_segments):
+    # 5) Отправляем всё по очереди
+    for i, seg in enumerate(all_segments):
         try:
-            await typing_with_delay_tg(message.chat.id, clean_seg)
+            await typing_with_delay_tg(message.chat.id, seg)
         except Exception as e:
             logger.debug(f"typing delay tg fail: {e}")
 
         if i == 0:
-            await send_tg_html(message.chat.id, clean_seg, reply_to=message.message_id)
+            await send_tg_html(message.chat.id, seg, reply_to=message.message_id)
         else:
-            await send_tg_html(message.chat.id, clean_seg)
-        add_bot_memory(chat_id, clean_seg)
+            await send_tg_html(message.chat.id, seg)
+        add_bot_memory(chat_id, seg)
 
-    # 7) Остальные утилиты (sticker/gif)
+    # 6) Остальные утилиты (sticker/gif)
     for m in markers:
         try:
             await execute_utility_tg(message, m, chat_id)
@@ -2138,17 +2182,18 @@ async def maybe_reply_to_old_message_tg(message: telebot.types.Message, chat_id:
         )
         if comment and comment.strip() and comment.strip().upper() != "НЕТ":
             last_old_reply[chat_id] = now
-            clean, markers = extract_utility_markers(comment)
-            markers = dedupe_markers(markers)
+            segments, markers = process_ai_response(comment)
             old_msg_id = old.get("message_id")
-            if clean and clean.strip():
+            for i, seg in enumerate(segments):
                 try:
-                    await typing_with_delay_tg(message.chat.id, clean)
+                    await typing_with_delay_tg(message.chat.id, seg)
                 except Exception:
                     pass
-                await send_tg_html(message.chat.id, clean, reply_to=old_msg_id)
-                add_bot_memory(chat_id, clean)
-            # sticker/gif можно, avatar/recall не трогаем — это одиночный коммент
+                if i == 0:
+                    await send_tg_html(message.chat.id, seg, reply_to=old_msg_id)
+                else:
+                    await send_tg_html(message.chat.id, seg)
+                add_bot_memory(chat_id, seg)
             for m in markers:
                 if m in ("sticker", "gif"):
                     try:
@@ -2203,20 +2248,40 @@ async def handle_tg_text(message: telebot.types.Message) -> None:
     if tl.startswith("кульш логи"):
         try:
             tail = read_log_tail(20)
+            intro = LOG_INTRO
+            max_caption_len = 1024
+            full_caption = f"{intro}\n\n{tail}"
+
+            # Если капшн влезает — просто шлём как есть
+            if len(full_caption) <= max_caption_len:
+                caption = full_caption
+                extra_text = None
+            else:
+                # Иначе обрезаем tail в капшене и шлём полный tail отдельными сообщениями
+                header_len = len(intro) + 2  # "\n\n"
+                reserved_for_ellipsis = 3
+                available = max_caption_len - header_len - reserved_for_ellipsis
+                if available < 50:
+                    caption = intro
+                    extra_text = tail
+                else:
+                    caption = f"{intro}\n\n{tail[:available]}..."
+                    extra_text = tail
+
             try:
                 with open('bot.log', 'rb') as logf:
                     await tg_bot.send_document(
                         message.chat.id,
                         InputFile(logf),
-                        caption=f"{LOG_INTRO}\n\n{tail}"
+                        caption=caption
                     )
             except FileNotFoundError:
-                await send_tg_html(message.chat.id, f"{LOG_INTRO}\n\n{tail}", reply_to=message.message_id)
+                await send_tg_html(message.chat.id, full_caption[:4000], reply_to=message.message_id)
                 return
-            tg_caption_limit = 1024
-            intro_len = len(LOG_INTRO) + 2
-            if intro_len + len(tail) > tg_caption_limit:
-                for chunk in chunk_text(tail, 3900):
+
+            # Если хвост не влез в caption — досылаем отдельными сообщениями
+            if extra_text:
+                for chunk in chunk_text(extra_text, 3900):
                     try:
                         await tg_bot.send_message(message.chat.id, f"<pre>{html.escape(chunk)}</pre>", parse_mode='HTML')
                     except Exception:
@@ -2633,62 +2698,67 @@ async def ds_handle_config(message: discord.Message, chat_id: str, parts: list[s
             await message.reply("❌ Неизвестный параметр. Список: `кульш конфиг`")
 
 async def ds_handle_avatar(message: discord.Message, chat_id: str) -> None:
-    desc = await get_avatar_description_ds(message, chat_id)
-    if desc:
-        await message.reply(desc)
-    else:
+    raw = await get_avatar_description_ds(message, chat_id)
+    if not raw:
         await message.reply("не смог получить аватарку")
+        return
+    segments = clean_extra_text(raw)
+    if not segments:
+        await message.reply("не смог получить аватарку")
+        return
+    for seg in segments:
+        try:
+            await message.channel.send(seg)
+        except Exception as e:
+            logger.warning(f"DS avatar segments send error: {e}")
 
 async def ds_handle_recall_media(message: discord.Message, chat_id: str, parts: list[str]) -> None:
     n = 3
     for p in parts:
         if p.isdigit():
             n = min(int(p), 10); break
-    desc = await get_recall_media_description_ds(message, chat_id, n)
-    if desc:
-        await message.reply(desc)
-    else:
+    raw = await get_recall_media_description_ds(message, chat_id, n)
+    if not raw:
         await message.reply("не нашёл ничего в памяти")
+        return
+    segments = clean_extra_text(raw)
+    if not segments:
+        await message.reply("не нашёл ничего в памяти")
+        return
+    for seg in segments:
+        try:
+            await message.channel.send(seg)
+        except Exception as e:
+            logger.warning(f"DS recall segments send error: {e}")
 
 async def send_ds_ai_response(message: discord.Message, chat_id: str, answer_raw: str) -> None:
     raw = answer_raw or ""
 
-    # 1) Вырезаем маркеры утилит до разделения
-    raw_clean, markers = extract_utility_markers(raw)
-    markers = dedupe_markers(markers)
+    clean_segments, markers = process_ai_response(raw)
 
-    extra_text_parts: list[str] = []
+    extra_segments: list[str] = []
 
     if "avatar" in markers:
         markers.remove("avatar")
         try:
-            avatar_desc = await get_avatar_description_ds(message, chat_id)
-            if avatar_desc:
-                extra_text_parts.append(avatar_desc)
+            avatar_raw = await get_avatar_description_ds(message, chat_id)
+            if avatar_raw:
+                extra_segments.extend(clean_extra_text(avatar_raw))
         except Exception as e:
             logger.warning(f"DS avatar desc failed: {e}")
 
     if "recall_media" in markers:
         markers.remove("recall_media")
         try:
-            recall_desc = await get_recall_media_description_ds(message, chat_id, 3)
-            if recall_desc:
-                extra_text_parts.append(recall_desc)
+            recall_raw = await get_recall_media_description_ds(message, chat_id, 3)
+            if recall_raw:
+                extra_segments.extend(clean_extra_text(recall_raw))
         except Exception as e:
             logger.warning(f"DS recall desc failed: {e}")
 
-    # 2) Разделяем по !separate
-    segments = split_by_separator(raw_clean)
-    clean_segments = [s.strip() for s in segments if s and s.strip()]
+    all_segments = clean_segments + extra_segments
 
-    if extra_text_parts:
-        merged_extra = "\n\n".join(extra_text_parts)
-        if clean_segments:
-            clean_segments[-1] = clean_segments[-1].rstrip() + "\n\n" + merged_extra
-        else:
-            clean_segments = [merged_extra]
-
-    if not clean_segments:
+    if not all_segments:
         for m in markers:
             try:
                 await execute_utility_ds(message, m, chat_id)
@@ -2696,20 +2766,20 @@ async def send_ds_ai_response(message: discord.Message, chat_id: str, answer_raw
                 logger.warning(f"ds utility {m} failed: {e}")
         return
 
-    for i, clean_seg in enumerate(clean_segments):
+    for i, seg in enumerate(all_segments):
         try:
-            await typing_with_delay_ds(message.channel, clean_seg)
+            await typing_with_delay_ds(message.channel, seg)
         except Exception as e:
             logger.debug(f"typing delay ds fail: {e}")
 
         if i == 0:
             try:
-                await message.reply(clean_seg)
+                await message.reply(seg)
             except Exception:
-                await message.channel.send(clean_seg)
+                await message.channel.send(seg)
         else:
-            await message.channel.send(clean_seg)
-        add_bot_memory(chat_id, clean_seg)
+            await message.channel.send(seg)
+        add_bot_memory(chat_id, seg)
 
     for m in markers:
         try:
@@ -2741,25 +2811,24 @@ async def maybe_reply_to_old_message_ds(message: discord.Message, chat_id: str) 
         )
         if comment and comment.strip() and comment.strip().upper() != "НЕТ":
             last_old_reply[chat_id] = now
-            clean, markers = extract_utility_markers(comment)
-            markers = dedupe_markers(markers)
+            segments, markers = process_ai_response(comment)
             old_msg_id = old.get("message_id")
             sent_any = False
-            if clean and clean.strip():
+            for i, seg in enumerate(segments):
                 try:
-                    await typing_with_delay_ds(message.channel, clean)
+                    await typing_with_delay_ds(message.channel, seg)
                 except Exception:
                     pass
-                if old_msg_id:
+                if i == 0 and old_msg_id:
                     try:
                         old_msg = await message.channel.fetch_message(int(old_msg_id))
-                        await old_msg.reply(clean)
+                        await old_msg.reply(seg)
                     except Exception as e:
                         logger.warning(f"DS old reply fetch failed (id={old_msg_id}): {e}")
-                        await message.channel.send(clean)
+                        await message.channel.send(seg)
                 else:
-                    await message.channel.send(clean)
-                add_bot_memory(chat_id, clean)
+                    await message.channel.send(seg)
+                add_bot_memory(chat_id, seg)
                 sent_any = True
             for m in markers:
                 if m in ("sticker", "gif"):
@@ -2837,12 +2906,13 @@ async def on_message(message: discord.Message) -> None:
             try:
                 prompt = "Попроси пользователя @1364588699589021890 отправить Фолзу сообщение в TikTok чтобы продлить серию. Одно короткое сообщение в стиле Кульша."
                 answer = await ask_ai_async(prompt=prompt, context_type="default", chat_id=chat_id)
-                clean, markers = extract_utility_markers(answer)
-                markers = dedupe_markers(markers)
+                segments, markers = process_ai_response(answer)
                 target_channel = cast(discord.TextChannel, ds_bot.get_channel(DS_SERIES_CHANNEL_ID))
                 if target_channel:
-                    if clean and clean.strip():
-                        await target_channel.send(f"<@{DS_SERIES_TARGET_USER_ID}> {clean}")
+                    if segments:
+                        await target_channel.send(f"<@{DS_SERIES_TARGET_USER_ID}> {segments[0]}")
+                        for seg in segments[1:]:
+                            await target_channel.send(seg)
                     for m in markers:
                         if m in ("sticker", "gif"):
                             try:
@@ -3115,14 +3185,13 @@ async def random_post_loop() -> None:
             if not answer or not answer.strip() or answer.strip().upper() == "НЕТ":
                 continue
 
-            clean, markers = extract_utility_markers(answer)
-            markers = dedupe_markers(markers)
-            # В автономных сообщениях не делаем avatar/recall — там некому это показывать.
+            segments, markers = process_ai_response(answer)
+            # В автономных сообщениях avatar/recall не имеют смысла
             markers = [m for m in markers if m in ("sticker", "gif")]
 
-            if clean and clean.strip():
-                await send_tg_html(TG_TARGET_CHAT, clean)
-                add_bot_memory(chat_id, clean)
+            for seg in segments:
+                await send_tg_html(TG_TARGET_CHAT, seg)
+                add_bot_memory(chat_id, seg)
             for m in markers:
                 try:
                     if m == "sticker":
@@ -3148,11 +3217,12 @@ async def series_reminder_loop() -> None:
             try:
                 prompt = "Попроси Антона отправить Фолзу сообщение в TikTok чтобы продлить серию. Одно короткое сообщение в стиле Кульша."
                 answer = await ask_ai_async(prompt=prompt, context_type="default")
-                clean, markers = extract_utility_markers(answer)
-                markers = dedupe_markers(markers)
+                segments, markers = process_ai_response(answer)
                 markers = [m for m in markers if m in ("sticker", "gif")]
-                if clean and clean.strip():
-                    await channel.send(f"<@{DS_SERIES_TARGET_USER_ID}> {clean}")
+                if segments:
+                    await channel.send(f"<@{DS_SERIES_TARGET_USER_ID}> {segments[0]}")
+                    for seg in segments[1:]:
+                        await channel.send(seg)
                 for m in markers:
                     try:
                         gif_url = random.choice(GIF_POOL)
