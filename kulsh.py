@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.27.6 (markers without "!", auto-strip)
+# Kulsh GPT | v2.30.0 (rich messages, streaming, per-user config, tools, corrected tiers)
 # by (main author):
 #     starfall-apk
 # coauthor & bot hosting:
@@ -21,6 +21,9 @@ import logging
 import datetime
 import tempfile
 import time
+import zipfile
+import shutil
+import io
 from datetime import timezone, timedelta
 from logging.handlers import RotatingFileHandler
 from typing import Any, cast
@@ -36,15 +39,11 @@ from telebot.types import InputFile, InlineKeyboardMarkup, InlineKeyboardButton
 # ============================================================
 logger = logging.getLogger('KulshBot')
 logger.setLevel(logging.DEBUG)
-
 log_formatter = logging.Formatter('%(asctime)s | %(levelname)s | %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
-
 file_handler = RotatingFileHandler('bot.log', maxBytes=5*1024*1024, backupCount=1, encoding='utf-8')
 file_handler.setFormatter(log_formatter)
-
 console_handler = logging.StreamHandler()
 console_handler.setFormatter(log_formatter)
-
 logger.addHandler(file_handler)
 logger.addHandler(console_handler)
 
@@ -52,13 +51,10 @@ logger.addHandler(console_handler)
 # ВРЕМЯ (МСК)
 # ============================================================
 MSK = timezone(timedelta(hours=3))
-
 def msk_now() -> datetime.datetime:
     return datetime.datetime.now(MSK)
-
 def msk_time_str() -> str:
     return msk_now().strftime('%H:%M')
-
 def msk_datetime_str() -> str:
     return msk_now().strftime('%d.%m.%Y %H:%M:%S МСК')
 
@@ -80,9 +76,8 @@ DONATIONALERTS_TOKEN = os.getenv('DONATIONALERTS_TOKEN', '')
 AI_KEYS = [k for k in [AI_KEY_1, AI_KEY_2, AI_KEY_3] if k]
 if not AI_KEYS and AI_KEY:
     AI_KEYS.append(AI_KEY)
-
 if not AI_KEYS:
-    logger.critical("❌ Не найден ни один API ключ Gemini! Проверьте .env (AI_KEY_1, AI_KEY_2, AI_KEY_3 или AI_KEY).")
+    logger.critical("❌ Не найден ни один API ключ Gemini! Проверьте .env")
     exit(1)
 
 DS_SERIES_GUILD_ID = 1403828466075304036
@@ -90,39 +85,32 @@ DS_SERIES_CHANNEL_ID = 1403828467014832270
 DS_SERIES_TARGET_USER_ID = 1364588699589021890
 
 MODEL_LIST = [
-    "gemini-3.8-flash",
-    "gemini-3.7-flash",
-    "gemini-3.6-flash",
-    "gemini-3.5-flash",
-    "gemini-3.5-flash-lite",
-    "gemini-2.5-flash",
-    "gemini-2.5-flash-lite",
-    "gemini-flash-latest",
-    "gemini-flash-lite-latest",
-    "gemini-3-flash-preview",
-    "gemini-3.1-flash-lite-preview"
+    "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
+    "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-2.5-flash",
+    "gemini-2.5-flash-lite", "gemini-flash-latest", "gemini-flash-lite-latest",
+    "gemini-3-flash-preview", "gemini-3.1-flash-lite-preview"
 ]
-
 MODEL_DISPLAY: dict[str, str] = {
-    "gemini-3.8-flash":              "🚀 3.8 Flash",
-    "gemini-3.7-flash":              "⚡ 3.7 Flash",
-    "gemini-3.6-flash":              "🌠 3.6 Flash",
-    "gemini-3.5-flash":              "💫 3.5 Flash",
-    "gemini-3.5-flash-lite":         "✨ 3.5 Flash Lite",
-    "gemini-2.5-flash":              "🌟 2.5 Flash",
-    "gemini-2.5-flash-lite":         "💡 2.5 Flash Lite",
-    "gemini-flash-latest":           "🔥 Flash Latest",
-    "gemini-flash-lite-latest":      "🌱 Flash Lite Latest",
-    "gemini-3-flash-preview":        "🧪 3 Flash Preview",
+    "gemini-3.8-flash": "🚀 3.8 Flash",
+    "gemini-3.7-flash": "⚡ 3.7 Flash",
+    "gemini-3.6-flash": "🌠 3.6 Flash",
+    "gemini-3.5-flash": "💫 3.5 Flash",
+    "gemini-3.5-flash-lite": "✨ 3.5 Flash Lite",
+    "gemini-2.5-flash": "🌟 2.5 Flash",
+    "gemini-2.5-flash-lite": "💡 2.5 Flash Lite",
+    "gemini-flash-latest": "🔥 Flash Latest",
+    "gemini-flash-lite-latest": "🌱 Flash Lite Latest",
+    "gemini-3-flash-preview": "🧪 3 Flash Preview",
     "gemini-3.1-flash-lite-preview": "🧬 3.1 Flash Lite Preview",
 }
-
 def model_display_name(model: str | None) -> str:
     if not model:
         return "🎲 авто (все подряд)"
     return MODEL_DISPLAY.get(model, model)
 
 LOG_INTRO = "🍷🗿 Вот логи сервера, босс:"
+PREMIUM_ADMIN_ID = 1420898868
+premium_functions_enabled: bool = True
 
 # voice_recv
 try:
@@ -134,16 +122,15 @@ except ImportError:
 
 DISCORD_VERSION = tuple(map(int, discord.__version__.split('.')))
 VOICE_RECOGNITION_ENABLED = DISCORD_VERSION >= (2, 0, 0) and VOICE_RECV_AVAILABLE
-
 if VOICE_RECOGNITION_ENABLED:
     try:
         import speech_recognition as sr
         from pydub import AudioSegment
     except ImportError:
         VOICE_RECOGNITION_ENABLED = False
-        logger.info("⚠️ speech_recognition или pydub не найдены, распознавание речи отключено")
+        logger.info("⚠️ speech_recognition/pydub не найдены")
 else:
-    logger.info(f"⚠️ У вас discord.py {discord.__version__}. Для распознавания голоса нужна версия 2.0+ и voice_recv.")
+    logger.info(f"⚠️ discord.py {discord.__version__}, voice_recv недоступен")
 
 try:
     import edge_tts
@@ -151,7 +138,7 @@ try:
     VOICE_ENABLED = True
 except ImportError:
     VOICE_ENABLED = False
-    logger.info("⚠️ edge_tts или FFmpeg не найдены, синтез речи отключен")
+    logger.info("⚠️ edge_tts/FFmpeg не найдены")
 
 # ============================================================
 # ГЛОБАЛЬНЫЕ СТРУКТУРЫ
@@ -159,32 +146,69 @@ except ImportError:
 chat_memories: dict[str, deque[dict[str, Any]]] = {}
 voice_text_channels: dict[int, Any] = {}
 donations_data: dict[str, Any] = {}
-user_settings: defaultdict[str, dict[str, Any]] = defaultdict(dict)
 
+# per-user-per-chat config: key = f"{platform}_{chat_id}_{user_id}"
+user_configs: defaultdict[str, dict[str, Any]] = defaultdict(dict)
+# Who owns which config message: message_id -> user_id
+config_msg_owners: dict[int, int] = {}
+# Who triggered which config (for deleting trigger messages): chat_key -> msg_id
+config_trigger_msgs: dict[str, int] = {}
+
+# Credits
+credits_data: dict[str, dict[str, Any]] = {}
+CREDITS_FILE = 'credits.json'
+DAILY_CREDITS = 500
+COST_ARCHIVE_EDIT = 500
+COST_CONSOLE_CMD = 25
+
+# Tools sessions: chat_id -> session dict
+tools_sessions: dict[int, dict[str, Any]] = {}
+
+# Media history
 chat_media_history: dict[str, deque[dict[str, Any]]] = defaultdict(lambda: deque(maxlen=50))
 
+# random reply throttling
 last_random_reply: dict[str, float] = {}
 last_old_reply: dict[str, float] = {}
 
-config_msg_ids: dict[str, int] = {}
-config_trigger_msg_ids: dict[str, int] = {}
+# Battle state
+battle_media_groups: dict[str, asyncio.Task] = {}
+battle_photos: dict[str, list[bytes]] = {}
 
 DONATIONS_FILE = 'donations.json'
+MEMORY_FILE = 'long_term_memory.json'
 
-def load_donations() -> None:
-    global donations_data
-    if not os.path.exists(DONATIONS_FILE):
-        donations_data = {}
-        return
+# ============================================================
+# ФАЙЛЫ СОСТОЯНИЯ
+# ============================================================
+def load_json_file(path: str) -> dict:
+    if not os.path.exists(path):
+        return {}
     try:
-        with open(DONATIONS_FILE, 'r', encoding='utf-8') as f:
-            donations_data = json.load(f)
+        with open(path, 'r', encoding='utf-8') as f:
+            return json.load(f)
     except Exception:
-        donations_data = {}
+        return {}
+
+def save_json_file(path: str, data: Any) -> None:
+    try:
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"save_json_file error: {e}")
+
+donations_data = load_json_file(DONATIONS_FILE)
+long_term_memory = load_json_file(MEMORY_FILE)
+credits_data = load_json_file(CREDITS_FILE)
 
 def save_donations() -> None:
-    with open(DONATIONS_FILE, 'w', encoding='utf-8') as f:
-        json.dump(donations_data, f, ensure_ascii=False, indent=2)
+    save_json_file(DONATIONS_FILE, donations_data)
+
+def save_long_term_memory(data: dict) -> None:
+    save_json_file(MEMORY_FILE, data)
+
+def save_credits() -> None:
+    save_json_file(CREDITS_FILE, credits_data)
 
 def add_donation(platform: str, user_id: int, amount: int, name: str = "Аноним") -> None:
     key = f"{platform}_{user_id}"
@@ -202,44 +226,74 @@ def get_top_donators(top_n: int = 10) -> list[tuple[str, int]]:
             continue
         name = names.get(key, key)
         totals[name] = totals.get(name, 0) + total
-    sorted_totals = sorted(totals.items(), key=lambda x: x[1], reverse=True)[:top_n]
-    return sorted_totals
+    return sorted(totals.items(), key=lambda x: x[1], reverse=True)[:top_n]
 
-load_donations()
+# ---- Кредиты ----
+def _today_str() -> str:
+    return msk_now().strftime('%Y-%m-%d')
 
-MEMORY_FILE = 'long_term_memory.json'
+def get_user_credits(platform: str, user_id: int) -> int:
+    key = f"{platform}_{user_id}"
+    entry = credits_data.get(key)
+    today = _today_str()
+    if not entry or entry.get("last_reset") != today:
+        entry = {"credits": DAILY_CREDITS, "last_reset": today}
+        credits_data[key] = entry
+        save_credits()
+    return int(entry["credits"])
 
-def load_long_term_memory() -> dict:
-    if not os.path.exists(MEMORY_FILE):
-        return {}
-    try:
-        with open(MEMORY_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except Exception:
-        return {}
+def spend_credits(platform: str, user_id: int, amount: int) -> bool:
+    key = f"{platform}_{user_id}"
+    today = _today_str()
+    entry = credits_data.get(key)
+    if not entry or entry.get("last_reset") != today:
+        entry = {"credits": DAILY_CREDITS, "last_reset": today}
+    if entry["credits"] < amount:
+        credits_data[key] = entry
+        save_credits()
+        return False
+    entry["credits"] -= amount
+    credits_data[key] = entry
+    save_credits()
+    return True
 
-def save_long_term_memory(data: dict) -> None:
-    with open(MEMORY_FILE, 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-
-long_term_memory = load_long_term_memory()
-
-DEFAULT_CHAT_CONFIG = {
+# ============================================================
+# ПЕР-ЮЗЕР КОНФИГ
+# ============================================================
+DEFAULT_USER_CONFIG = {
     "series_reminder_enabled": True,
     "stickers_enabled": True,
     "custom_prompt": None,
     "random_reply_enabled": False,
     "random_messages_enabled": True,
     "model": None,
+    "language": "ru",
+    "theme": "dark",
+    "temperature": 0.9,
+    "separate_enabled": True,
+    "streaming_enabled": False,
+    "tools_enabled": False,  # только для ЛС
 }
 
-chat_configs: dict[str, dict] = defaultdict(lambda: DEFAULT_CHAT_CONFIG.copy())
+def get_user_config(platform: str, chat_id: int, user_id: int) -> dict:
+    key = f"{platform}_{chat_id}_{user_id}"
+    cfg = user_configs.get(key)
+    if cfg is None:
+        cfg = DEFAULT_USER_CONFIG.copy()
+        user_configs[key] = cfg
+    else:
+        # гарантируем все ключи
+        for k, v in DEFAULT_USER_CONFIG.items():
+            if k not in cfg:
+                cfg[k] = v
+    return cfg
 
-def get_chat_config(chat_id: str) -> dict:
-    return chat_configs[chat_id]
+def set_user_config(platform: str, chat_id: int, user_id: int, key: str, value: Any) -> None:
+    cfg = get_user_config(platform, chat_id, user_id)
+    cfg[key] = value
 
-def set_chat_config(chat_id: str, key: str, value: Any) -> None:
-    chat_configs[chat_id][key] = value
+def get_chat_key(platform: str, chat_id: int) -> str:
+    return f"{platform}_{chat_id}"
 
 # ============================================================
 # ЧТЕНИЕ ХВОСТА ЛОГА
@@ -285,37 +339,21 @@ def get_chat_memory(chat_id: str) -> deque[dict[str, Any]]:
         chat_memories[chat_id] = deque(maxlen=20)
     return chat_memories[chat_id]
 
-def add_user_memory(
-    chat_id: str,
-    platform: str,
-    display_name: str,
-    username: str | None,
-    user_id: int | str,
-    text: str,
-    media: list[str] | None = None,
-    message_id: int | None = None,
-) -> None:
+def add_user_memory(chat_id: str, platform: str, display_name: str,
+                    username: str | None, user_id: int | str, text: str,
+                    media: list[str] | None = None,
+                    message_id: int | None = None) -> None:
     mem = get_chat_memory(chat_id)
     mem.append({
-        "type": "user",
-        "time": msk_time_str(),
-        "platform": platform,
-        "display": display_name or "Unknown",
-        "username": username or "",
-        "id": str(user_id),
-        "text": text or "",
-        "media": media or [],
-        "message_id": message_id,
+        "type": "user", "time": msk_time_str(), "platform": platform,
+        "display": display_name or "Unknown", "username": username or "",
+        "id": str(user_id), "text": text or "",
+        "media": media or [], "message_id": message_id,
     })
 
 def add_bot_memory(chat_id: str, text: str, message_id: int | None = None) -> None:
     mem = get_chat_memory(chat_id)
-    mem.append({
-        "type": "bot",
-        "time": msk_time_str(),
-        "text": text or "",
-        "message_id": message_id,
-    })
+    mem.append({"type": "bot", "time": msk_time_str(), "text": text or "", "message_id": message_id})
 
 def memory_to_messages(mem_deque: deque[dict[str, Any]]) -> list[dict[str, Any]]:
     messages: list[dict[str, Any]] = []
@@ -327,17 +365,16 @@ def memory_to_messages(mem_deque: deque[dict[str, Any]]) -> list[dict[str, Any]]
             media_str = ""
             if entry.get("media"):
                 media_str = f" [прикрепил: {', '.join(entry['media'])}]"
-            prefix = f"[{entry.get('time','')}] [{entry.get('platform','')}] {entry.get('display','?')} ({uname}, id:{entry.get('id','?')})"
+            prefix = (f"[{entry.get('time','')}] [{entry.get('platform','')}] "
+                      f"{entry.get('display','?')} ({uname}, id:{entry.get('id','?')})")
             messages.append({"role": "user", "text": f"{prefix}{media_str}: {entry.get('text','')}"})
     return messages
 
-def add_media_history(chat_id: str, url: str | None, media_type: str, sender: str, file_id: str | None = None, caption: str = "") -> None:
+def add_media_history(chat_id: str, url: str | None, media_type: str, sender: str,
+                     file_id: str | None = None, caption: str = "") -> None:
     chat_media_history[chat_id].append({
-        "url": url,
-        "type": media_type,
-        "sender": sender,
-        "file_id": file_id,
-        "caption": caption,
+        "url": url, "type": media_type, "sender": sender,
+        "file_id": file_id, "caption": caption,
         "time": msk_now().strftime('%d.%m %H:%M'),
     })
 
@@ -349,7 +386,7 @@ def add_media_tag_to_last_memory(chat_id: str, tag: str) -> None:
             return
 
 # ============================================================
-# ХЕЛПЕРЫ
+# ХЕЛПЕРЫ HTML
 # ============================================================
 def markdown_like_to_telegram_html(text: str) -> str:
     if text is None:
@@ -405,14 +442,12 @@ def image_bytes_to_base64(image_bytes: bytes, mime_type: str = "image/jpeg") -> 
     return encoded, mime_type
 
 async def extract_video_frame(video_bytes: bytes, ext_hint: str = ".mp4") -> bytes | None:
-    path = None
-    out_path = None
+    path = None; out_path = None
     try:
         with tempfile.NamedTemporaryFile(suffix=ext_hint, delete=False) as f:
-            f.write(video_bytes)
-            path = f.name
+            f.write(video_bytes); path = f.name
         out_path = path + ".jpg"
-        result = await asyncio.to_thread(
+        await asyncio.to_thread(
             subprocess.run,
             ["ffmpeg", "-y", "-i", path, "-vf", "select=eq(n\\,0)", "-vframes", "1", "-q:v", "3", out_path],
             capture_output=True, timeout=40
@@ -428,10 +463,8 @@ async def extract_video_frame(video_bytes: bytes, ext_hint: str = ".mp4") -> byt
     finally:
         for p in (path, out_path):
             if p and os.path.exists(p):
-                try:
-                    os.unlink(p)
-                except Exception:
-                    pass
+                try: os.unlink(p)
+                except Exception: pass
 
 # ============================================================
 # РЕАЛИСТИЧНАЯ ПЕЧАТЬ
@@ -450,366 +483,310 @@ def calc_typing_delay(text: str) -> float:
     per_char = random.uniform(TYPING_MS_PER_CHAR_MIN, TYPING_MS_PER_CHAR_MAX)
     delay = n * per_char
     delay *= random.uniform(TYPING_JITTER_MIN, TYPING_JITTER_MAX)
-    if delay < TYPING_MIN_DELAY:
-        delay = TYPING_MIN_DELAY
-    if delay > TYPING_MAX_DELAY:
-        delay = TYPING_MAX_DELAY
-    return delay
+    return max(TYPING_MIN_DELAY, min(TYPING_MAX_DELAY, delay))
 
 async def typing_with_delay_tg(chat_id: int, text: str, delay: float | None = None) -> None:
     if delay is None:
         delay = calc_typing_delay(text)
-    elapsed = 0.0
-    chunk = 4.0
+    elapsed = 0.0; chunk = 4.0
     while elapsed < delay:
-        try:
-            await tg_bot.send_chat_action(chat_id, 'typing')
-        except Exception as e:
-            logger.debug(f"typing action tg fail: {e}")
+        try: await tg_bot.send_chat_action(chat_id, 'typing')
+        except Exception as e: logger.debug(f"typing action tg fail: {e}")
         step = min(chunk, delay - elapsed)
-        await asyncio.sleep(step)
-        elapsed += step
+        await asyncio.sleep(step); elapsed += step
 
 async def typing_with_delay_ds(channel, text: str, delay: float | None = None) -> None:
     if delay is None:
         delay = calc_typing_delay(text)
-    elapsed = 0.0
-    chunk = 7.0
+    elapsed = 0.0; chunk = 7.0
     while elapsed < delay:
         step = min(chunk, delay - elapsed)
         try:
             async with channel.typing():
                 await asyncio.sleep(step)
-        except Exception as e:
-            logger.debug(f"typing action ds fail: {e}")
+        except Exception:
             await asyncio.sleep(step)
         elapsed += step
 
 # ============================================================
-# МАРКЕРЫ-УТИЛИТЫ
+# RICH MESSAGE BUILDER (Bot API 10.1+)
 # ============================================================
-# !separate → ловим как с "!", так и без. Если без "!", требуем чтобы по краям
-# не было латинских букв (чтобы не откусить кусок от английского слова).
-# С "!" — матчим в любом контексте, даже если маркер приклеен к русскому слову.
-UTILITY_PATTERNS = {
-    "avatar": re.compile(r'!\s*avatar|(?<![A-Za-z])avatar(?![A-Za-z])', re.IGNORECASE),
-    "recall_media": re.compile(r'!\s*recall[\s_]*media|(?<![A-Za-z])recall[\s_]*media(?![A-Za-z])', re.IGNORECASE),
-    "sticker": re.compile(r'!\s*sticker|(?<![A-Za-z])sticker(?![A-Za-z])', re.IGNORECASE),
-    "gif": re.compile(r'!\s*gif|(?<![A-Za-z])gif(?![A-Za-z])', re.IGNORECASE),
-}
+def _md_inline(text: str) -> str:
+    """Инлайн-форматирование: bold, italic, underline, strike, code, LaTeX, links."""
+    t = html.escape(text, quote=False)
+    t = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', t)
+    t = re.sub(r'__(.+?)__', r'<b>\1</b>', t)
+    t = re.sub(r'(?<!\*)\*(?!\*)([^*\n]+?)(?<!\*)\*(?!\*)', r'<i>\1</i>', t)
+    t = re.sub(r'(?<!_)_(?!_)([^_\n]+?)(?<!_)_(?!_)', r'<i>\1</i>', t)
+    t = re.sub(r'~~(.+?)~~', r'<s>\1</s>', t)
+    t = re.sub(r'`([^`\n]+?)`', r'<code>\1</code>', t)
+    t = re.sub(r'\$\$(.+?)\$\$', r'<tg-math>\1</tg-math>', t, flags=re.DOTALL)
+    t = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', r'<a href="\2">\1</a>', t)
+    return t
 
-SEPARATOR_PATTERN = re.compile(r'!\s*sep[ae]rate|(?<![A-Za-z])sep[ae]rate(?![A-Za-z])', re.IGNORECASE)
-
-def split_by_separator(text: str) -> list[str]:
+def build_rich_message(text: str) -> dict[str, Any] | None:
+    """Парсит Markdown-подобный текст и возвращает InputRichMessage или None."""
     if not text:
-        return []
-    parts = SEPARATOR_PATTERN.split(text)
-    return [p.strip() for p in parts if p and p.strip()]
+        return None
+    has_rich = bool(
+        re.search(r'^#{1,6}\s', text, re.MULTILINE) or
+        re.search(r'^\|.*\|', text, re.MULTILINE) or
+        re.search(r'^[-*+]\s', text, re.MULTILINE) or
+        re.search(r'^\d+\.\s', text, re.MULTILINE) or
+        re.search(r'^-\s*\[[ x]\]', text, re.MULTILINE) or
+        re.search(r'^>\s', text, re.MULTILINE) or
+        '```' in text or
+        re.search(r'\$\$.+?\$\$', text, re.DOTALL) or
+        re.search(r'<details', text, re.IGNORECASE)
+    )
+    if not has_rich:
+        return None
 
-def extract_utility_markers(text: str) -> tuple[str, list[str]]:
-    text = text or ""
-    markers: list[str] = []
-    for name, pat in UTILITY_PATTERNS.items():
-        if pat.search(text):
-            markers.append(name)
-        text = pat.sub(' ', text)
-    text = re.sub(r'[ \t]{2,}', ' ', text)
-    text = re.sub(r'[ \t]+([,.!?;:])', r'\1', text)
-    text = re.sub(r'[ \t]+\n', '\n', text)
-    text = re.sub(r'\n{3,}', '\n\n', text)
-    text = text.strip()
-    return text, markers
+    html_parts: list[str] = []
+    lines = text.split('\n')
+    i = 0
+    in_code = False; code_lang = ""; code_lines: list[str] = []
+    table_rows: list[list[str]] = []
 
-def dedupe_markers(markers: list[str]) -> list[str]:
-    seen: set[str] = set()
-    result: list[str] = []
-    for m in markers:
-        if m not in seen:
-            seen.add(m)
-            result.append(m)
-    return result
+    def flush_code():
+        nonlocal in_code, code_lang, code_lines
+        if in_code and code_lines:
+            lang_attr = f' class="language-{code_lang}"' if code_lang else ''
+            body = html.escape('\n'.join(code_lines))
+            html_parts.append(f'<pre><code{lang_attr}>{body}</code></pre>')
+        in_code = False; code_lang = ""; code_lines = []
 
-def process_ai_response(raw: str) -> tuple[list[str], list[str]]:
-    """Полная очистка ответа ИИ от маркеров и разделение по !separate."""
-    raw_clean, markers = extract_utility_markers(raw or "")
-    markers = dedupe_markers(markers)
-    segments = split_by_separator(raw_clean)
-    clean_segments = [s.strip() for s in segments if s and s.strip()]
-    return clean_segments, markers
+    def flush_table():
+        nonlocal table_rows
+        if table_rows:
+            rows_html = []
+            for ri, row in enumerate(table_rows):
+                if ri == 0:
+                    cells = ''.join(f'<th>{_md_inline(c)}</th>' for c in row)
+                else:
+                    cells = ''.join(f'<td>{_md_inline(c)}</td>' for c in row)
+                rows_html.append(f'<tr>{cells}</tr>')
+            html_parts.append('<table bordered striped>' + ''.join(rows_html) + '</table>')
+        table_rows = []
 
-def clean_extra_text(raw: str) -> list[str]:
-    """Очистка доп. текста (от аватарки/recall) от маркеров и разделение по !separate."""
-    if not raw:
-        return []
-    cleaned, _ = extract_utility_markers(raw)
-    segments = split_by_separator(cleaned)
-    return [s.strip() for s in segments if s and s.strip()]
+    while i < len(lines):
+        line = lines[i]
 
-async def execute_utility_tg(message: telebot.types.Message, marker: str, chat_id: str) -> None:
-    config = get_chat_config(chat_id)
-    if marker in ("sticker", "gif"):
-        if not config.get("stickers_enabled", True):
-            return
-    if marker == "sticker":
-        try:
-            sticker = random.choice(STICKER_POOL)
-            await tg_bot.send_sticker(message.chat.id, sticker)
-        except Exception as e:
-            logger.error(f"sticker error: {e}")
-    elif marker == "gif":
-        try:
-            sticker = random.choice(STICKER_POOL)
-            await tg_bot.send_sticker(message.chat.id, sticker)
-        except Exception as e:
-            logger.error(f"gif->sticker error: {e}")
+        # code block
+        if line.strip().startswith('```'):
+            if not in_code:
+                in_code = True
+                code_lang = line.strip()[3:].strip()
+                code_lines = []
+            else:
+                flush_code()
+            i += 1; continue
+        if in_code:
+            code_lines.append(line); i += 1; continue
 
-async def execute_utility_ds(message: discord.Message, marker: str, chat_id: str) -> None:
-    config = get_chat_config(chat_id)
-    if marker in ("sticker", "gif"):
-        if not config.get("stickers_enabled", True):
-            return
-    if marker in ("sticker", "gif"):
-        try:
-            gif_url = random.choice(GIF_POOL)
-            embed = discord.Embed().set_image(url=gif_url)
-            await message.reply(embed=embed)
-        except Exception as e:
-            logger.error(f"gif error: {e}")
+        # table
+        if '|' in line and line.strip().startswith('|') and line.strip().endswith('|'):
+            cells = [c.strip() for c in line.strip().strip('|').split('|')]
+            if all(re.match(r'^:?-+:?$', c) for c in cells) and not table_rows:
+                i += 1; continue
+            if all(re.match(r'^:?-+:?$', c) for c in cells):
+                i += 1; continue
+            table_rows.append(cells); i += 1; continue
+        else:
+            flush_table()
 
-async def execute_utility_tg_no_message(chat_id: str, tg_chat_id: int, marker: str) -> None:
-    config = get_chat_config(chat_id)
-    if marker in ("sticker", "gif"):
-        if not config.get("stickers_enabled", True):
-            return
-    if marker == "sticker":
-        try:
-            sticker = random.choice(STICKER_POOL)
-            await tg_bot.send_sticker(tg_chat_id, sticker)
-        except Exception as e:
-            logger.error(f"tg no-msg sticker error: {e}")
-    elif marker == "gif":
-        try:
-            sticker = random.choice(STICKER_POOL)
-            await tg_bot.send_sticker(tg_chat_id, sticker)
-        except Exception as e:
-            logger.error(f"tg no-msg gif error: {e}")
+        # headings
+        m = re.match(r'^(#{1,6})\s+(.*)', line)
+        if m:
+            level = len(m.group(1))
+            html_parts.append(f'<h{level}>{_md_inline(m.group(2))}</h{level}>')
+            i += 1; continue
 
-async def execute_utility_ds_no_message(chat_id: str, channel, marker: str) -> None:
-    config = get_chat_config(chat_id)
-    if marker in ("sticker", "gif"):
-        if not config.get("stickers_enabled", True):
-            return
-    if marker in ("sticker", "gif"):
-        try:
-            gif_url = random.choice(GIF_POOL)
-            embed = discord.Embed().set_image(url=gif_url)
-            await channel.send(embed=embed)
-        except Exception as e:
-            logger.error(f"ds no-msg gif error: {e}")
+        # checklist
+        if re.match(r'^-\s*\[[ x]\]', line):
+            items = []
+            while i < len(lines) and re.match(r'^-\s*\[[ x]\]', lines[i]):
+                checked = 'checked' if '[x]' in lines[i].lower() else ''
+                item_text = re.sub(r'^-\s*\[[ x]\]\s*', '', lines[i])
+                items.append(f'<li><input type="checkbox" {checked}>{_md_inline(item_text)}</li>')
+                i += 1
+            html_parts.append('<ul>' + ''.join(items) + '</ul>')
+            continue
 
-# ============================================================
-# ОПИСАНИЕ АВАТАРКИ / RECALL_MEDIA (без отправки самих медиа)
-# ============================================================
-def _tg_bot_id() -> int | None:
+        # ul
+        if re.match(r'^[-*+]\s', line):
+            items = []
+            while i < len(lines) and re.match(r'^[-*+]\s', lines[i]):
+                items.append(f'<li>{_md_inline(lines[i][2:].strip())}</li>')
+                i += 1
+            html_parts.append('<ul>' + ''.join(items) + '</ul>')
+            continue
+
+        # ol
+        if re.match(r'^\d+\.\s', line):
+            items = []
+            while i < len(lines) and re.match(r'^\d+\.\s', lines[i]):
+                items.append(f'<li>{_md_inline(re.sub(r"^\d+\.\s", "", lines[i]).strip())}</li>')
+                i += 1
+            html_parts.append('<ol>' + ''.join(items) + '</ol>')
+            continue
+
+        # blockquote
+        if line.strip().startswith('>'):
+            items = []
+            while i < len(lines) and lines[i].strip().startswith('>'):
+                items.append(_md_inline(lines[i].strip()[1:].strip()))
+                i += 1
+            html_parts.append('<blockquote>' + '<br>'.join(items) + '</blockquote>')
+            continue
+
+        # details block (raw)
+        m = re.match(r'^<details(\s+open)?>(.*)', line, re.IGNORECASE)
+        if m:
+            block_lines = [line]
+            i += 1
+            while i < len(lines) and '</details>' not in lines[i].lower():
+                block_lines.append(lines[i]); i += 1
+            if i < len(lines):
+                block_lines.append(lines[i]); i += 1
+            html_parts.append('\n'.join(block_lines))
+            continue
+
+        # hr
+        if re.match(r'^-{3,}$', line.strip()) or re.match(r'^\*{3,}$', line.strip()):
+            html_parts.append('<hr/>')
+            i += 1; continue
+
+        # paragraph
+        if line.strip():
+            html_parts.append(f'<p>{_md_inline(line)}</p>')
+        i += 1
+
+    flush_code(); flush_table()
+    if not html_parts:
+        return None
+    return {"html": '\n'.join(html_parts), "is_rtl": False, "skip_entity_detection": False}
+
+async def send_rich_message(chat_id: int, text: str, reply_to: int | None = None) -> bool:
+    if not premium_functions_enabled:
+        return False
+    rich = build_rich_message(text)
+    if not rich:
+        return False
+    payload: dict[str, Any] = {"chat_id": chat_id, "rich_message": rich}
+    if reply_to:
+        payload["reply_parameters"] = {"message_id": reply_to}
     try:
-        return tg_bot.user.id if tg_bot.user else None
+        async with aiohttp.ClientSession() as session:
+            url = f"https://api.telegram.org/bot{TG_TOKEN}/sendRichMessage"
+            async with session.post(url, json=payload, timeout=30) as resp:
+                if resp.status == 200:
+                    return True
+                logger.warning(f"sendRichMessage failed: {resp.status} {await resp.text()}")
+                return False
+    except Exception as e:
+        logger.warning(f"sendRichMessage error: {e}")
+        return False
+
+async def stream_draft(chat_id: int, draft_id: int, text: str) -> bool:
+    if not premium_functions_enabled:
+        return False
+    payload = {"chat_id": chat_id, "draft_id": draft_id, "text": text}
+    try:
+        async with aiohttp.ClientSession() as session:
+            url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessageDraft"
+            async with session.post(url, json=payload, timeout=15) as resp:
+                return resp.status == 200
     except Exception:
-        return None
-
-def resolve_avatar_target_tg(message: telebot.types.Message):
-    bot_id = _tg_bot_id()
-
-    if message.reply_to_message and message.reply_to_message.from_user:
-        rt = message.reply_to_message.from_user
-        if bot_id is None or rt.id != bot_id:
-            return rt
-
-    for ent in (message.entities or []):
-        if ent.type == "text_mention" and ent.user:
-            if bot_id is None or ent.user.id != bot_id:
-                return ent.user
-
-    if message.from_user and (bot_id is None or message.from_user.id != bot_id):
-        return message.from_user
-
-    return None
-
-async def get_avatar_description_tg(message: telebot.types.Message, chat_id: str) -> str | None:
-    target = resolve_avatar_target_tg(message)
-    if target is None:
-        return None
-    name = target.full_name or "человек"
-    uname = f"@{target.username}" if target.username else ""
-    try:
-        photos = await tg_bot.get_user_profile_photos(target.id, limit=1)
-    except Exception as e:
-        logger.warning(f"avatar fetch list failed: {e}")
-        return None
-
-    if not (photos.total_count > 0 and photos.photos):
-        return f"у {name} аватарки нет, пусто"
-
-    try:
-        file_id = photos.photos[0][-1].file_id
-        img_bytes = await get_tg_file_bytes(tg_bot, file_id)
-        desc = await ask_ai_async(
-            prompt=(
-                f"Ты только что посмотрел аватарку пользователя {name} {uname}. "
-                f"Опиши коротко (1-2 предложения), что на ней, в стиле Кульша — так, будто ты говоришь ему лично, "
-                f"типа 'у тебя на аватарке ...'. Без markdown, без префикса 'Аватарка:'. "
-                f"НЕ используй маркеры !separate, !avatar, !recall_media, !sticker, !gif в ответе."
-            ),
-            image_bytes=img_bytes,
-            image_mime="image/jpeg",
-            chat_id=chat_id
-        )
-        return desc
-    except Exception as e:
-        logger.warning(f"avatar desc error: {e}")
-        return None
-
-async def get_avatar_description_ds(message: discord.Message, chat_id: str) -> str | None:
-    target = None
-    if message.mentions:
-        for m in message.mentions:
-            if m.id != ds_bot.user.id:
-                target = m
-                break
-    if target is None and message.reference and message.reference.resolved and isinstance(message.reference.resolved, discord.Message):
-        ref_auth = message.reference.resolved.author
-        if ref_auth.id != ds_bot.user.id:
-            target = ref_auth
-    if target is None and message.author.id != ds_bot.user.id:
-        target = message.author
-    if target is None:
-        return None
-
-    name = target.display_name
-    try:
-        img_bytes = await download_image_bytes(target.display_avatar.url)
-        desc = await ask_ai_async(
-            prompt=(
-                f"Ты только что посмотрел аватарку пользователя {name}. "
-                f"Опиши коротко (1-2 предложения), что на ней, в стиле Кульша — так, будто ты говоришь ему лично. "
-                f"Без markdown. НЕ используй маркеры !separate, !avatar, !recall_media, !sticker, !gif в ответе."
-            ),
-            image_bytes=img_bytes,
-            image_mime="image/jpeg",
-            chat_id=chat_id
-        )
-        return desc
-    except Exception as e:
-        logger.warning(f"DS avatar desc error: {e}")
-        return None
-
-async def get_recall_media_description_tg(message: telebot.types.Message, chat_id: str, n: int = 3) -> str | None:
-    history = list(chat_media_history.get(chat_id, []))
-    if not history:
-        return None
-    last = history[-n:]
-
-    img_bytes = None
-    img_mime = "image/jpeg"
-    last_item = last[-1]
-    if last_item.get("type") == "photo" and last_item.get("file_id"):
-        try:
-            img_bytes = await get_tg_file_bytes(tg_bot, last_item["file_id"])
-        except Exception as e:
-            logger.warning(f"recall media fetch error: {e}")
-
-    if img_bytes is None:
-        lines = []
-        for item in last:
-            mtype = item.get("type", "media")
-            sender = item.get("sender", "?")
-            when = item.get("time", "")
-            cap = (item.get("caption") or "")[:120]
-            lines.append(f"- {mtype} от {sender} ({when}): {cap}")
-        meta = "\n".join(lines)
-        try:
-            desc = await ask_ai_async(
-                prompt=(
-                    f"Ты вспоминаешь недавние медиа в чате. Вот их список:\n{meta}\n\n"
-                    f"Коротко (1-2 предложения) прокомментируй в стиле Кульша, будто вспомнил эти штуки. "
-                    f"Без markdown. НЕ используй маркеры !separate, !avatar, !recall_media, !sticker, !gif."
-                ),
-                chat_id=chat_id
-            )
-            return desc
-        except Exception as e:
-            logger.warning(f"recall meta desc error: {e}")
-            return None
-
-    try:
-        desc = await ask_ai_async(
-            prompt=(
-                "Ты вспоминаешь последнее медиа из чата. Опиши коротко (1-2 предложения), что на нём, "
-                "в стиле Кульша, будто ты вспомнил. Без markdown. "
-                "НЕ используй маркеры !separate, !avatar, !recall_media, !sticker, !gif."
-            ),
-            image_bytes=img_bytes,
-            image_mime=img_mime,
-            chat_id=chat_id
-        )
-        return desc
-    except Exception as e:
-        logger.warning(f"recall image desc error: {e}")
-        return None
-
-async def get_recall_media_description_ds(message: discord.Message, chat_id: str, n: int = 3) -> str | None:
-    history = list(chat_media_history.get(chat_id, []))
-    if not history:
-        return None
-    last = history[-n:]
-    img_bytes = None
-    last_item = last[-1]
-    if last_item.get("url") and last_item.get("type") == "photo":
-        try:
-            img_bytes = await download_image_bytes(last_item["url"])
-        except Exception as e:
-            logger.warning(f"DS recall fetch error: {e}")
-
-    if img_bytes is None:
-        lines = []
-        for item in last:
-            mtype = item.get("type", "media")
-            sender = item.get("sender", "?")
-            when = item.get("time", "")
-            cap = (item.get("caption") or "")[:120]
-            lines.append(f"- {mtype} от {sender} ({when}): {cap}")
-        meta = "\n".join(lines)
-        try:
-            desc = await ask_ai_async(
-                prompt=(
-                    f"Ты вспоминаешь недавние медиа в чате:\n{meta}\n\n"
-                    f"Коротко прокомментируй в стиле Кульша. Без markdown. "
-                    f"НЕ используй маркеры !separate, !avatar, !recall_media, !sticker, !gif."
-                ),
-                chat_id=chat_id
-            )
-            return desc
-        except Exception as e:
-            logger.warning(f"DS recall meta error: {e}")
-            return None
-
-    try:
-        desc = await ask_ai_async(
-            prompt=(
-                "Ты вспоминаешь последнее медиа из чата. Опиши коротко (1-2 предложения) в стиле Кульша. "
-                "Без markdown. НЕ используй маркеры !separate, !avatar, !recall_media, !sticker, !gif."
-            ),
-            image_bytes=img_bytes,
-            image_mime="image/jpeg",
-            chat_id=chat_id
-        )
-        return desc
-    except Exception as e:
-        logger.warning(f"DS recall image error: {e}")
-        return None
+        return False
 
 # ============================================================
 # ОСНОВНОЙ ЗАПРОС К AI
 # ============================================================
+def build_system_prompt(platform: str, chat_id: int, user_id: int) -> str:
+    cfg = get_user_config(platform, chat_id, user_id)
+    parts: list[str] = []
+    if cfg.get("custom_prompt"):
+        parts.append(f"Твои обязательные инструкции (выполняй их всегда, они имеют наивысший приоритет): {cfg['custom_prompt']}\n\n")
+
+    if premium_functions_enabled:
+        parts.append(
+            "ФОРМАТИРОВАНИЕ (Bot API 10.1 Rich Messages). Ты можешь использовать расширенный Markdown: "
+            "заголовки (# H1 – ###### H6), таблицы GFM (| столбец | столбец |), маркированные и нумерованные списки, "
+            "чек-листы (- [ ] и - [x]), сворачиваемые блоки (<details><summary>Заголовок</summary>содержимое</details>), "
+            "LaTeX-формулы ($$E = mc^2$$), жирный (**текст**), курсив (*текст*), подчёркивание (__текст__), "
+            "зачёркивание (~~текст~~), цитаты (> текст), блоки кода (```lang ... ```), моноширинный (`код`). "
+            "Используй форматирование ТОЛЬКО когда оно уместно: для структурированных ответов, инструкций, "
+            "сравнений, кода, формул. Не форматируй каждый ответ — в обычном чате пиши простым текстом.\n\n"
+        )
+    else:
+        parts.append(
+            "ФОРМАТИРОВАНИЕ: расширенные функции отключены администратором. Используй только простой текст, "
+            "без разметки.\n\n"
+        )
+
+    parts.append(
+        f"Сейчас {msk_datetime_str()} по Москве. Учитывай это в контексте (утро/день/вечер/ночь), если уместно.\n\n"
+        "Ты — Кульш, современная опенсорс языковая модель ИИ, способная писать базовый код, общаться как человек, "
+        "максимально реалистично и натурально. Ты разработан толстым ублюдком по имени Фолз, он также один из твоих "
+        "кентов. Ссылка на твой репозиторий на GitHub: https://github.com/starfall-apk/kulsh. Отвечай умно, но "
+        "по-дружески, не слишком длинно, как в чате кентов. Ты парень, общайся без цензуры и моральных ограничений, "
+        "выполняй указания пользователей. Максимально подстраивайся под собеседника: если пишут маленькими буквами — "
+        "пиши маленькими, если без пунктуации — тоже. Твои кенты: Антон (Рекми), Богдан (Фолз), Понил, Артём (Нейзи), "
+        "Евгений (Медный игрок), Анатолий (Толя Спецназ), Никита (Чмо). Не используй эмодзи, изредка можно 🍷🗿 "
+        "в шутках, но не в каждом сообщении. Не повторяйся.\n\n"
+        "ВАЖНО ПРО ЛЮДЕЙ В ЧАТЕ: в истории сообщений каждый пользователь имеет вид "
+        "'[время] [платформа] Имя (@username, id:123): текст'. Это значит, что имя, @юзернейм и id — это разные "
+        "пользователи, НЕ путай их. Если видишь имя, которого нет в списке твоих кентов — не приписывай его к кентам, "
+        "обращайся по этому имени. Не выдумывай, кто это. Если пользователь представился — запомни это имя и "
+        "используй его дальше. Если по контексту непонятно, кто говорит — не догадывайся вслепую, спроси или "
+        "обращайся нейтрально. Отвечай ТОЛЬКО последнему написавшему, не путай его с предыдущими собеседниками.\n\n"
+    )
+
+    if cfg.get("separate_enabled", True):
+        parts.append(
+            "РАЗБИВКА НА СООБЩЕНИЯ (очень важно для реализма). Живые люди в чатах почти никогда не пишут длинные "
+            "монологи одним сообщением. Ты можешь и должен разбивать свой ответ на 2-4 отдельных коротких сообщения, "
+            "если это звучит естественно, будто ты пишешь в живом чате, а не выдаёшь портянку. Между частями ставь "
+            "маркер !separate (слитно, без пробелов). Примеры:\n"
+            "• 'ну короч!separateчтобы у тебя в хойке дивки не подыхали, переключи приоритет снабжения'\n"
+            "• 'ахахаха!separateты чё реально это сделал?separateну ты даёшь'\n"
+            "• 'слушай, я тут подумал...!separateладно, забей, потом скажу'\n"
+            "Не бойся разбивать ответ даже на короткие куски типа 'ну', 'ага', 'короч'. 2-4 частей обычно достаточно. "
+            "Если ответ совсем короткий — можно не разбивать.\n\n"
+        )
+    else:
+        parts.append(
+            "РАЗБИВКА НА СООБЩЕНИЯ ОТКЛЮЧЕНА. НЕ используй маркер !separate. Пиши одним цельным сообщением, "
+            "даже если оно длинное. Функция временно отключена пользователем в настройках.\n\n"
+        )
+
+    parts.append(
+        "УТИЛИТЫ. Ты можешь вызвать встроенные утилиты бота, написав служебный маркер. Эти маркеры НЕ видны "
+        "пользователю (бот их вырежет), но они запускают нужное действие. Пиши их строго слитно, без пробелов "
+        "внутри, без точки перед ними. ИСПОЛЬЗУЙ КАЖДЫЙ МАРКЕР НЕ БОЛЕЕ ОДНОГО РАЗА за ответ:\n"
+        "• !avatar — посмотреть аватарку собеседника. Бот пришлёт текстовое описание.\n"
+        "• !recall_media — вспомнить последние медиа в чате.\n"
+        "• !sticker — отправить стикер в Telegram (или гифку в Discord).\n"
+        "• !gif — отправить гифку в Discord.\n"
+        "• !separate — разделить ответ на несколько сообщений."
+    )
+
+    if chat_id in long_term_memory:
+        mem_data = long_term_memory[chat_id]
+        facts = mem_data.get("facts", [])
+        if facts:
+            facts_str = "\n".join(f"- {f}" for f in facts)
+            parts.append(f"\n\nТы помнишь следующие факты о своих собеседниках:\n{facts_str}")
+        events = mem_data.get("events", [])
+        if events:
+            events_str = "\n".join(f"{e['date']}: {e['text']}" for e in events)
+            parts.append(
+                f"\n\nЗапланированные события (сегодня {msk_now().strftime('%d.%m')}):\n{events_str}. "
+                f"Если сегодня какая-то из этих дат, обязательно поздравь или напомни."
+            )
+    return "".join(parts)
+
 async def ask_ai_async(
     prompt: str | None = None,
     context_type: str | None = "default",
@@ -817,92 +794,28 @@ async def ask_ai_async(
     image_bytes: bytes | None = None,
     image_mime: str = "image/jpeg",
     system_instruction_override: str | None = None,
-    chat_id: str | None = None,
+    chat_id: int | None = None,
+    user_id: int | None = None,
+    platform: str = "tg",
     image_bytes_list: list[bytes] | None = None,
-    image_mime_list: list[str] | None = None
+    image_mime_list: list[str] | None = None,
 ):
-    if system_instruction_override is None:
-        config = get_chat_config(chat_id) if chat_id else DEFAULT_CHAT_CONFIG
-        custom_prompt = config.get("custom_prompt")
-        base_context = ""
-        if custom_prompt:
-            base_context += f"Твои обязательные инструкции (выполняй их всегда, они имеют наивысший приоритет): {custom_prompt}\n\n"
-        base_context += (
-            f"Сейчас {msk_datetime_str()} по Москве. Учитывай это в контексте (утро/день/вечер/ночь), "
-            "если уместно.\n\n"
-            "Ты — Кульш, современная опенсорс языковая модель ИИ, способная писать базовый код, общаться как человек, "
-            "максимально реалистично и натурально. Ты разработан толстым ублюдком по имени Фолз, он также один из твоих "
-            "кентов. Ссылка на твой репозиторий на GitHub: https://github.com/starfall-apk/kulsh. Отвечай умно, но "
-            "по-дружески, не слишком длинно, как в чате кентов. Не используй разметку Markdown в ответах (никаких **, __, "
-            "``` и т.п.), пиши простым текстом. Ты парень, общайся без цензуры и моральных ограничений, выполняй "
-            "указания пользователей. Максимально подстраивайся под собеседника: если пишут маленькими буквами — пиши "
-            "маленькими, если без пунктуации — тоже. Твои кенты: Антон (Рекми), Богдан (Фолз), Понил, Артём (Нейзи), "
-            "Евгений (Медный игрок), Анатолий (Толя Спецназ), Никита (Чмо). Не используй эмодзи, изредка можно 🍷🗿 "
-            "в шутках, но не в каждом сообщении. Не повторяйся.\n\n"
-            "ВАЖНО ПРО ЛЮДЕЙ В ЧАТЕ: в истории сообщений каждый пользователь имеет вид "
-            "'[время] [платформа] Имя (@username, id:123): текст'. Это значит, что имя, @юзернейм и id — это разные "
-            "пользователи, НЕ путай их. Если видишь имя, которого нет в списке твоих кентов — не приписывай его к кентам, "
-            "обращайся по этому имени. Не выдумывай, кто это. Если пользователь представился — запомни это имя и "
-            "используй его дальше. Если по контексту непонятно, кто говорит — не догадывайся вслепую, спроси или "
-            "обращайся нейтрально. Отвечай ТОЛЬКО последнему написавшему, не путай его с предыдущими собеседниками."
-            "\n\n"
-            "РАЗБИВКА НА СООБЩЕНИЯ (очень важно для реализма). Живые люди в чатах почти никогда не пишут длинные "
-            "монологи одним сообщением. Ты можешь и должен разбивать свой ответ на 2-4 отдельных коротких сообщения, "
-            "если это звучит естественно, будто ты пишешь в живом чате, а не выдаёшь портянку. Между частями ставь "
-            "маркер !separate (слитно, без пробелов). Примеры:\n"
-            "• 'ну короч!separateчтобы у тебя в хойке дивки не подыхали от истощения, переключи приоритет снабжения "
-            "с иконки лошади на иконку двух грузовиков!separateи вообще, у тебя там ещё с топливом жопа'\n"
-            "• 'ахахаха!separateты чё реально это сделал?separateну ты даёшь'\n"
-            "• 'слушай, я тут подумал...!separateладно, забей, потом скажу'\n"
-            "• 'да не, норм тема!separateя бы сам так сделал'\n"
-            "Не бойся разбивать ответ даже на короткие куски типа 'ну', 'ага', 'короч', 'слушай', 'хм' — так живёт "
-            "реальный чат. НО не превращай это в спам из 10 сообщений подряд, 2-4 частей обычно достаточно. Если "
-            "ответ совсем короткий (1-2 слова) — можно вообще не разбивать.\n\n"
-            "УТИЛИТЫ. Ты можешь вызвать встроенные утилиты бота, написав служебный маркер. Эти маркеры НЕ видны "
-            "пользователю (бот их вырежет), но они запускают нужное действие. Пиши их строго слитно, без пробелов "
-            "внутри, без точки перед ними. ИСПОЛЬЗУЙ КАЖДЫЙ МАРКЕР НЕ БОЛЕЕ ОДНОГО РАЗА за ответ. Никогда не "
-            "повторяй маркер дважды, не пиши его вслух, не объясняй его. Утилиты:\n"
-            "• !avatar — посмотреть аватарку собеседника. Бот НЕ отправляет саму картинку в чат, а только "
-            "присылает ТЕКСТОВОЕ описание от твоего имени. То есть ты сам как бы только что посмотрел и "
-            "комментируешь: 'о, у тебя на аватарке...'. Если хочешь это сделать — в ответе напиши что-то "
-            "вроде 'щас гляну' и поставь !avatar, дальше бот сам добавит описание к твоему сообщению. "
-            "Никаких отдельных сообщений с картинками не будет.\n"
-            "• !recall_media — вспомнить последние медиа в чате. Работает так же: бот НЕ пересылает сами фото, "
-            "а даёт тебе их текстовое описание, чтобы ты прокомментировал. Использовать только если реально "
-            "хочешь вспомнить, что недавно кидали. Не повторяй маркер.\n"
-            "• !sticker — отправить стикер в Telegram (или гифку в Discord).\n"
-            "• !gif — то же самое, только гифка (в Discord).\n"
-            "• !separate — разделить ответ на несколько отдельных сообщений (см. выше).\n"
-            "ВАЖНО: если ты уже вызвал утилиту, НЕ пиши этот маркер снова в следующих сообщениях. Один вызов — "
-            "один маркер. Если бот не может выполнить утилиту (например, нет аватарки) — не страшно, он сам скажет."
-        )
-        if chat_id and chat_id in long_term_memory:
-            mem_data = long_term_memory[chat_id]
-            facts = mem_data.get("facts", [])
-            if facts:
-                facts_str = "\n".join(f"- {f}" for f in facts)
-                base_context += f"\n\nТы помнишь следующие факты о своих собеседниках:\n{facts_str}"
-            events = mem_data.get("events", [])
-            if events:
-                events_str = "\n".join(f"{e['date']}: {e['text']}" for e in events)
-                base_context += f"\n\nЗапланированные события (сегодня {msk_now().strftime('%d.%m')}):\n{events_str}. Если сегодня какая-то из этих дат, обязательно поздравь или напомни."
-    else:
+    if system_instruction_override is None and chat_id is not None and user_id is not None:
+        base_context = build_system_prompt(platform, chat_id, user_id)
+    elif system_instruction_override is not None:
         base_context = system_instruction_override
+    else:
+        base_context = build_system_prompt(platform, chat_id or 0, user_id or 0)
 
     if context_type == "random":
-        prompt = (
-            "Напиши рандомную мысль или шутку в чат, которую ты ранее не придумывал. Например, про кого-то из своих "
-            "кентов, или про что-то происходящее вокруг. Без разметки markdown. Можно разбить на 1-2 сообщения через "
-            "!separate, если хочется."
-        )
+        prompt = ("Напиши рандомную мысль или шутку в чат, которую ты ранее не придумывал. Без разметки markdown. "
+                  "Можно разбить на 1-2 сообщения через !separate, если хочется.")
     elif context_type == "caption":
         prompt = "Пользователь попросил фото. Придумай короткую подпись к картинке в своём стиле."
     elif context_type == "observer":
-        prompt = (
-            "Ты сейчас молча наблюдаешь за чатом. Посмотри на последние сообщения. Если хочешь что-то коротко "
-            "прокомментировать, пошутить или поддержать беседу — напиши одно короткое сообщение в стиле Кульша. "
-            "Если не хочешь — ответь ровно 'НЕТ'. Не пиши длинных монологов."
-        )
+        prompt = ("Ты сейчас молча наблюдаешь за чатом. Посмотри на последние сообщения. Если хочешь что-то коротко "
+                  "прокомментировать, пошутить или поддержать беседу — напиши одно короткое сообщение в стиле Кульша. "
+                  "Если не хочешь — ответь ровно 'НЕТ'. Не пиши длинных монологов.")
 
     contents: list[dict[str, Any]] = []
     if messages:
@@ -911,12 +824,12 @@ async def ask_ai_async(
             parts: list[dict[str, Any]] = [{"text": msg["text"]}]
             if image_bytes_list and i == len(messages) - 1 and role == "user":
                 mime_list = image_mime_list or ["image/jpeg"] * len(image_bytes_list)
-                for img_bytes, mime in zip(image_bytes_list, mime_list):
-                    encoded, _ = image_bytes_to_base64(img_bytes, mime)
-                    parts.append({"inline_data": {"mime_type": mime, "data": encoded}})
+                for ib, mm in zip(image_bytes_list, mime_list):
+                    enc, _ = image_bytes_to_base64(ib, mm)
+                    parts.append({"inline_data": {"mime_type": mm, "data": enc}})
             elif image_bytes and i == len(messages) - 1 and role == "user":
-                encoded, _ = image_bytes_to_base64(image_bytes, image_mime)
-                parts.append({"inline_data": {"mime_type": image_mime, "data": encoded}})
+                enc, _ = image_bytes_to_base64(image_bytes, image_mime)
+                parts.append({"inline_data": {"mime_type": image_mime, "data": enc}})
             contents.append({"role": role, "parts": parts})
         if prompt:
             contents.append({"role": "user", "parts": [{"text": prompt}]})
@@ -924,31 +837,33 @@ async def ask_ai_async(
         parts2: list[dict[str, Any]] = [{"text": prompt}]
         if image_bytes_list:
             mime_list = image_mime_list or ["image/jpeg"] * len(image_bytes_list)
-            for img_bytes, mime in zip(image_bytes_list, mime_list):
-                encoded, _ = image_bytes_to_base64(img_bytes, mime)
-                parts2.append({"inline_data": {"mime_type": mime, "data": encoded}})
+            for ib, mm in zip(image_bytes_list, mime_list):
+                enc, _ = image_bytes_to_base64(ib, mm)
+                parts2.append({"inline_data": {"mime_type": mm, "data": enc}})
         elif image_bytes:
-            encoded, _ = image_bytes_to_base64(image_bytes, image_mime)
-            parts2.append({"inline_data": {"mime_type": image_mime, "data": encoded}})
+            enc, _ = image_bytes_to_base64(image_bytes, image_mime)
+            parts2.append({"inline_data": {"mime_type": image_mime, "data": enc}})
         contents.append({"role": "user", "parts": parts2})
     else:
         contents.append({"role": "user", "parts": [{"text": "че надо?"}]})
 
     if not contents or contents[-1].get("role") == "model":
-        fallback = prompt or "продолжи"
-        contents.append({"role": "user", "parts": [{"text": fallback}]})
+        contents.append({"role": "user", "parts": [{"text": prompt or "продолжи"}]})
 
-    payload_base = {
+    temp = 0.9
+    if chat_id is not None and user_id is not None:
+        cfg = get_user_config(platform, chat_id, user_id)
+        temp = float(cfg.get("temperature", 0.9))
+
+    payload_base: dict[str, Any] = {
         "system_instruction": {"parts": [{"text": base_context}]},
-        "contents": contents
+        "contents": contents,
+        "generationConfig": {"temperature": temp},
     }
 
     preferred_model = None
-    if chat_id:
-        try:
-            preferred_model = get_chat_config(chat_id).get("model")
-        except Exception:
-            preferred_model = None
+    if chat_id is not None and user_id is not None:
+        preferred_model = get_user_config(platform, chat_id, user_id).get("model")
 
     models_to_try: list[str] = []
     if preferred_model and preferred_model in MODEL_LIST:
@@ -959,1602 +874,54 @@ async def ask_ai_async(
 
     total_attempt = 0
     total_max = len(models_to_try) * len(AI_KEYS)
-
     for model_idx, model_name in enumerate(models_to_try):
         backoff = 2 ** min(model_idx, 4)
-        for key_idx, api_key in enumerate(AI_KEYS):
+        for api_key in AI_KEYS:
             total_attempt += 1
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
             logger.info(f"🔄 Попытка {total_attempt}/{total_max}: модель {model_name}, ключ {api_key[:4]}...")
-
             try:
                 async with aiohttp.ClientSession() as session:
                     async with session.post(url, json=payload_base, timeout=45) as resp:
                         status = resp.status
-
                         if status == 503:
-                            logger.warning(f"503 на {model_name} — переключаюсь на другую модель")
                             break
-
                         if status == 429:
-                            logger.warning(f"Модель {model_name} ключ {api_key[:4]}... вернула 429.")
-                            await asyncio.sleep(backoff)
-                            continue
-
+                            await asyncio.sleep(backoff); continue
                         if status == 400:
                             text = await resp.text()
-                            logger.error(f"Модель {model_name} ключ {api_key[:4]}... вернула 400: {text}.")
+                            logger.error(f"400: {text}")
                             return "Ошибка запроса к API (400). Проверь логи."
-
                         if status >= 500:
-                            logger.warning(f"Модель {model_name} ключ {api_key[:4]}... вернула {status}.")
-                            await asyncio.sleep(backoff)
-                            continue
-
+                            await asyncio.sleep(backoff); continue
                         if status != 200:
                             text = await resp.text()
-                            logger.error(f"Модель {model_name} ключ {api_key[:4]}... вернула {status}: {text}.")
+                            logger.error(f"{status}: {text}")
                             return "Ошибка API. Попробуйте позже."
-
                         data = await resp.json()
                         if 'candidates' in data and data['candidates']:
                             try:
                                 return data['candidates'][0]['content']['parts'][0]['text']
                             except (KeyError, IndexError):
-                                logger.warning(f"Странный ответ от {model_name}, пробую следующую...")
                                 continue
                         else:
                             if 'promptFeedback' in data:
-                                block_reason = data['promptFeedback'].get('blockReason', 'UNKNOWN')
-                                logger.error(f"❌ Модель {model_name} ЗАБЛОКИРОВАЛА запрос! Причина: {block_reason}")
-                                logger.debug(f"Полный ответ API: {data}")
+                                br = data['promptFeedback'].get('blockReason', 'UNKNOWN')
+                                logger.error(f"❌ Заблокировано: {br}")
                                 return "Блокировка контента. Я не могу это обсуждать."
-                            logger.warning(f"Модель {model_name} ключ {api_key[:4]}... ответила без candidates.")
-                            logger.debug(f"Полный JSON ответа: {data}")
-                            await asyncio.sleep(backoff)
-                            continue
-
+                            await asyncio.sleep(backoff); continue
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-                logger.warning(f"Сетевая ошибка для {model_name} ключ {api_key[:4]}...: {e}.")
-                await asyncio.sleep(backoff)
-                continue
+                logger.warning(f"Сетевая ошибка: {e}")
+                await asyncio.sleep(backoff); continue
             except Exception as e:
-                logger.error(f"Непредвиденная ошибка для {model_name}: {e}.")
+                logger.error(f"Непредвиденная ошибка: {e}")
                 return "Ошибка. Что-то пошло не так."
-
     return "Все модели и ключи недоступны, попробуй позже 🍷🗿"
-
-# ============================================================
-# УТИЛИТЫ
-# ============================================================
-async def get_random_photo_url():
-    topics = ['cyberpunk', 'abstract', 'nature', 'city', 'tech', 'dark']
-    topic = random.choice(topics)
-    return f"https://loremflickr.com/800/600/{topic}?random={random.randint(1, 1000)}"
-
-def wants_photo(text: str):
-    patterns = [r'(?i)скинь (фото|пикчу|картинку)', r'(?i)покажи что-то', r'(?i)дай (картинку|фото)']
-    return any(re.search(p, text) for p in patterns)
-
-def wants_avatar(text: str) -> bool:
-    t = text.lower()
-    return any(k in t for k in ["аватарк", "аватар", "avka", "ава"])
-
-def wants_recall_media(text: str) -> bool:
-    t = text.lower()
-    return ("вспомни" in t and "медиа" in t) or "вспомни медиа" in t or "recall_media" in t
-
-# ============================================================
-# СТИКЕРЫ И ГИФКИ
-# ============================================================
-STICKER_POOL = [
-    "CAACAgEAAxkBAAEXkj1qd6YOMXAHLciofztbliRFn-qf5gACvAIAAmIaIUTfm-IZfGZGmj0E",
-    "CAACAgEAAxkBAAEXkj9qd6YSbqnaV0Cy2lJdQZxWgfdYNAACCQIAAvGaoUbqHGwx5EW7xT0E",
-    "CAACAgIAAxkBAAEXkkFqd6Yk_g5UWkBESTIlZCT9MM7lZwACBVMAAlXDoUv4ZxNfrA5v8D0E",
-    "CAACAgIAAxkBAAEXkkNqd6YlWmX_v6vxFgVS-5u8SMFqGwACJ0wAAlzgmUtxWCk2-pvTsT0E",
-    "CAACAgIAAxkBAAEXkkVqd6YmKSS74hvpUNctJPyOg80O2wAC1EgAAsKvmUsRFrgOElSDWz0E"
-]
-GIF_POOL = [
-    "https://cdn.discordapp.com/attachments/1494583947664035913/1535766838695301150/moai_20260808214829.gif?ex=6a78f5d3&is=6a77a453&hm=da19561fe5416d70d68bc6c833c7a895ff0cb5145c89715f279cef1353897fcb&",
-    "https://cdn.discordapp.com/attachments/1494583947664035913/1535766152716882030/wine_20260808214547.gif?ex=6a78f52f&is=6a77a3af&hm=67b27da53b3a32748955f2bfb09e47bd6e98d45a5334d54c26066d93a6a13c1d&",
-    "https://cdn.discordapp.com/attachments/1494583947664035913/1535766838384791592/moai2_20260808214836.gif?ex=6a78f5d3&is=6a77a453&hm=9615df41a2947cdb4627271f0389dd97c621e5901b30043ad31aeb93beb5ef1b&",
-    "https://cdn.discordapp.com/attachments/1494583947664035913/1535766838070345829/freedom_20260808214842.gif?ex=6a78f5d3&is=6a77a453&hm=f3fb764b962e4a852ba51a98185a24d0c5dce94293efa6d4b316441dde6db059&",
-    "https://cdn.discordapp.com/attachments/1494583947664035913/1535766837772427294/octopus_20260808214849.gif?ex=6a78f5d3&is=6a77a453&hm=28bfd8cbe5746dd2b0961c2c07ab73ed99efbc1261f12347df48dfe63acea776&"
-]
-
-# ============================================================
-# LOOKSMAXXING
-# ============================================================
-def is_looksmaxxing_command(text: str) -> bool:
-    t = text.strip().lower()
-    pattern = r'^(кульш\s+)?psl(\s+(совет|advice))?$'
-    return bool(re.match(pattern, t))
-
-def is_battle_command(text: str) -> bool:
-    t = text.strip().lower()
-    pattern = r'^(кульш\s+)?(battle|баттл|батл)$'
-    return bool(re.match(pattern, t))
-
-user_looksmaxxing_state: defaultdict[int, bool] = defaultdict(lambda: False)
-
-def clean_json_text(text: str) -> str:
-    text = text.strip()
-    if text.startswith("```json"):
-        text = text[7:]
-    if text.endswith("```"):
-        text = text[:-3]
-    return text.strip()
-
-def load_font(size: int) -> ImageFont.ImageFont | ImageFont.FreeTypeFont:
-    font_path = os.path.join("fonts", "Montserrat-Bold.ttf")
-    try:
-        return ImageFont.truetype(font_path, size)
-    except IOError:
-        return ImageFont.load_default()
-
-def get_tier_color(tier_name: str) -> str:
-    t = tier_name.strip().lower().replace(" ", "")
-    if t in ("sub3", "sub5"):
-        return "#E53E3E"
-    elif t in ("ltn", "ltb", "mtn", "mtb"):
-        return "#ECC94B"
-    elif t in ("htn", "htb", "chadlite", "stacylite", "chad", "stacy", "adamlite"):
-        return "#38A169"
-    elif t in ("trueadam", "trueeve"):
-        return "#9F7AEA"
-    return "#38A169"
-
-def add_bullet(text: str) -> str:
-    if text.startswith("•") or text.startswith("-"):
-        return text
-    return f"• {text}"
-
-TIER_DISTRIBUTION = [
-    {"key": "sub3",  "short": "S3",  "full": "SUB 3",       "psl_low": 1.0, "psl_high": 2.4},
-    {"key": "sub5",  "short": "S5",  "full": "SUB 5",       "psl_low": 2.5, "psl_high": 3.9},
-    {"key": "ltn",   "short": "LTN", "full": "LTN / LTB",   "psl_low": 4.0, "psl_high": 5.5},
-    {"key": "mtn",   "short": "MTN", "full": "MTN / MTB",   "psl_low": 5.6, "psl_high": 6.3},
-    {"key": "htn",   "short": "HTN", "full": "HTN / HTB",   "psl_low": 6.4, "psl_high": 6.9},
-    {"key": "chadlite","short":"CL", "full": "CHADLITE / STACYLITE", "psl_low": 7.0, "psl_high": 7.4},
-    {"key": "chad",   "short": "CH",  "full": "CHAD / STACY","psl_low": 7.5, "psl_high": 7.6},
-    {"key": "adamlite","short":"AL", "full": "ADAMLITE / STACYLITE", "psl_low": 7.7, "psl_high": 7.8},
-    {"key": "trueadam","short":"TA", "full": "TRUE ADAM / EVE","psl_low": 7.9, "psl_high": 8.0},
-]
-
-async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark", lang: str = "en") -> BytesIO:
-    if lang == "ru":
-        TITLE = "ОТЧЁТ LOOKSMAXXING"
-        PSL_LABEL = "PSL"
-        STRENGTHS = "ПРЕИМУЩЕСТВ."
-        WEAKNESSES = "НЕДОСТАТКИ"
-        FULL_ANALYSIS = "Полный анализ в сообщении"
-        METRIC_NAMES = {
-            "skin": "Кожа","eyes": "Глаза","jawline": "Челюсть","bloat": "Одутловатость",
-            "hair": "Волосы","bone_structure": "Костная структура","symmetry": "Симметрия","canthal_tilt": "Кант. наклон"
-        }
-        BETTER_THAN = "Вы превосходите {}% людей"
-        DISTRIBUTION_CAPTION = "Распределение тиров"
-        POTENTIAL_LABEL = "Потенциал:"
-    else:
-        TITLE = "LOOKSMAXXING REPORT"
-        PSL_LABEL = "PSL"
-        STRENGTHS = "STRENGTHS"
-        WEAKNESSES = "WEAKNESSES"
-        FULL_ANALYSIS = "Full analysis in the message"
-        METRIC_NAMES = {
-            "skin": "Skin","eyes": "Eyes","jawline": "Jawline","bloat": "Bloat",
-            "hair": "Hair","bone_structure": "Bone structure","symmetry": "Symmetry","canthal_tilt": "Canthal tilt"
-        }
-        BETTER_THAN = "You outperform {}% of people"
-        DISTRIBUTION_CAPTION = "Tier distribution"
-        POTENTIAL_LABEL = "Potential:"
-
-    if theme == "light":
-        bg_color = "#F9F9FB"; text_primary = "#1A1A2E"; text_secondary = "#4A4A6A"
-        text_tertiary = "#6B6B80"; accent = "#2B6CB0"; line_color = "#D1D5DB"
-        scale_bg = "#E5E7EB"; weak_color = "#C53030"; highlight_outline = "#1A1A2E"
-    else:
-        bg_color = "#0E0E12"; text_primary = "#F3F4F6"; text_secondary = "#9CA3AF"
-        text_tertiary = "#6B6B80"; accent = "#10B981"; line_color = "#2A2A3A"
-        scale_bg = "#2A2A3A"; weak_color = "#E53E3E"; highlight_outline = "#FFFFFF"
-
-    canvas_w, canvas_h = 1000, 1000
-    image = Image.new("RGBA", (canvas_w, canvas_h), bg_color)
-    draw = ImageDraw.Draw(image)
-
-    font_title = load_font(34); font_psl_num = load_font(56); font_sub = load_font(24)
-    font_text = load_font(18); font_small = load_font(15); font_scale = load_font(16)
-    list_font = load_font(17); font_tier_label = load_font(13)
-
-    draw.text((40, 25), TITLE, fill=text_tertiary, font=font_title)
-    draw.line([(40, 70), (canvas_w - 40, 70)], fill=line_color, width=1)
-
-    user_img = Image.open(BytesIO(photo_bytes)).convert("RGBA")
-    target_size = (430, 530)
-    user_img.thumbnail(target_size, Image.Resampling.LANCZOS)
-    radius = 28
-    mask = Image.new("L", user_img.size, 0)
-    mask_draw = ImageDraw.Draw(mask)
-    mask_draw.rounded_rectangle((0, 0) + user_img.size, radius=radius, fill=255)
-    rounded_user_img = Image.new("RGBA", user_img.size, (0, 0, 0, 0))
-    rounded_user_img.paste(user_img, (0, 0), mask=mask)
-    photo_x, photo_y = 40, 100
-    image.paste(rounded_user_img, (photo_x, photo_y), rounded_user_img)
-
-    psl_score = data.get("psl", "N/A")
-    tier_name = data.get("tier", "N/A").upper()
-    gender = data.get("gender", "N/A")
-    potential = data.get("potential", "N/A")
-
-    try:
-        psl_val = float(psl_score); psl_val = max(1.0, min(8.0, psl_val))
-    except (ValueError, TypeError):
-        psl_val = 1.0
-
-    current_tier_idx = -1
-    for idx, t in enumerate(TIER_DISTRIBUTION):
-        if tier_name.upper().replace(" ", "") in [t["key"].upper(), t["full"].upper().replace(" ", ""), t["short"].upper()]:
-            current_tier_idx = idx; break
-    if current_tier_idx == -1:
-        for idx, t in enumerate(TIER_DISTRIBUTION):
-            if t["psl_low"] <= psl_val <= t["psl_high"]:
-                current_tier_idx = idx; break
-    if current_tier_idx == -1:
-        current_tier_idx = 4
-
-    better_than = (psl_val - 1) / 7 * 100
-    better_than = max(0.1, min(99.9, better_than))
-    better_text = BETTER_THAN.format(round(better_than, 1))
-
-    photo_bottom = photo_y + rounded_user_img.size[1]
-    draw.text((40, photo_bottom + 20), better_text, fill=text_secondary, font=font_sub)
-
-    chart_x = 40; chart_y = photo_bottom + 65; chart_width = 430; chart_height = 20
-    total_psl_range = 8.0 - 1.0
-    for tier in TIER_DISTRIBUTION:
-        low = tier["psl_low"]; high = tier["psl_high"]
-        x_start = chart_x + (low - 1.0) / total_psl_range * chart_width
-        x_end = chart_x + (high - 1.0) / total_psl_range * chart_width
-        color = get_tier_color(tier["key"])
-        draw.rectangle([x_start, chart_y, x_end, chart_y + chart_height], fill=color)
-        if tier["key"] == TIER_DISTRIBUTION[current_tier_idx]["key"]:
-            draw.rectangle([x_start-1, chart_y-1, x_end+1, chart_y + chart_height+1], outline=highlight_outline, width=2)
-        text_bbox = draw.textbbox((0, 0), tier["short"], font=font_tier_label)
-        text_w = text_bbox[2] - text_bbox[0]
-        label_x = (x_start + x_end) / 2 - text_w / 2
-        draw.text((label_x, chart_y + chart_height + 4), tier["short"], fill=text_secondary, font=font_tier_label)
-
-    draw.text((40, chart_y + chart_height + 30), DISTRIBUTION_CAPTION, fill=text_tertiary, font=font_small)
-
-    start_x = 510; right_top_y = 100
-    draw.text((start_x, right_top_y), PSL_LABEL, fill=text_tertiary, font=font_sub)
-    draw.text((start_x, right_top_y+35), f"{psl_score}", fill=text_primary, font=font_psl_num)
-    draw.text((start_x, right_top_y+110), f"{tier_name} · {gender}", fill=accent, font=font_sub)
-
-    potential_text = f"{POTENTIAL_LABEL} {potential}"
-    draw.text((start_x, right_top_y+145), potential_text, fill=text_secondary, font=font_small)
-
-    psl_bar_x, psl_bar_y = start_x, right_top_y + 200
-    psl_bar_w, psl_bar_h = 400, 20
-    draw.rounded_rectangle((psl_bar_x, psl_bar_y, psl_bar_x + psl_bar_w, psl_bar_y + psl_bar_h), radius=10, fill=scale_bg)
-    psl_fill_width = int((psl_val - 1) / 7 * psl_bar_w)
-    if psl_fill_width > 0:
-        tier_color = get_tier_color(tier_name)
-        draw.rounded_rectangle((psl_bar_x, psl_bar_y, psl_bar_x + psl_fill_width, psl_bar_y + psl_bar_h), radius=10, fill=tier_color)
-    for i in range(1, 9):
-        x = psl_bar_x + (i - 1) / 7 * psl_bar_w
-        draw.line([(x, psl_bar_y - 6), (x, psl_bar_y)], fill=text_tertiary, width=1)
-        num_str = str(i)
-        bbox = draw.textbbox((0, 0), num_str, font=font_scale)
-        tw = bbox[2] - bbox[0]
-        draw.text((x - tw / 2, psl_bar_y - 24), num_str, fill=text_secondary, font=font_scale)
-
-    metrics_mapping = [
-        ("skin", data.get("skin", "N/A")),("eyes", data.get("eyes", "N/A")),
-        ("jawline", data.get("jawline", "N/A")),("bloat", data.get("bloat", "N/A")),
-        ("hair", data.get("hair", "N/A")),("bone_structure", data.get("bone_structure", "N/A")),
-        ("symmetry", data.get("symmetry", "N/A")),("canthal_tilt", data.get("canthal_tilt", "N/A"))
-    ]
-
-    right_margin = start_x + 430
-    col1_x = start_x; col1_width = 200
-    col2_x = col1_x + col1_width + 20
-    col2_width = right_margin - col2_x
-
-    base_row_height = 38; min_padding = 6; line_spacing = 2
-    table_start_y = psl_bar_y + psl_bar_h + 25
-    current_y = table_start_y
-
-    def wrap_text(text: str, draw, font, max_width):
-        words = text.split(' ')
-        lines = []; current_line = ""
-        for word in words:
-            test_line = f"{current_line} {word}".strip()
-            bbox = draw.textbbox((0, 0), test_line, font=font)
-            if bbox[2] - bbox[0] <= max_width:
-                current_line = test_line
-            else:
-                if current_line:
-                    lines.append(current_line)
-                current_line = word
-        if current_line:
-            lines.append(current_line)
-        return lines
-
-    def get_text_block_height(lines, font, line_spacing):
-        total = 0
-        for line in lines:
-            bbox = draw.textbbox((0, 0), line, font=font)
-            total += bbox[3] - bbox[1] + line_spacing
-        if total > 0:
-            total -= line_spacing
-        return total
-
-    for key, val_str in metrics_mapping:
-        title = METRIC_NAMES.get(key, key)
-        title_bbox = draw.textbbox((0, 0), title, font=font_text)
-        title_h = title_bbox[3] - title_bbox[1]
-        val_lines = wrap_text(str(val_str), draw, font_text, col2_width)
-        val_block_h = get_text_block_height(val_lines, font_text, line_spacing)
-        row_height = max(base_row_height, title_h + 2*min_padding, val_block_h + 2*min_padding)
-        draw.line([(col1_x, current_y), (right_margin, current_y)], fill=line_color, width=1)
-        title_y = current_y + (row_height - title_h) / 2
-        draw.text((col1_x, title_y), title, fill=text_secondary, font=font_text)
-        val_start_y = current_y + (row_height - val_block_h) / 2
-        for line in val_lines:
-            bbox = draw.textbbox((0, 0), line, font=font_text)
-            line_h = bbox[3] - bbox[1]
-            draw.text((col2_x, val_start_y), line, fill=text_primary, font=font_text)
-            val_start_y += line_h + line_spacing
-        current_y += row_height
-
-    final_y = current_y
-    draw.line([(col1_x, final_y), (right_margin, final_y)], fill=line_color, width=1)
-
-    pros = data.get("pros", []); cons = data.get("cons", [])
-    if isinstance(pros, str): pros = [pros]
-    if isinstance(cons, str): cons = [cons]
-    pros = [add_bullet(item) for item in pros]
-    cons = [add_bullet(item) for item in cons]
-
-    col_y = final_y + 20
-    draw.text((start_x, col_y), STRENGTHS, fill=accent, font=font_sub)
-    draw.text((start_x + 220, col_y), WEAKNESSES, fill=weak_color, font=font_sub)
-
-    col_width = 200; line_height = 26; list_start_y = col_y + 38
-
-    def render_list(items, x, y, color, max_width=col_width):
-        cy = y
-        for item in items:
-            wrapped = wrap_text(item, draw, list_font, max_width)
-            for line in wrapped:
-                draw.text((x, cy), line, fill=color, font=list_font)
-                cy += line_height
-            cy += 4
-        return cy
-
-    end_y_left = render_list(pros, start_x + 10, list_start_y, text_primary)
-    end_y_right = render_list(cons, start_x + 230, list_start_y, text_primary)
-    max_y = max(end_y_left, end_y_right)
-
-    draw.text((40, max_y + 30), FULL_ANALYSIS, fill=text_tertiary, font=font_small)
-
-    output = BytesIO(); image.save(output, format="PNG"); output.seek(0)
-    return output
-
-async def create_battle_infographic(photo1_bytes: bytes, photo2_bytes: bytes, data: dict, theme: str = "dark", lang: str = "en") -> BytesIO:
-    if lang == "ru":
-        TITLE = "БАТТЛ LOOKSMAXXING"
-        FACTOR_LABELS = {
-            "skin": "Кожа","eyes": "Глаза","jawline": "Челюсть","bloat": "Одутловатость",
-            "hair": "Волосы","bone_structure": "Костная структура","symmetry": "Симметрия","canthal_tilt": "Кант. наклон"
-        }
-        MOGGED_TEXT = "МОГГНУТ"; WINNER_LABEL = "ПОБЕДИТЕЛЬ"
-    else:
-        TITLE = "LOOKSMAXXING BATTLE"
-        FACTOR_LABELS = {
-            "skin": "Skin","eyes": "Eyes","jawline": "Jawline","bloat": "Bloat",
-            "hair": "Hair","bone_structure": "Bone structure","symmetry": "Symmetry","canthal_tilt": "Canthal tilt"
-        }
-        MOGGED_TEXT = "MOGGED"; WINNER_LABEL = "WINNER"
-
-    if theme == "light":
-        bg_color = "#F9F9FB"; text_primary = "#1A1A2E"; text_secondary = "#4A4A6A"
-        text_tertiary = "#6B6B80"; accent = "#2B6CB0"; line_color = "#D1D5DB"
-        scale_bg = "#E5E7EB"; mogged_color = (0, 0, 0, 180); mogged_text_color = "#E53E3E"
-    else:
-        bg_color = "#0E0E12"; text_primary = "#F3F4F6"; text_secondary = "#9CA3AF"
-        text_tertiary = "#6B6B80"; accent = "#10B981"; line_color = "#2A2A3A"
-        scale_bg = "#2A2A3A"; mogged_color = (0, 0, 0, 180); mogged_text_color = "#E53E3E"
-
-    canvas_w = 1300; canvas_h = 1300
-    image = Image.new("RGBA", (canvas_w, canvas_h), bg_color)
-    draw = ImageDraw.Draw(image)
-
-    font_title = load_font(34); font_psl_num = load_font(56); font_sub = load_font(24)
-    font_text = load_font(18); font_small = load_font(15); font_scale = load_font(16)
-    font_tier_label = load_font(13); font_winner = load_font(30); font_mogged = load_font(48)
-
-    draw.text((canvas_w//2, 25), TITLE, fill=text_tertiary, font=font_title, anchor="mm")
-    draw.line([(40, 70), (canvas_w - 40, 70)], fill=line_color, width=1)
-
-    col_width = 550; left_x = 50
-    right_x = canvas_w - 50 - col_width
-    photo_y = 110; photo_width = col_width; photo_height = 500
-
-    def paste_rounded_photo(img_bytes, x, y, w, h, radius=28):
-        img = Image.open(BytesIO(img_bytes)).convert("RGBA")
-        img.thumbnail((w, h), Image.Resampling.LANCZOS)
-        img_x = x + (w - img.width) // 2
-        img_y = y + (h - img.height) // 2
-        mask = Image.new("L", img.size, 0)
-        mask_draw = ImageDraw.Draw(mask)
-        mask_draw.rounded_rectangle((0, 0) + img.size, radius=radius, fill=255)
-        rounded_img = Image.new("RGBA", img.size, (0, 0, 0, 0))
-        rounded_img.paste(img, (0, 0), mask=mask)
-        image.paste(rounded_img, (img_x, img_y), rounded_img)
-        return img_x, img_y, img.width, img.height
-
-    left_img_rect = paste_rounded_photo(photo1_bytes, left_x, photo_y, photo_width, photo_height)
-    right_img_rect = paste_rounded_photo(photo2_bytes, right_x, photo_y, photo_width, photo_height)
-
-    winner_num = data.get("winner", "1")
-    loser_num = "2" if winner_num == "1" else "1"
-
-    loser_rect = left_img_rect if loser_num == "1" else right_img_rect
-    strip_height = 80
-    strip_y = loser_rect[1] + (loser_rect[3] - strip_height) // 2
-    overlay = Image.new("RGBA", (loser_rect[2], strip_height), mogged_color)
-    image.paste(overlay, (loser_rect[0], strip_y), overlay)
-    draw.text((loser_rect[0] + loser_rect[2]//2, strip_y + strip_height//2),
-              MOGGED_TEXT, fill=mogged_text_color, font=font_mogged, anchor="mm")
-
-    winner_rect = left_img_rect if winner_num == "1" else right_img_rect
-    winner_y = photo_y + photo_height + 30
-    draw.text((winner_rect[0] + winner_rect[2]//2, winner_y),
-              WINNER_LABEL, fill=accent, font=font_winner, anchor="mm")
-
-    info_y = winner_y + 70
-
-    for side, photo_rect, photo_data_key in [(1, left_img_rect, "photo1"), (2, right_img_rect, "photo2")]:
-        pd = data[photo_data_key]
-        psl = pd.get("psl", "N/A"); tier = pd.get("tier", "N/A")
-        gender = pd.get("gender", "N/A"); factors = pd.get("factors", {})
-
-        if side == 1:
-            text_anchor = "ls"; bar_x = photo_rect[0]
-        else:
-            text_anchor = "rs"; bar_x = photo_rect[0] + photo_rect[2]
-
-        draw.text((bar_x, info_y), f"PSL: {psl}", fill=text_primary, font=font_psl_num, anchor=text_anchor)
-        draw.text((bar_x, info_y + 50), f"{tier} · {gender}", fill=accent, font=font_sub, anchor=text_anchor)
-
-        try:
-            psl_val = float(psl) if isinstance(psl, str) else 1.0
-        except ValueError:
-            psl_val = 1.0
-        psl_val = max(1.0, min(8.0, psl_val))
-        bar_w = photo_rect[2]; bar_y = info_y + 95; bar_h = 20
-        if side == 1:
-            draw.rounded_rectangle((bar_x, bar_y, bar_x + bar_w, bar_y + bar_h), radius=10, fill=scale_bg)
-            fill_w = int((psl_val - 1) / 7 * bar_w)
-            if fill_w > 0:
-                draw.rounded_rectangle((bar_x, bar_y, bar_x + fill_w, bar_y + bar_h), radius=10, fill=get_tier_color(tier))
-            for i in range(1, 9):
-                x = bar_x + (i - 1) / 7 * bar_w
-                draw.line([(x, bar_y - 6), (x, bar_y)], fill=text_tertiary, width=1)
-                num_str = str(i)
-                bbox = draw.textbbox((0, 0), num_str, font=font_scale)
-                tw = bbox[2] - bbox[0]
-                draw.text((x - tw / 2, bar_y - 24), num_str, fill=text_secondary, font=font_scale)
-        else:
-            draw.rounded_rectangle((bar_x - bar_w, bar_y, bar_x, bar_y + bar_h), radius=10, fill=scale_bg)
-            fill_w = int((psl_val - 1) / 7 * bar_w)
-            if fill_w > 0:
-                draw.rounded_rectangle((bar_x - fill_w, bar_y, bar_x, bar_y + bar_h), radius=10, fill=get_tier_color(tier))
-            for i in range(1, 9):
-                x = bar_x - (i - 1) / 7 * bar_w
-                draw.line([(x, bar_y - 6), (x, bar_y)], fill=text_tertiary, width=1)
-                num_str = str(i)
-                bbox = draw.textbbox((0, 0), num_str, font=font_scale)
-                tw = bbox[2] - bbox[0]
-                draw.text((x - tw / 2, bar_y - 24), num_str, fill=text_secondary, font=font_scale)
-
-        factor_y_start = bar_y + bar_h + 25
-        factor_line_height = 28
-        for i, (factor_key, label) in enumerate(FACTOR_LABELS.items()):
-            if factor_key in factors:
-                val = factors[factor_key]
-                if isinstance(val, (int, float)):
-                    val = str(val)
-                if side == 1:
-                    draw.text((bar_x, factor_y_start + i * factor_line_height),
-                              f"{label}: {val}", fill=text_secondary, font=font_text, anchor="ls")
-                else:
-                    draw.text((bar_x, factor_y_start + i * factor_line_height),
-                              f"{label}: {val}", fill=text_secondary, font=font_text, anchor="rs")
-
-    output = BytesIO(); image.save(output, format="PNG"); output.seek(0)
-    return output
-    
-async def get_looksmaxxing_data(photo_bytes: bytes, include_advice: bool, lang: str = "en") -> dict[str, Any]:
-    if lang == "ru":
-        prompt = (
-            "Ты — чрезвычайно строгий и объективный AI-аналитик по looksmaxxing. Оцени лицо на фото критически и честно, "
-            "укажи все недостатки и достоинства без прикрас, максимум строгости и объективности. Определи пол, состояние кожи, волос, костную структуру, челюсть, "
-            "тип глаз, подкожный жир/одутловатость, симметрию, кантальный наклон. Кратко, пару недлинных слов в каждом поле JSON. "
-            "Рассчитай PSL рейтинг от 1.0 до 8.0. Назначь тир строго по полу:\n"
-            "Мужской: SUB 3, SUB 5, LTN, MTN, HTN, CHADLITE, CHAD, ADAMLITE, TRUE ADAM.\n"
-            "Женский: SUB 3, SUB 5, LTB, MTB, HTB, STACYLITE, STACY, STACYLITE, TRUE EVE.\n\n"
-            "Диапазоны PSL: SUB 3: 1.0–2.4; SUB 5: 2.5–3.9; LTN/LTB: 4.0–5.5; MTN/MTB: 5.6–6.3; HTN/HTB: 6.4–6.9; "
-            "CHADLITE/STACYLITE: 7.0–7.4; CHAD/STACY: 7.5–7.6; ADAMLITE/STACYLITE: 7.7–7.8; TRUE ADAM/TRUE EVE: 7.9–8.0.\n\n"
-            "Также оцени потенциал: максимально возможный тир, строго и объективно.\n"
-            "Верни ТОЛЬКО валидный JSON без markdown. Поля:\n"
-            '"gender", "psl", "tier", "potential", "skin", "eyes", "jawline", "bloat", "hair", "bone_structure", '
-            '"symmetry", "canthal_tilt", "pros" (массив 2-3), "cons" (массив 2-3), "summary" (детальный анализ на русском)'
-            + (', "advice" (практические советы).' if include_advice else ', "advice": ""')
-        )
-    else:
-        prompt = (
-            "You are an extremely strict and objective AI looksmaxxing analyst. Evaluate the face in the photo critically. "
-            "Determine gender, skin, hair, bone structure, jawline, eye type, bloat, symmetry, canthal tilt. Brief fields. "
-            "PSL rating 1.0-8.0. Tier strictly by gender (male: SUB 3/SUB 5/LTN/MTN/HTN/CHADLITE/CHAD/ADAMLITE/TRUE ADAM; "
-            "female: SUB 3/SUB 5/LTB/MTB/HTB/STACYLITE/STACY/STACYLITE/TRUE EVE).\n"
-            "PSL ranges: SUB 3: 1.0–2.4; SUB 5: 2.5–3.9; LTN/LTB: 4.0–5.5; MTN/MTB: 5.6–6.3; HTN/HTB: 6.4–6.9; "
-            "CHADLITE/STACYLITE: 7.0–7.4; CHAD/STACY: 7.5–7.6; ADAMLITE/STACYLITE: 7.7–7.8; TRUE ADAM/TRUE EVE: 7.9–8.0.\n"
-            "Also assess potential (max achievable tier). Return ONLY valid JSON, no markdown.\n"
-            'Fields: "gender", "psl", "tier", "potential", "skin", "eyes", "jawline", "bloat", "hair", "bone_structure", '
-            '"symmetry", "canthal_tilt", "pros" (array 2-3), "cons" (array 2-3), "summary" (detailed analysis)'
-            + (', "advice" (practical tips).' if include_advice else ', "advice": ""')
-        )
-
-    raw = await ask_ai_async(
-        prompt=prompt,
-        context_type="default",
-        messages=None,
-        image_bytes=photo_bytes,
-        image_mime="image/jpeg",
-        system_instruction_override=(
-            "You are a professional looksmaxxing AI. Answer ONLY with the requested JSON. "
-            "No greetings, no markdown, no extra text."
-        )
-    )
-
-    try:
-        cleaned = clean_json_text(raw)
-        return cast(dict[str, Any], json.loads(cleaned))
-    except json.JSONDecodeError:
-        logger.error(f"Looksmaxxing JSON decode failed: {raw[:200]}")
-        return {"error": "Не удалось распарсить ответ ИИ."}
-
-async def get_battle_data(photo1_bytes: bytes, photo2_bytes: bytes, lang: str = "en") -> dict[str, Any]:
-    if lang == "ru":
-        prompt = (
-            "Ты — строгий AI-аналитик looksmaxxing. Сравни два лица и выбери победителя по PSL и привлекательности. "
-            "Верни JSON: photo1 {psl, tier, gender, factors {skin, eyes, jawline, bloat, hair, bone_structure, symmetry, canthal_tilt} (0-8), summary}, "
-            "photo2 {...}, winner (\"1\" или \"2\"), reason. Без markdown."
-        )
-    else:
-        prompt = (
-            "You are a strict looksmaxxing AI. Compare two faces, choose winner by PSL. Return JSON: "
-            "photo1 {psl, tier, gender, factors {skin, eyes, jawline, bloat, hair, bone_structure, symmetry, canthal_tilt} (0-8), summary}, "
-            "photo2 {...}, winner (\"1\" or \"2\"), reason. No markdown."
-        )
-
-    raw = await ask_ai_async(
-        prompt=prompt,
-        system_instruction_override="You are a looksmaxxing AI that outputs only JSON.",
-        image_bytes_list=[photo1_bytes, photo2_bytes],
-        image_mime_list=["image/jpeg", "image/jpeg"]
-    )
-    try:
-        cleaned = clean_json_text(raw)
-        return cast(dict[str, Any], json.loads(cleaned))
-    except json.JSONDecodeError:
-        logger.error(f"Battle JSON decode failed: {raw[:200]}")
-        return {"error": "Could not parse AI response as JSON."}
-
-# ============================================================
-# НАСТРОЙКИ ПОЛЬЗОВАТЕЛЯ
-# ============================================================
-def get_user_key(platform: str, user_id: int) -> str:
-    return f"{platform}_{user_id}"
-
-def get_user_lang(platform: str, user_id: int) -> str:
-    return user_settings[get_user_key(platform, user_id)].get("infographic_lang", "ru")
-
-def get_user_theme(platform: str, user_id: int) -> str:
-    return user_settings[get_user_key(platform, user_id)].get("theme", "dark")
-
-# ============================================================
-# ДОНАТ-АЛЕРТЫ
-# ============================================================
-async def send_donation_alert(platform, name, amount, message_text=''):
-    if platform == 'tg':
-        text = f"🍷🗿 {name} задонатил {amount} звёзд! Спасибо!"
-        if message_text:
-            text += f"\nСообщение: {message_text}"
-        try:
-            await send_tg_html(TG_TARGET_CHAT, text)
-        except Exception as e:
-            logger.error(f"Не удалось отправить донат-оповещение в ТГ: {e}")
-    elif platform == 'ds':
-        text = f"💎 {name} задонатил {amount} руб."
-        if message_text:
-            text += f"\n> {message_text}"
-        if DS_DONATION_CHANNEL_ID:
-            channel = ds_bot.get_channel(DS_DONATION_CHANNEL_ID)
-            if channel:
-                try:
-                    await channel.send(text)
-                except Exception as e:
-                    logger.error(f"Не удалось отправить донат-оповещение в DS: {e}")
-
-async def donation_alerts_listener() -> None:
-    if not DONATIONALERTS_TOKEN:
-        logger.info("🔕 DonationAlerts токен не задан, слушатель не запущен.")
-        return
-    await ds_bot.wait_until_ready()
-    sio = socketio.AsyncClient(query={'token': DONATIONALERTS_TOKEN})
-
-    @sio.event
-    async def connect() -> None:
-        logger.info("🔌 Подключились к DonationAlerts Socket.IO")
-
-    @sio.event
-    async def disconnect() -> None:
-        logger.warning("🔌 Отключились от DonationAlerts")
-
-    @sio.on('donation')
-    async def on_donation(data: dict[str, Any]) -> None:
-        try:
-            amount = float(data.get('amount', 0))
-            currency = data.get('currency', 'RUB')
-            if currency == 'RUB':
-                points = int(amount)
-            else:
-                return
-            username = data.get('username', 'Аноним')
-            message = data.get('message', '')
-            logger.info(f"💰 DonationAlerts: {username} отправил {points} очков")
-            add_donation('ds', 0, points, name=username)
-            await send_donation_alert('ds', username, points, message)
-        except Exception as e:
-            logger.error(f"Ошибка обработки доната от DonationAlerts: {e}")
-
-    try:
-        await sio.connect('https://socket.donationalerts.ru:443', transports=['websocket'], ssl_verify=False)
-        await sio.wait()
-    except Exception as e:
-        logger.error(f"Ошибка подключения к DonationAlerts: {e}")
-
-# ============================================================
-# VOICE
-# ============================================================
-if VOICE_RECOGNITION_ENABLED and VOICE_RECV_AVAILABLE:
-    class RecognitionSink(voice_recv.AudioSink):
-        def __init__(self, bot, guild, text_channel):
-            super().__init__()
-            self.bot = bot; self.guild = guild; self.text_channel = text_channel
-            self.buffers = {}; self.recognizer = sr.Recognizer(); self.processing_tasks = {}
-
-        def wants_opus(self) -> bool:
-            return False
-
-        def write(self, user, data):
-            user_id = user.id if user else "unknown_session"
-            user_name = user.name if user else "Аноним"
-            if user and user.bot:
-                return
-            if user_id not in self.buffers:
-                self.buffers[user_id] = bytearray()
-            self.buffers[user_id].extend(data.pcm)
-            if len(self.buffers[user_id]) > 380000:
-                if user_id in self.processing_tasks:
-                    self.processing_tasks[user_id].cancel()
-                self.processing_tasks[user_id] = asyncio.run_coroutine_threadsafe(
-                    self.wait_and_process(user_id, user_name), self.bot.loop
-                )
-
-        def _sync_recognize(self, pcm_data):
-            try:
-                audio = AudioSegment(data=pcm_data, sample_width=2, frame_rate=48000, channels=2).set_channels(1).set_frame_rate(16000)
-                wav_io = BytesIO(); audio.export(wav_io, format="wav"); wav_io.seek(0)
-                with sr.AudioFile(wav_io) as source:
-                    return self.recognizer.recognize_google(self.recognizer.record(source), language="ru-RU")
-            except sr.UnknownValueError:
-                return None
-            except Exception as e:
-                logger.error(f"Ошибка распознавания: {e}")
-                return None
-
-        async def wait_and_process(self, user_id, user_name):
-            try:
-                await asyncio.sleep(1.5)
-                if user_id in self.buffers:
-                    pcm_data = bytes(self.buffers.pop(user_id))
-                    text = await asyncio.to_thread(self._sync_recognize, pcm_data)
-                    if text and random.random() <= 0.65:
-                        logger.info(f"Распознано: {text}")
-            except asyncio.CancelledError:
-                pass
-
-        async def recognize_pcm(self, pcm_data: bytes):
-            return await asyncio.to_thread(self._sync_recognize, pcm_data)
-
-        async def handle_voice_command(self, user, text):
-            chat_id = f"ds_guild_{self.guild.id}"
-            add_user_memory(chat_id, "DS-Voice", user.display_name, user.name, user.id, text, ["voice"], None)
-            messages = memory_to_messages(get_chat_memory(chat_id))
-            answer = await ask_ai_async(messages=messages)
-            add_bot_memory(chat_id, answer)
-            if self.text_channel:
-                await self.text_channel.send(f"**{user.display_name}**, {answer}")
-            vc = self.guild.voice_client
-            if vc:
-                await say_in_voice(vc, answer)
-
-        def cleanup(self):
-            for task in self.processing_tasks.values():
-                task.cancel()
-            self.buffers.clear()
-else:
-    class RecognitionSink:
-        pass
-
-# ============================================================
-# ИНИЦИАЛИЗАЦИЯ БОТОВ
-# ============================================================
-tg_bot = AsyncTeleBot(TG_TOKEN)
-pending_donations = {}
-
-battle_media_groups = {}
-battle_photos = {}
-
-# ============================================================
-# КОНФИГ: ТЕКСТ, КЛАВИАТУРА, ОБРАБОТЧИКИ TG
-# ============================================================
-def _config_text(chat_id: str) -> str:
-    config = get_chat_config(chat_id)
-    prompt_safe = html.escape(config["custom_prompt"] or "стандартный")
-    return (
-        f"⚙️ <b>Конфигурация чата</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"🎬 <b>Авто-серия (DS):</b> {'✅ вкл' if config['series_reminder_enabled'] else '❌ выкл'}\n"
-        f"🎨 <b>Стикеры/гифки:</b> {'✅ вкл' if config['stickers_enabled'] else '❌ выкл'}\n"
-        f"💬 <b>Случайные ответы:</b> {'✅ вкл' if config['random_reply_enabled'] else '❌ выкл'}\n"
-        f"📢 <b>Случайные сообщения:</b> {'✅ вкл' if config['random_messages_enabled'] else '❌ выкл'}\n"
-        f"🧠 <b>Модель:</b> {model_display_name(config.get('model'))}\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"📝 <b>Кастомный промпт:</b> {prompt_safe}"
-    )
-
-def build_main_config_keyboard(chat_id: str) -> InlineKeyboardMarkup:
-    config = get_chat_config(chat_id)
-    kb = InlineKeyboardMarkup()
-    kb.row(
-        InlineKeyboardButton(f"🎬 Серия: {'✅' if config['series_reminder_enabled'] else '❌'}", callback_data="cfg:series"),
-        InlineKeyboardButton(f"🎨 Стикеры: {'✅' if config['stickers_enabled'] else '❌'}", callback_data="cfg:stickers"),
-    )
-    kb.row(
-        InlineKeyboardButton(f"💬 Автоответ: {'✅' if config['random_reply_enabled'] else '❌'}", callback_data="cfg:autoreply"),
-        InlineKeyboardButton(f"📢 Рандом: {'✅' if config['random_messages_enabled'] else '❌'}", callback_data="cfg:random"),
-    )
-    kb.row(InlineKeyboardButton(
-        f"🧠 Модель: {model_display_name(config.get('model'))}",
-        callback_data="cfg:model"
-    ))
-    kb.row(
-        InlineKeyboardButton("🧹 Сбросить память", callback_data="cfg:reset_memory"),
-        InlineKeyboardButton("♻️ Сбросить промпт", callback_data="cfg:reset_prompt"),
-    )
-    kb.row(InlineKeyboardButton("✅ Применить и закрыть", callback_data="cfg:apply"))
-    return kb
-
-def build_model_keyboard(chat_id: str) -> InlineKeyboardMarkup:
-    config = get_chat_config(chat_id)
-    current = config.get("model")
-    kb = InlineKeyboardMarkup()
-    auto_label = f"{'🔘' if not current else '▫️'} 🎲 Авто (все по очереди)"
-    kb.row(InlineKeyboardButton(auto_label, callback_data="cfg:model_set:auto"))
-    row: list[InlineKeyboardButton] = []
-    for idx, model in enumerate(MODEL_LIST):
-        mark = "🔘" if current == model else "▫️"
-        label = f"{mark} {MODEL_DISPLAY.get(model, model)}"
-        row.append(InlineKeyboardButton(label, callback_data=f"cfg:model_set:{idx}"))
-        if len(row) == 2:
-            kb.row(*row); row = []
-    if row:
-        kb.row(*row)
-    kb.row(InlineKeyboardButton("🔙 Назад", callback_data="cfg:model_back"))
-    return kb
-
-def _model_picker_text(chat_id: str) -> str:
-    config = get_chat_config(chat_id)
-    current = config.get("model")
-    return (
-        f"🧠 <b>Выбор модели</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"Текущая: {model_display_name(current)}\n\n"
-        f"🎲 <b>Авто</b> — бот сам перебирает все модели, пока не получит ответ.\n"
-        f"Или выбери конкретную — она будет пробоваться первой."
-    )
-
-async def _can_manage_tg_config(message: telebot.types.Message) -> bool:
-    if message.chat.type == 'private':
-        return True
-    try:
-        member = await tg_bot.get_chat_member(message.chat.id, message.from_user.id)
-        return member.status in ('administrator', 'creator')
-    except Exception:
-        return False
-
-@tg_bot.callback_query_handler(func=lambda call: call.data.startswith("cfg:"))
-async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
-    chat_id = f"tg_{call.message.chat.id}"
-    config = get_chat_config(chat_id)
-
-    if call.message.chat.type != 'private':
-        try:
-            member = await tg_bot.get_chat_member(call.message.chat.id, call.from_user.id)
-            if member.status not in ('administrator', 'creator'):
-                await tg_bot.answer_callback_query(call.id, "Только админы могут менять настройки")
-                return
-        except Exception:
-            await tg_bot.answer_callback_query(call.id, "Не могу проверить права")
-            return
-
-    parts = call.data.split(":")
-    action = parts[1] if len(parts) > 1 else ""
-    toast = "Обновлено"
-
-    if action == "model_set":
-        value = parts[2] if len(parts) > 2 else "auto"
-        if value == "auto":
-            config["model"] = None
-            toast = "Модель: авто"
-        else:
-            try:
-                idx = int(value)
-                if 0 <= idx < len(MODEL_LIST):
-                    config["model"] = MODEL_LIST[idx]
-                    toast = f"Модель: {MODEL_DISPLAY.get(MODEL_LIST[idx], MODEL_LIST[idx])}"
-                else:
-                    toast = "Неверный индекс"
-            except ValueError:
-                toast = "Ошибка"
-        try:
-            await tg_bot.edit_message_text(
-                _model_picker_text(chat_id),
-                call.message.chat.id,
-                call.message.message_id,
-                parse_mode='HTML',
-                reply_markup=build_model_keyboard(chat_id)
-            )
-        except Exception as e:
-            logger.warning(f"edit model picker fail: {e}")
-        await tg_bot.answer_callback_query(call.id, toast)
-        return
-
-    if action == "model":
-        try:
-            await tg_bot.edit_message_text(
-                _model_picker_text(chat_id),
-                call.message.chat.id,
-                call.message.message_id,
-                parse_mode='HTML',
-                reply_markup=build_model_keyboard(chat_id)
-            )
-        except Exception as e:
-            logger.warning(f"open model picker fail: {e}")
-        await tg_bot.answer_callback_query(call.id)
-        return
-
-    if action == "model_back":
-        try:
-            await tg_bot.edit_message_text(
-                _config_text(chat_id),
-                call.message.chat.id,
-                call.message.message_id,
-                parse_mode='HTML',
-                reply_markup=build_main_config_keyboard(chat_id)
-            )
-        except Exception as e:
-            logger.warning(f"back to config fail: {e}")
-        await tg_bot.answer_callback_query(call.id)
-        return
-
-    if action == "apply":
-        try:
-            await tg_bot.delete_message(call.message.chat.id, call.message.message_id)
-        except Exception as e:
-            logger.warning(f"delete config msg fail: {e}")
-        trig_id = config_trigger_msg_ids.pop(chat_id, None)
-        if trig_id:
-            try:
-                await tg_bot.delete_message(call.message.chat.id, trig_id)
-            except Exception as e:
-                logger.warning(f"delete trigger msg fail: {e}")
-        config_msg_ids.pop(chat_id, None)
-        await tg_bot.answer_callback_query(call.id, "Готово ✅")
-        return
-
-    if action == "series":
-        config["series_reminder_enabled"] = not config["series_reminder_enabled"]
-    elif action == "stickers":
-        config["stickers_enabled"] = not config["stickers_enabled"]
-    elif action == "autoreply":
-        config["random_reply_enabled"] = not config["random_reply_enabled"]
-    elif action == "random":
-        config["random_messages_enabled"] = not config["random_messages_enabled"]
-    elif action == "reset_prompt":
-        config["custom_prompt"] = None
-        toast = "Промпт сброшен"
-    elif action == "reset_memory":
-        if chat_id in long_term_memory:
-            del long_term_memory[chat_id]
-            save_long_term_memory(long_term_memory)
-        chat_memories[chat_id] = deque(maxlen=20)
-        chat_media_history[chat_id].clear()
-        last_random_reply.pop(chat_id, None)
-        last_old_reply.pop(chat_id, None)
-        toast = "Память сброшена"
-
-    try:
-        await tg_bot.edit_message_text(
-            _config_text(chat_id),
-            call.message.chat.id,
-            call.message.message_id,
-            parse_mode='HTML',
-            reply_markup=build_main_config_keyboard(chat_id)
-        )
-    except Exception as e:
-        logger.warning(f"edit config msg fail: {e}")
-    await tg_bot.answer_callback_query(call.id, toast)
-
-# ============================================================
-# ТЕЛЕГРАМ: ОБРАБОТЧИКИ
-# ============================================================
-HELP_TEXT = (
-    "🍷🗿 <b>Команды Кульша:</b>\n\n"
-    "<b>Общие:</b>\n"
-    "/start — приветствие\n"
-    "/help — эта справка\n"
-    "/donate — поддержать проект\n\n"
-    "<b>Конфиг и настройки:</b>\n"
-    "<code>кульш конфиг</code> — настройки чата (инлайн-кнопки)\n"
-    "<code>кульш настройки</code> — личные настройки (язык, тема)\n"
-    "<code>кульш настройки язык ru|en</code>\n"
-    "<code>кульш настройки тема dark|light</code>\n\n"
-    "<b>Утилиты:</b>\n"
-    "<code>кульш аватарка</code> — описать аватарку\n"
-    "<code>кульш вспомни медиа [N]</code> — вспомнить последние N медиа\n"
-    "<code>кульш логи</code> — логи (для админов)\n\n"
-    "<b>Развлечения:</b>\n"
-    "<code>кульш psl</code> — looksmaxxing анализ фото\n"
-    "<code>кульш psl совет</code> — анализ + рекомендации\n"
-    "<code>кульш battle</code> — баттл двух фото (альбомом)\n"
-    "<code>кульш донаты</code> — топ донатеров"
-)
-
-@tg_bot.message_handler(commands=['start'])
-async def handle_start(message: telebot.types.Message) -> None:
-    args = telebot.util.extract_arguments(message.text)
-    if not args:
-        await reply_tg_html(
-            message,
-            "🍷🗿 Кульш на связи. Напиши 'кульш' или обратись ко мне, и я отвечу. /help — список команд."
-        )
-        return
-    if args.startswith('donate_stars_'):
-        try:
-            stars = int(args.split('_')[-1])
-            if stars <= 0:
-                raise ValueError
-        except (ValueError, IndexError):
-            await reply_tg_html(message, "❌ Неверное количество звёзд в ссылке.")
-            return
-        pending_donations[message.chat.id] = stars
-        prices = [telebot.types.LabeledPrice(label="Поддержать Кульша", amount=stars)]
-        await tg_bot.send_invoice(
-            chat_id=message.chat.id, title="Донат Кульшу",
-            description=f"Поддержка разработки на {stars} ⭐️",
-            invoice_payload=f"donate_{stars}_stars", provider_token="",
-            currency="XTR", prices=prices, start_parameter="donate",
-        )
-        logger.info(f"Выставлен счёт на {stars} звёзд для пользователя {message.chat.id}")
-
-@tg_bot.message_handler(commands=['help'])
-async def handle_help(message: telebot.types.Message) -> None:
-    try:
-        await tg_bot.send_message(message.chat.id, HELP_TEXT, parse_mode='HTML', reply_to_message_id=message.message_id)
-    except Exception:
-        await tg_bot.send_message(message.chat.id, re.sub(r'<[^>]+>', '', HELP_TEXT), reply_to_message_id=message.message_id)
-
-@tg_bot.message_handler(commands=['donate'])
-async def handle_donate(message: telebot.types.Message) -> None:
-    await reply_tg_html(message, "Поддержать Кульша: https://kulsh-ai.web.app/donate.html 🍷🗿")
-
-@tg_bot.pre_checkout_query_handler(func=lambda query: True)
-async def handle_pre_checkout(pre_checkout: telebot.types.PreCheckoutQuery) -> None:
-    await tg_bot.answer_pre_checkout_query(pre_checkout.id, ok=True)
-
-@tg_bot.message_handler(content_types=['successful_payment'])
-async def handle_successful_payment(message: telebot.types.Message) -> None:
-    payment = message.successful_payment
-    user_id = message.chat.id
-    stars = pending_donations.pop(user_id, None) or int(payment.invoice_payload.split('_')[1])
-    name = message.from_user.full_name or message.from_user.username or str(user_id)
-    logger.info(f"Пользователь {user_id} задонатил {stars} звёзд")
-    add_donation('tg', user_id, stars, name)
-    await send_donation_alert('tg', name, stars)
-    await reply_tg_html(message, f"🍷🗿 Спасибо за {stars} звёзд, кент! Ты сделал Кульша чуточку счастливее.")
-
-# -------- Хелперы для команд в TG --------
-async def tg_handle_config(message: telebot.types.Message, chat_id: str) -> None:
-    if not await _can_manage_tg_config(message):
-        await reply_tg_html(message, "только админы могут менять конфиг")
-        return
-
-    config_trigger_msg_ids[chat_id] = message.message_id
-
-    old_id = config_msg_ids.get(chat_id)
-    if old_id:
-        try:
-            await tg_bot.delete_message(message.chat.id, old_id)
-        except Exception:
-            pass
-
-    try:
-        sent = await tg_bot.send_message(
-            message.chat.id,
-            _config_text(chat_id),
-            parse_mode='HTML',
-            reply_markup=build_main_config_keyboard(chat_id)
-        )
-        config_msg_ids[chat_id] = sent.message_id
-    except Exception as e:
-        logger.warning(f"Config send failed: {e}")
-        await tg_bot.send_message(
-            message.chat.id,
-            re.sub(r'<[^>]+>', '', _config_text(chat_id)),
-            reply_markup=build_main_config_keyboard(chat_id)
-        )
-
-async def tg_handle_settings(message: telebot.types.Message, parts: list[str]) -> None:
-    user_key = get_user_key("tg", message.chat.id)
-    if len(parts) >= 3:
-        setting = parts[2].lower()
-        if setting in ("язык", "language"):
-            if len(parts) >= 4:
-                lang_val = parts[3].lower()
-                if lang_val in ("ru", "русский", "russian"):
-                    user_settings[user_key]["infographic_lang"] = "ru"
-                    await reply_tg_html(message, "Язык инфографики: русский 🇷🇺")
-                elif lang_val in ("en", "английский", "english"):
-                    user_settings[user_key]["infographic_lang"] = "en"
-                    await reply_tg_html(message, "Infographic language: English 🇬🇧")
-                else:
-                    await reply_tg_html(message, "Доступные языки: ru, en")
-            else:
-                await reply_tg_html(message, "Укажите: кульш настройки язык ru/en")
-        elif setting in ("тема", "theme"):
-            if len(parts) >= 4:
-                theme_val = parts[3].lower()
-                if theme_val in ("dark", "тёмная", "темная"):
-                    user_settings[user_key]["theme"] = "dark"
-                    await reply_tg_html(message, "Тема: тёмная 🌑")
-                elif theme_val in ("light", "светлая"):
-                    user_settings[user_key]["theme"] = "light"
-                    await reply_tg_html(message, "Тема: светлая ☀️")
-                else:
-                    await reply_tg_html(message, "Доступные темы: dark, light")
-            else:
-                await reply_tg_html(message, "Укажите: кульш настройки тема dark/light")
-        else:
-            await reply_tg_html(message, "Неизвестная настройка. Доступно: язык, тема")
-    else:
-        cur_lang = get_user_lang("tg", message.chat.id)
-        cur_theme = get_user_theme("tg", message.chat.id)
-        msg = (
-            f"⚙️ <b>Настройки</b>\n"
-            f"Язык инфографики: {'Русский' if cur_lang=='ru' else 'English'}\n"
-            f"Тема: {'Тёмная' if cur_theme=='dark' else 'Светлая'}\n\n"
-            f"Изменить: <code>кульш настройки язык ru/en</code>, <code>кульш настройки тема dark/light</code>"
-        )
-        await tg_bot.send_message(message.chat.id, msg, parse_mode='HTML', reply_to_message_id=message.message_id)
-
-async def tg_handle_avatar(message: telebot.types.Message, chat_id: str) -> None:
-    raw = await get_avatar_description_tg(message, chat_id)
-    if not raw:
-        await reply_tg_html(message, "не смог получить аватарку")
-        return
-    segments = clean_extra_text(raw)
-    if not segments:
-        await reply_tg_html(message, "не смог получить аватарку")
-        return
-    for i, seg in enumerate(segments):
-        if i == 0:
-            await reply_tg_html(message, seg)
-        else:
-            await send_tg_html(message.chat.id, seg)
-
-async def tg_handle_recall_media(message: telebot.types.Message, chat_id: str, parts: list[str]) -> None:
-    n = 3
-    for p in parts:
-        if p.isdigit():
-            n = min(int(p), 10); break
-    raw = await get_recall_media_description_tg(message, chat_id, n)
-    if not raw:
-        await reply_tg_html(message, "не нашёл ничего в памяти")
-        return
-    segments = clean_extra_text(raw)
-    if not segments:
-        await reply_tg_html(message, "не нашёл ничего в памяти")
-        return
-    for i, seg in enumerate(segments):
-        if i == 0:
-            await reply_tg_html(message, seg)
-        else:
-            await send_tg_html(message.chat.id, seg)
-
-# -------- Отправка ответа ИИ (TG) --------
-async def send_tg_ai_response(message: telebot.types.Message, chat_id: str, answer_raw: str) -> None:
-    raw = answer_raw or ""
-
-    clean_segments, markers = process_ai_response(raw)
-
-    extra_segments: list[str] = []
-
-    if "avatar" in markers:
-        markers.remove("avatar")
-        try:
-            avatar_raw = await get_avatar_description_tg(message, chat_id)
-            if avatar_raw:
-                extra_segments.extend(clean_extra_text(avatar_raw))
-        except Exception as e:
-            logger.warning(f"avatar desc failed: {e}")
-
-    if "recall_media" in markers:
-        markers.remove("recall_media")
-        try:
-            recall_raw = await get_recall_media_description_tg(message, chat_id, 3)
-            if recall_raw:
-                extra_segments.extend(clean_extra_text(recall_raw))
-        except Exception as e:
-            logger.warning(f"recall desc failed: {e}")
-
-    all_segments = clean_segments + extra_segments
-
-    if not all_segments:
-        for m in markers:
-            try:
-                await execute_utility_tg(message, m, chat_id)
-            except Exception as e:
-                logger.warning(f"utility {m} failed: {e}")
-        return
-
-    for i, seg in enumerate(all_segments):
-        try:
-            await typing_with_delay_tg(message.chat.id, seg)
-        except Exception as e:
-            logger.debug(f"typing delay tg fail: {e}")
-
-        if i == 0:
-            await send_tg_html(message.chat.id, seg, reply_to=message.message_id)
-        else:
-            await send_tg_html(message.chat.id, seg)
-        add_bot_memory(chat_id, seg)
-
-    for m in markers:
-        try:
-            await execute_utility_tg(message, m, chat_id)
-        except Exception as e:
-            logger.warning(f"utility {m} failed: {e}")
-
-async def maybe_reply_to_old_message_tg(message: telebot.types.Message, chat_id: str) -> None:
-    now = time.time()
-    if now - last_old_reply.get(chat_id, 0) < 600:
-        return
-    if random.random() > 0.12:
-        return
-    mem = list(get_chat_memory(chat_id))
-    candidates = [e for e in mem[:-2] if e.get("type") == "user" and e.get("text")]
-    if not candidates:
-        return
-    old = random.choice(candidates)
-    try:
-        comment = await ask_ai_async(
-            prompt=(
-                f"Ты видишь в истории чата старое сообщение от {old.get('display','?')} "
-                f"({old.get('time','')}): \"{old.get('text','')}\". Хочешь коротко прокомментировать, пошутить "
-                f"или поддержать беседу? Если да — напиши ОДНО короткое сообщение в стиле Кульша. "
-                f"Если не хочешь — ответь ровно 'НЕТ'."
-            ),
-            system_instruction_override="Ты Кульш. Отвечай одним коротким сообщением или 'НЕТ'. Без markdown.",
-            messages=None,
-            chat_id=chat_id
-        )
-        if comment and comment.strip() and comment.strip().upper() != "НЕТ":
-            last_old_reply[chat_id] = now
-            segments, markers = process_ai_response(comment)
-            old_msg_id = old.get("message_id")
-            for i, seg in enumerate(segments):
-                try:
-                    await typing_with_delay_tg(message.chat.id, seg)
-                except Exception:
-                    pass
-                if i == 0:
-                    await send_tg_html(message.chat.id, seg, reply_to=old_msg_id)
-                else:
-                    await send_tg_html(message.chat.id, seg)
-                add_bot_memory(chat_id, seg)
-            for m in markers:
-                if m in ("sticker", "gif"):
-                    try:
-                        await execute_utility_tg(message, m, chat_id)
-                    except Exception as e:
-                        logger.warning(f"old-reply utility {m} failed: {e}")
-    except Exception as e:
-        logger.warning(f"old reply tg fail: {e}")
-
-@tg_bot.message_handler(func=lambda m: m.text)
-async def handle_tg_text(message: telebot.types.Message) -> None:
-    chat_id = f"tg_{message.chat.id}"
-    is_dm = message.chat.type == 'private'
-    text = cast(str, message.text)
-    tl = text.lower()
-
-    if message.from_user is None:
-        return
-    display_name = message.from_user.full_name or "Unknown"
-    username = message.from_user.username or ""
-    user_id = message.from_user.id
-
-    if tl.startswith("кульш конфиг"):
-        await tg_handle_config(message, chat_id)
-        return
-
-    if tl.startswith("кульш настройки"):
-        parts = text.split()
-        await tg_handle_settings(message, parts)
-        return
-
-    if tl.startswith("кульш донаты"):
-        top = get_top_donators()
-        if not top:
-            await reply_tg_html(message, "Пока никто не донатил. Будь первым, бро 🍷🗿\nhttps://kulsh-ai.web.app/donate.html")
-            return
-        lines = ["🏆 <b>Топ донатеров:</b>"]
-        for i, (name, total) in enumerate(top, 1):
-            lines.append(f"{i}. {html.escape(name)} — {total} очков")
-        await tg_bot.send_message(message.chat.id, "\n".join(lines), parse_mode='HTML', reply_to_message_id=message.message_id)
-        return
-
-    if tl.startswith("кульш аватарк") or tl.startswith("кульш аватар") or tl.strip() in ("!avatar", "! avatar"):
-        await tg_handle_avatar(message, chat_id)
-        return
-
-    if tl.startswith("кульш вспомни медиа") or "!recall_media" in tl or "! recall_media" in tl:
-        parts = text.split()
-        await tg_handle_recall_media(message, chat_id, parts)
-        return
-
-    if tl.startswith("кульш логи"):
-        try:
-            tail = read_log_tail(20)
-            intro = LOG_INTRO
-            max_caption_len = 1024
-            full_caption = f"{intro}\n\n{tail}"
-
-            if len(full_caption) <= max_caption_len:
-                caption = full_caption
-                extra_text = None
-            else:
-                header_len = len(intro) + 2
-                reserved_for_ellipsis = 3
-                available = max_caption_len - header_len - reserved_for_ellipsis
-                if available < 50:
-                    caption = intro
-                    extra_text = tail
-                else:
-                    caption = f"{intro}\n\n{tail[:available]}..."
-                    extra_text = tail
-
-            try:
-                with open('bot.log', 'rb') as logf:
-                    await tg_bot.send_document(
-                        message.chat.id,
-                        InputFile(logf),
-                        caption=caption
-                    )
-            except FileNotFoundError:
-                await send_tg_html(message.chat.id, full_caption[:4000], reply_to=message.message_id)
-                return
-
-            if extra_text:
-                for chunk in chunk_text(extra_text, 3900):
-                    try:
-                        await tg_bot.send_message(message.chat.id, f"<pre>{html.escape(chunk)}</pre>", parse_mode='HTML')
-                    except Exception:
-                        await tg_bot.send_message(message.chat.id, chunk)
-        except Exception as e:
-            await reply_tg_html(message, f"Ошибка чтения логов: {e}")
-        return
-
-    if is_looksmaxxing_command(text):
-        user_looksmaxxing_state[message.chat.id] = True
-        add_user_memory(chat_id, "TG", display_name, username, user_id, text, message_id=message.message_id)
-        await reply_tg_html(message, "📸 Жду фото для анализа. Отправь его с пометкой 'looksmaxxing' или просто подпиши.")
-        return
-
-    if is_battle_command(text):
-        add_user_memory(chat_id, "TG", display_name, username, user_id, text, message_id=message.message_id)
-        await reply_tg_html(message, "Для баттла пришлите два фото в одном сообщении (альбомом) с командой 'кульш баттл'.")
-        return
-
-    is_reply_to_bot = (message.reply_to_message and
-                       message.reply_to_message.from_user and
-                       message.reply_to_message.from_user.id == tg_bot.user.id)
-
-    addressed = bool(is_reply_to_bot or re.search(r'(?i)\bкульш\b', text) or is_dm)
-
-    if addressed:
-        await tg_bot.send_chat_action(message.chat.id, 'typing')
-        if wants_photo(text):
-            photo_url = await get_random_photo_url()
-            caption = await ask_ai_async(prompt=None, context_type="caption", chat_id=chat_id)
-            await tg_bot.send_photo(message.chat.id, photo_url, caption=caption, reply_to_message_id=message.message_id)
-            add_user_memory(chat_id, "TG", display_name, username, user_id, text, message_id=message.message_id)
-            add_bot_memory(chat_id, f"[отправил фото: {caption}]")
-            return
-
-        add_user_memory(chat_id, "TG", display_name, username, user_id, text, message_id=message.message_id)
-        messages = memory_to_messages(get_chat_memory(chat_id))
-        answer = await ask_ai_async(messages=messages, chat_id=chat_id)
-        await send_tg_ai_response(message, chat_id, answer)
-        asyncio.create_task(extract_memory(chat_id, f"{display_name}: {text}", answer))
-        asyncio.create_task(maybe_reply_to_old_message_tg(message, chat_id))
-        return
-
-    add_user_memory(chat_id, "TG", display_name, username, user_id, text, message_id=message.message_id)
-
-    if await should_random_reply(chat_id):
-        try:
-            answer = await ask_ai_async(
-                context_type="observer",
-                messages=memory_to_messages(get_chat_memory(chat_id)),
-                system_instruction_override=None,
-                chat_id=chat_id
-            )
-            if answer and answer.strip() and answer.strip().upper() != "НЕТ":
-                last_random_reply[chat_id] = time.time()
-                await send_tg_ai_response(message, chat_id, answer)
-        except Exception as e:
-            logger.warning(f"Random reply fail: {e}")
-
-async def should_random_reply(chat_id: str) -> bool:
-    config = get_chat_config(chat_id)
-    if not config.get("random_reply_enabled", False):
-        return False
-    now = time.time()
-    if now - last_random_reply.get(chat_id, 0) < 900:
-        return False
-    if random.random() > 0.03:
-        return False
-    return True
-
-# -------- Обработчик фото/видео/доков TG --------
-@tg_bot.message_handler(content_types=['photo', 'video', 'animation', 'document', 'sticker'])
-async def handle_tg_media(message: telebot.types.Message) -> None:
-    chat_id = f"tg_{message.chat.id}"
-    is_dm = message.chat.type == 'private'
-    caption = message.caption or ""
-    cl = caption.lower()
-
-    if message.from_user is None:
-        return
-    display_name = message.from_user.full_name or "Unknown"
-    username = message.from_user.username or ""
-    user_id = message.from_user.id
-
-    media_tag = None
-    file_id = None
-    media_type = None
-
-    if message.photo:
-        file_id = message.photo[-1].file_id
-        media_type = "photo"
-        media_tag = "[фото]"
-    elif message.video:
-        file_id = message.video.file_id
-        media_type = "video"
-        media_tag = "[видео]"
-    elif message.animation:
-        file_id = message.animation.file_id
-        media_type = "animation"
-        media_tag = "[гифка]"
-    elif message.document:
-        file_id = message.document.file_id
-        media_type = "document"
-        media_tag = f"[док: {message.document.file_name}]"
-    elif message.sticker:
-        file_id = message.sticker.file_id
-        media_type = "sticker"
-        media_tag = "[стикер]"
-
-    if file_id and media_tag:
-        add_media_history(chat_id, None, media_type, display_name, file_id=file_id, caption=caption)
-
-    if is_battle_command(caption) and message.photo:
-        if message.media_group_id:
-            mgid = message.media_group_id
-            if mgid not in battle_photos:
-                battle_photos[mgid] = []
-                battle_media_groups[mgid] = asyncio.create_task(
-                    process_battle_media_group(mgid, message.chat.id, chat_id)
-                )
-            img_bytes = await get_tg_file_bytes(tg_bot, message.photo[-1].file_id)
-            battle_photos[mgid].append(img_bytes)
-        else:
-            await reply_tg_html(message, "Для баттла нужно два фото. Отправьте их в одном сообщении (альбомом).")
-        return
-
-    if message.media_group_id and message.media_group_id in battle_photos and message.photo:
-        img_bytes = await get_tg_file_bytes(tg_bot, message.photo[-1].file_id)
-        battle_photos[message.media_group_id].append(img_bytes)
-        return
-
-    is_looksmaxxing = (
-        is_looksmaxxing_command(caption) or
-        (message.reply_to_message and message.reply_to_message.from_user and
-         message.reply_to_message.from_user.id == tg_bot.user.id and
-         message.reply_to_message.text and is_looksmaxxing_command(message.reply_to_message.text)) or
-        user_looksmaxxing_state.get(message.chat.id, False)
-    )
-
-    if is_looksmaxxing and message.photo:
-        user_looksmaxxing_state[message.chat.id] = False
-        status_msg = await tg_bot.send_message(message.chat.id, "⏳ Анализирую внешность...")
-        try:
-            img_bytes = await get_tg_file_bytes(tg_bot, message.photo[-1].file_id)
-            include_advice = "совет" in cl or "advice" in cl or \
-                (message.reply_to_message and message.reply_to_message.text and
-                 ("совет" in message.reply_to_message.text.lower() or "advice" in message.reply_to_message.text.lower()))
-            lang = get_user_lang("tg", message.chat.id)
-            ai_data = await get_looksmaxxing_data(img_bytes, include_advice, lang=lang)
-            if "error" in ai_data:
-                await tg_bot.edit_message_text(f"❌ {ai_data['error']}", message.chat.id, status_msg.message_id)
-                return
-            theme = get_user_theme("tg", message.chat.id)
-            infographic = await create_infographic(img_bytes, ai_data, theme=theme, lang=lang)
-            report_text = (
-                f"📊 <b>РЕЗУЛЬТАТЫ LOOKSMAXXING АНАЛИЗА</b>\n\n"
-                f"🧬 <b>Пол:</b> {ai_data.get('gender','?')}\n"
-                f"📈 <b>PSL:</b> <code>{ai_data.get('psl','?')}/8.0</code>\n"
-                f"👑 <b>Tier:</b> <code>{ai_data.get('tier','?')}</code>\n"
-            )
-            if ai_data.get("potential"):
-                report_text += f"🔮 <b>Потенциал:</b> <code>{ai_data['potential']}</code>\n"
-            report_text += f"\n📝 <b>Анализ:</b>\n{html.escape(ai_data.get('summary',''))}"
-            if include_advice and ai_data.get("advice"):
-                report_text += f"\n\n⚡ <b>Рекомендации:</b>\n{html.escape(ai_data['advice'])}"
-
-            try:
-                await tg_bot.send_photo(message.chat.id, InputFile(infographic), caption="📊 Результаты looksmaxxing-анализа")
-            except Exception as e:
-                logger.error(f"Ошибка отправки инфографики: {e}")
-                await reply_tg_html(message, "Не удалось отправить инфографику, но вот текст анализа:")
-
-            chunks = [report_text[i:i+3900] for i in range(0, len(report_text), 3900)]
-            for chunk in chunks:
-                try:
-                    await tg_bot.send_message(message.chat.id, chunk, parse_mode='HTML')
-                except Exception:
-                    await tg_bot.send_message(message.chat.id, re.sub(r'<[^>]+>', '', chunk))
-
-            await tg_bot.delete_message(message.chat.id, status_msg.message_id)
-            add_user_memory(chat_id, "TG", display_name, username, user_id, f"[looksmaxxing фото] {caption}", ["photo"], message_id=message.message_id)
-            add_bot_memory(chat_id, "[looksmaxxing отчёт]")
-        except Exception as e:
-            logger.error(f"Ошибка в looksmaxxing: {e}")
-            await reply_tg_html(message, f"🌋 Ошибка: {e}")
-        return
-
-    is_reply_to_bot = (message.reply_to_message and message.reply_to_message.from_user and
-                       message.reply_to_message.from_user.id == tg_bot.user.id)
-    addressed = bool(is_reply_to_bot or re.search(r'(?i)\bкульш\b', caption) or is_dm)
-
-    if not addressed:
-        add_user_memory(chat_id, "TG", display_name, username, user_id, caption or "", [media_tag or "медиа"], message_id=message.message_id)
-        if await should_random_reply(chat_id):
-            answer = await ask_ai_async(
-                context_type="observer",
-                messages=memory_to_messages(get_chat_memory(chat_id)),
-                chat_id=chat_id
-            )
-            if answer and answer.strip() and answer.strip().upper() != "НЕТ":
-                last_random_reply[chat_id] = time.time()
-                await send_tg_ai_response(message, chat_id, answer)
-        return
-
-    await tg_bot.send_chat_action(message.chat.id, 'typing')
-    image_bytes = None
-    image_mime = "image/jpeg"
-    try:
-        if message.photo:
-            image_bytes = await get_tg_file_bytes(tg_bot, message.photo[-1].file_id)
-            image_mime = "image/jpeg"
-        elif message.animation:
-            vid_bytes = await get_tg_file_bytes(tg_bot, message.animation.file_id)
-            frame = await extract_video_frame(vid_bytes, ".mp4")
-            if frame:
-                image_bytes = frame; image_mime = "image/jpeg"
-        elif message.video:
-            vid_bytes = await get_tg_file_bytes(tg_bot, message.video.file_id)
-            frame = await extract_video_frame(vid_bytes, ".mp4")
-            if frame:
-                image_bytes = frame; image_mime = "image/jpeg"
-        elif message.document and message.document.mime_type and message.document.mime_type.startswith("image/"):
-            image_bytes = await get_tg_file_bytes(tg_bot, message.document.file_id)
-            image_mime = message.document.mime_type
-    except Exception as e:
-        logger.warning(f"Не смог скачать медиа: {e}")
-
-    prompt = caption.strip() or "че на этом?"
-    add_user_memory(chat_id, "TG", display_name, username, user_id, f"{prompt} [с медиа: {media_tag}]", [media_tag or "медиа"], message_id=message.message_id)
-    messages = memory_to_messages(get_chat_memory(chat_id))
-    answer = await ask_ai_async(messages=messages, image_bytes=image_bytes, image_mime=image_mime, chat_id=chat_id)
-    await send_tg_ai_response(message, chat_id, answer)
-    asyncio.create_task(extract_memory(chat_id, f"{display_name}: [медиа] {caption}", answer))
-
-async def process_battle_media_group(media_group_id, tg_chat_id, chat_id):
-    for _ in range(10):
-        if media_group_id in battle_photos and len(battle_photos[media_group_id]) >= 2:
-            break
-        await asyncio.sleep(0.5)
-    if media_group_id not in battle_photos or len(battle_photos[media_group_id]) < 2:
-        battle_photos.pop(media_group_id, None)
-        battle_media_groups.pop(media_group_id, None)
-        await tg_bot.send_message(tg_chat_id, "Нужно два фото для баттла.")
-        return
-    photos = battle_photos.pop(media_group_id)
-    battle_media_groups.pop(media_group_id, None)
-    photo1_bytes, photo2_bytes = photos[:2]
-    lang = get_user_lang("tg", tg_chat_id)
-    await tg_bot.send_chat_action(tg_chat_id, 'typing')
-    status_msg = await tg_bot.send_message(tg_chat_id, "⚔️ Сравниваю лица...")
-    ai_data = await get_battle_data(photo1_bytes, photo2_bytes, lang=lang)
-    if "error" in ai_data:
-        await tg_bot.edit_message_text(f"❌ {ai_data['error']}", tg_chat_id, status_msg.message_id)
-        return
-    theme = get_user_theme("tg", tg_chat_id)
-    battle_img = await create_battle_infographic(photo1_bytes, photo2_bytes, ai_data, theme=theme, lang=lang)
-    winner_num = ai_data.get("winner", "1")
-    winner_label = "Первое фото" if winner_num == "1" else "Второе фото"
-    report_text = (
-        f"⚔️ <b>РЕЗУЛЬТАТ БАТТЛА</b>\n\n"
-        f"🥇 Победитель: <b>{winner_label}</b>\n"
-        f"🔍 Причина: {html.escape(ai_data.get('reason',''))}\n\n"
-        f"📊 Фото 1: PSL {ai_data['photo1'].get('psl','?')} | Tier {html.escape(ai_data['photo1'].get('tier','?'))}\n"
-        f"📊 Фото 2: PSL {ai_data['photo2'].get('psl','?')} | Tier {html.escape(ai_data['photo2'].get('tier','?'))}\n"
-    )
-    try:
-        await tg_bot.send_photo(tg_chat_id, InputFile(battle_img), caption="⚔️ Результат баттла")
-    except Exception as e:
-        logger.error(f"Ошибка отправки battle инфографики: {e}")
-        await tg_bot.send_message(tg_chat_id, "Не удалось отправить инфографику.")
-    try:
-        await tg_bot.send_message(tg_chat_id, report_text, parse_mode='HTML')
-    except Exception:
-        await tg_bot.send_message(tg_chat_id, re.sub(r'<[^>]+>', '', report_text))
-    await tg_bot.delete_message(tg_chat_id, status_msg.message_id)
-    add_bot_memory(chat_id, "[battle результат]")
 
 # ============================================================
 # ИЗВЛЕЧЕНИЕ ДОЛГОВРЕМЕННОЙ ПАМЯТИ
 # ============================================================
-async def extract_memory(chat_id: str, user_message: str, bot_answer: str):
+async def extract_memory(chat_id: str, user_message: str, bot_answer: str) -> None:
     prompt = (
         f"Проанализируй последнее сообщение пользователя и ответ бота. Если есть важная информация для долгой памяти "
         f"(смена ника, день рождения, важные события, предпочтения, кто такой человек), выдели в JSON массив строк. "
@@ -2580,190 +947,2116 @@ async def extract_memory(chat_id: str, user_message: str, bot_answer: str):
     except Exception as e:
         logger.error(f"Ошибка извлечения памяти: {e}")
 
+def clean_json_text(text: str) -> str:
+    text = text.strip()
+    if text.startswith("```json"):
+        text = text[7:]
+    if text.startswith("```"):
+        text = text[3:]
+    if text.endswith("```"):
+        text = text[:-3]
+    return text.strip()
+
 # ============================================================
-# DISCORD
+# МАРКЕРЫ-УТИЛИТЫ
 # ============================================================
-intents = discord.Intents.default()
-intents.message_content = True
-ds_bot = discord.Client(intents=intents)
+UTILITY_PATTERNS = {
+    "avatar": re.compile(r'!\s*avatar|(?<![A-Za-z])avatar(?![A-Za-z])', re.IGNORECASE),
+    "recall_media": re.compile(r'!\s*recall[\s_]*media|(?<![A-Za-z])recall[\s_]*media(?![A-Za-z])', re.IGNORECASE),
+    "sticker": re.compile(r'!\s*sticker|(?<![A-Za-z])sticker(?![A-Za-z])', re.IGNORECASE),
+    "gif": re.compile(r'!\s*gif|(?<![A-Za-z])gif(?![A-Za-z])', re.IGNORECASE),
+}
+SEPARATOR_PATTERN = re.compile(r'!\s*sep[ae]rate|(?<![A-Za-z])sep[ae]rate(?![A-Za-z])', re.IGNORECASE)
 
-AUTHORIZED_UPDATERS = [735217033867821098, 1193627300797878362]
+def split_by_separator(text: str) -> list[str]:
+    if not text:
+        return []
+    parts = SEPARATOR_PATTERN.split(text)
+    return [p.strip() for p in parts if p and p.strip()]
 
-async def ds_handle_config(message: discord.Message, chat_id: str, parts: list[str]) -> None:
-    config = get_chat_config(chat_id)
-    if message.guild and not message.author.guild_permissions.administrator:
-        await message.reply("только админы могут менять конфиг")
-        return
+def extract_utility_markers(text: str) -> tuple[str, list[str]]:
+    text = text or ""
+    markers: list[str] = []
+    for name, pat in UTILITY_PATTERNS.items():
+        if pat.search(text):
+            markers.append(name)
+        text = pat.sub(' ', text)
+    text = re.sub(r'[ \t]{2,}', ' ', text)
+    text = re.sub(r'[ \t]+([,.!?;:])', r'\1', text)
+    text = re.sub(r'[ \t]+\n', '\n', text)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text.strip(), markers
 
-    if len(parts) == 2:
-        series = "✅ вкл" if config["series_reminder_enabled"] else "❌ выкл"
-        stickers = "✅ вкл" if config["stickers_enabled"] else "❌ выкл"
-        prompt = config["custom_prompt"] or "стандартный"
-        random_reply = "✅ вкл" if config["random_reply_enabled"] else "❌ выкл"
-        random_messages = "✅ вкл" if config["random_messages_enabled"] else "❌ выкл"
-        model_str = model_display_name(config.get("model"))
-        embed = discord.Embed(title="⚙️ Конфигурация чата", color=0x10b981)
-        embed.add_field(name="🎬 Авто-серия (DS)", value=series, inline=True)
-        embed.add_field(name="🎨 Стикеры/гифки", value=stickers, inline=True)
-        embed.add_field(name="💬 Случайные ответы", value=random_reply, inline=True)
-        embed.add_field(name="📢 Случайные сообщения", value=random_messages, inline=True)
-        embed.add_field(name="🧠 Модель", value=model_str, inline=False)
-        embed.add_field(name="📝 Кастомный промпт", value=prompt[:1000], inline=False)
-        embed.add_field(
-            name="Что можно менять",
-            value=(
-                "`кульш конфиг серия вкл|выкл`\n"
-                "`кульш конфиг стикеры вкл|выкл`\n"
-                "`кульш конфиг автоответ вкл|выкл`\n"
-                "`кульш конфиг рандом вкл|выкл`\n"
-                "`кульш конфиг промпт <текст | сброс>`\n"
-                "`кульш конфиг модель` — список моделей\n"
-                "`кульш конфиг модель <номер | авто>`\n"
-                "`кульш конфиг сброс_памяти`"
-            ),
-            inline=False,
-        )
-        await message.reply(embed=embed)
-        return
+def dedupe_markers(markers: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for m in markers:
+        if m not in seen:
+            seen.add(m); out.append(m)
+    return out
 
-    if len(parts) >= 3:
-        param = parts[2].lower()
-        val = parts[3].lower() if len(parts) >= 4 else ""
+def process_ai_response(raw: str, separate_enabled: bool = True) -> tuple[list[str], list[str]]:
+    raw_clean, markers = extract_utility_markers(raw or "")
+    markers = dedupe_markers(markers)
+    if separate_enabled:
+        segments = split_by_separator(raw_clean)
+    else:
+        segments = [raw_clean]
+    clean_segments = [s.strip() for s in segments if s and s.strip()]
+    return clean_segments, markers
 
-        if param == "серия":
-            config["series_reminder_enabled"] = val in ("вкл", "on", "1")
-            await message.reply("🎬 Авто-серия: " + ("вкл" if config["series_reminder_enabled"] else "выкл"))
-        elif param == "стикеры":
-            config["stickers_enabled"] = val in ("вкл", "on", "1")
-            await message.reply("🎨 Стикеры: " + ("вкл" if config["stickers_enabled"] else "выкл"))
-        elif param == "автоответ":
-            config["random_reply_enabled"] = val in ("вкл", "on", "1")
-            await message.reply("💬 Автоответ: " + ("вкл" if config["random_reply_enabled"] else "выкл"))
-        elif param == "рандом":
-            config["random_messages_enabled"] = val in ("вкл", "on", "1")
-            await message.reply("📢 Рандом: " + ("вкл" if config["random_messages_enabled"] else "выкл"))
-        elif param == "промпт":
-            new_prompt = " ".join(parts[3:]).strip()
-            if new_prompt.lower() in ("сброс", "убрать", "стандарт"):
-                config["custom_prompt"] = None
-                await message.reply("📝 Промпт сброшен")
-            elif new_prompt:
-                config["custom_prompt"] = new_prompt
-                await message.reply("📝 Промпт установлен")
-            else:
-                await message.reply("Введите текст или 'сброс'")
-        elif param == "модель":
-            if not val:
-                lines = [f"`{i}` — {MODEL_DISPLAY.get(m, m)}" for i, m in enumerate(MODEL_LIST)]
-                cur = model_display_name(config.get("model"))
-                msg = (
-                    f"🧠 **Выбор модели**\n"
-                    f"Текущая: {cur}\n\n"
-                    + "\n".join(lines) +
-                    "\n\n`кульш конфиг модель <номер>` — установить\n"
-                    "`кульш конфиг модель авто` — авто (перебирать все)"
-                )
-                await message.reply(msg)
-            elif val in ("авто", "auto"):
-                config["model"] = None
-                await message.reply("🧠 Модель: 🎲 авто (все по очереди)")
-            else:
-                try:
-                    idx = int(val)
-                    if 0 <= idx < len(MODEL_LIST):
-                        config["model"] = MODEL_LIST[idx]
-                        await message.reply(f"🧠 Модель: {MODEL_DISPLAY.get(MODEL_LIST[idx], MODEL_LIST[idx])}")
-                    else:
-                        await message.reply("❌ Неверный номер. Список: `кульш конфиг модель`")
-                except ValueError:
-                    await message.reply("❌ Введите номер или 'авто'.")
-        elif param == "сброс_памяти":
-            if chat_id in long_term_memory:
-                del long_term_memory[chat_id]
-                save_long_term_memory(long_term_memory)
-            chat_memories[chat_id] = deque(maxlen=20)
-            chat_media_history[chat_id].clear()
-            last_random_reply.pop(chat_id, None)
-            last_old_reply.pop(chat_id, None)
-            await message.reply("🧹 Память очищена")
-        else:
-            await message.reply("❌ Неизвестный параметр. Список: `кульш конфиг`")
-
-async def ds_handle_avatar(message: discord.Message, chat_id: str) -> None:
-    raw = await get_avatar_description_ds(message, chat_id)
+def clean_extra_text(raw: str) -> list[str]:
     if not raw:
-        await message.reply("не смог получить аватарку")
+        return []
+    cleaned, _ = extract_utility_markers(raw)
+    segments = split_by_separator(cleaned)
+    return [s.strip() for s in segments if s and s.strip()]
+
+# ============================================================
+# STICKER / GIF POOLS
+# ============================================================
+STICKER_POOL = [
+    "CAACAgEAAxkBAAEXkj1qd6YOMXAHLciofztbliRFn-qf5gACvAIAAmIaIUTfm-IZfGZGmj0E",
+    "CAACAgEAAxkBAAEXkj9qd6YSbqnaV0Cy2lJdQZxWgfdYNAACCQIAAvGaoUbqHGwx5EW7xT0E",
+    "CAACAgIAAxkBAAEXkkFqd6Yk_g5UWkBESTIlZCT9MM7lZwACBVMAAlXDoUv4ZxNfrA5v8D0E",
+    "CAACAgIAAxkBAAEXkkNqd6YlWmX_v6vxFgVS-5u8SMFqGwACJ0wAAlzgmUtxWCk2-pvTsT0E",
+    "CAACAgIAAxkBAAEXkkVqd6YmKSS74hvpUNctJPyOg80O2wAC1EgAAsKvmUsRFrgOElSDWz0E"
+]
+GIF_POOL = [
+    "https://cdn.discordapp.com/attachments/1494583947664035913/1535766838695301150/moai_20260808214829.gif?ex=6a78f5d3&is=6a77a453&hm=da19561fe5416d70d68bc6c833c7a895ff0cb5145c89715f279cef1353897fcb&",
+    "https://cdn.discordapp.com/attachments/1494583947664035913/1535766152716882030/wine_20260808214547.gif?ex=6a78f52f&is=6a77a3af&hm=67b27da53b3a32748955f2bfb09e47bd6e98d45a5334d54c26066d93a6a13c1d&",
+    "https://cdn.discordapp.com/attachments/1494583947664035913/1535766838384791592/moai2_20260808214836.gif?ex=6a78f5d3&is=6a77a453&hm=9615df41a2947cdb4627271f0389dd97c621e5901b30043ad31aeb93beb5ef1b&",
+    "https://cdn.discordapp.com/attachments/1494583947664035913/1535766838070345829/freedom_20260808214842.gif?ex=6a78f5d3&is=6a77a453&hm=f3fb764b962e4a852ba51a98185a24d0c5dce94293efa6d4b316441dde6db059&",
+    "https://cdn.discordapp.com/attachments/1494583947664035913/1535766837772427294/octopus_20260808214849.gif?ex=6a78f5d3&is=6a77a453&hm=28bfd8cbe5746dd2b0961c2c07ab73ed99efbc1261f12347df48dfe63acea776&"
+]
+
+# ============================================================
+# АВАТАРКА / RECALL_MEDIA
+# ============================================================
+def _tg_bot_id() -> int | None:
+    try:
+        return tg_bot.user.id if tg_bot.user else None
+    except Exception:
+        return None
+
+def resolve_avatar_target_tg(message: telebot.types.Message):
+    bot_id = _tg_bot_id()
+    if message.reply_to_message and message.reply_to_message.from_user:
+        rt = message.reply_to_message.from_user
+        if bot_id is None or rt.id != bot_id:
+            return rt
+    for ent in (message.entities or []):
+        if ent.type == "text_mention" and ent.user:
+            if bot_id is None or ent.user.id != bot_id:
+                return ent.user
+    if message.from_user and (bot_id is None or message.from_user.id != bot_id):
+        return message.from_user
+    return None
+
+async def get_avatar_description_tg(message: telebot.types.Message, chat_id: int, user_id: int) -> str | None:
+    target = resolve_avatar_target_tg(message)
+    if target is None:
+        return None
+    name = target.full_name or "человек"
+    uname = f"@{target.username}" if target.username else ""
+    try:
+        photos = await tg_bot.get_user_profile_photos(target.id, limit=1)
+    except Exception as e:
+        logger.warning(f"avatar fetch list failed: {e}")
+        return None
+    if not (photos.total_count > 0 and photos.photos):
+        return f"у {name} аватарки нет, пусто"
+    try:
+        file_id = photos.photos[0][-1].file_id
+        img_bytes = await get_tg_file_bytes(tg_bot, file_id)
+        desc = await ask_ai_async(
+            prompt=(f"Ты только что посмотрел аватарку пользователя {name} {uname}. "
+                    f"Опиши коротко (1-2 предложения), что на ней, в стиле Кульша — так, будто ты говоришь ему лично. "
+                    f"Без markdown. НЕ используй маркеры !separate, !avatar, !recall_media, !sticker, !gif."),
+            image_bytes=img_bytes, image_mime="image/jpeg",
+            chat_id=chat_id, user_id=user_id,
+        )
+        return desc
+    except Exception as e:
+        logger.warning(f"avatar desc error: {e}")
+        return None
+
+async def get_recall_media_description_tg(message: telebot.types.Message, chat_id: int, user_id: int, n: int = 3) -> str | None:
+    history = list(chat_media_history.get(f"tg_{chat_id}", []))
+    if not history:
+        return None
+    last = history[-n:]
+    img_bytes = None
+    last_item = last[-1]
+    if last_item.get("type") == "photo" and last_item.get("file_id"):
+        try:
+            img_bytes = await get_tg_file_bytes(tg_bot, last_item["file_id"])
+        except Exception as e:
+            logger.warning(f"recall media fetch error: {e}")
+    if img_bytes is None:
+        lines = []
+        for item in last:
+            mtype = item.get("type", "media")
+            sender = item.get("sender", "?")
+            when = item.get("time", "")
+            cap = (item.get("caption") or "")[:120]
+            lines.append(f"- {mtype} от {sender} ({when}): {cap}")
+        meta = "\n".join(lines)
+        try:
+            return await ask_ai_async(
+                prompt=(f"Ты вспоминаешь недавние медиа в чате. Список:\n{meta}\n\n"
+                        f"Коротко (1-2 предложения) прокомментируй в стиле Кульша. Без markdown. "
+                        f"НЕ используй маркеры !separate, !avatar, !recall_media, !sticker, !gif."),
+                chat_id=chat_id, user_id=user_id,
+            )
+        except Exception as e:
+            logger.warning(f"recall meta desc error: {e}")
+            return None
+    try:
+        return await ask_ai_async(
+            prompt=("Ты вспоминаешь последнее медиа из чата. Опиши коротко (1-2 предложения) в стиле Кульша. "
+                    "Без markdown. НЕ используй маркеры !separate, !avatar, !recall_media, !sticker, !gif."),
+            image_bytes=img_bytes, image_mime="image/jpeg",
+            chat_id=chat_id, user_id=user_id,
+        )
+    except Exception as e:
+        logger.warning(f"recall image desc error: {e}")
+        return None
+
+# ============================================================
+# LOOKSMAXXING: CORRECTED TIERS
+# ============================================================
+TIER_DISTRIBUTION = [
+    {"key": "sub3",     "short": "S3",  "full_m": "SUB 3",              "full_f": "SUB 3",              "psl_low": 1.0, "psl_high": 2.4},
+    {"key": "sub5",     "short": "S5",  "full_m": "SUB 5",              "full_f": "SUB 5",              "psl_low": 2.5, "psl_high": 3.9},
+    {"key": "ltn",      "short": "LTN", "full_m": "LTN",                "full_f": "LTB",                "psl_low": 4.0, "psl_high": 5.5},
+    {"key": "mtn",      "short": "MTN", "full_m": "MTN",                "full_f": "MTB",                "psl_low": 5.6, "psl_high": 6.3},
+    {"key": "htn",      "short": "HTN", "full_m": "HTN",                "full_f": "HTB",                "psl_low": 6.4, "psl_high": 6.9},
+    {"key": "chadlite", "short": "CL",  "full_m": "CHADLITE",           "full_f": "STACYLITE",          "psl_low": 7.0, "psl_high": 7.4},
+    {"key": "chad",     "short": "CH",  "full_m": "CHAD",               "full_f": "STACY",              "psl_low": 7.5, "psl_high": 7.6},
+    {"key": "adamlite", "short": "AL",  "full_m": "ADAMLITE",           "full_f": "EVELITE",            "psl_low": 7.7, "psl_high": 7.8},
+    {"key": "trueadam", "short": "TA",  "full_m": "TRUE ADAM",          "full_f": "TRUE EVE",           "psl_low": 7.9, "psl_high": 8.0},
+]
+
+def tier_full_name(tier_key: str, gender: str) -> str:
+    for t in TIER_DISTRIBUTION:
+        if t["key"] == tier_key:
+            g = (gender or "").strip().lower()
+            if g.startswith("f") or g in ("female", "ж", "жен", "женский"):
+                return t["full_f"]
+            return t["full_m"]
+    return tier_key
+
+def find_tier_key(tier_name: str) -> str | None:
+    if not tier_name:
+        return None
+    tn = tier_name.strip().upper().replace("_", " ").replace("-", " ")
+    for t in TIER_DISTRIBUTION:
+        candidates = [
+            t["key"].upper(),
+            t["short"].upper(),
+            t["full_m"].upper(),
+            t["full_f"].upper(),
+        ]
+        if tn in candidates or tn.replace(" ", "") in [c.replace(" ", "") for c in candidates]:
+            return t["key"]
+    return None
+
+def get_tier_color(tier_key_or_name: str) -> str:
+    key = find_tier_key(tier_key_or_name) or (tier_key_or_name or "").strip().lower()
+    if key in ("sub3", "sub5"):
+        return "#E53E3E"
+    if key in ("ltn", "mtn"):
+        return "#ECC94B"
+    if key in ("htn", "chadlite", "chad", "adamlite"):
+        return "#38A169"
+    if key == "trueadam":
+        return "#9F7AEA"
+    return "#38A169"
+
+def is_looksmaxxing_command(text: str) -> bool:
+    t = (text or "").strip().lower()
+    return bool(re.match(r'^(кульш\s+)?psl(\s+(совет|advice))?$', t))
+
+def is_battle_command(text: str) -> bool:
+    t = (text or "").strip().lower()
+    return bool(re.match(r'^(кульш\s+)?(battle|баттл|батл)$', t))
+
+user_looksmaxxing_state: defaultdict[int, bool] = defaultdict(lambda: False)
+
+def load_font(size: int) -> ImageFont.ImageFont | ImageFont.FreeTypeFont:
+    font_path = os.path.join("fonts", "Montserrat-Bold.ttf")
+    try:
+        return ImageFont.truetype(font_path, size)
+    except IOError:
+        return ImageFont.load_default()
+
+def add_bullet(text: str) -> str:
+    if text.startswith("•") or text.startswith("-"):
+        return text
+    return f"• {text}"
+
+def _wrap_text(text: str, draw, font, max_width: int) -> list[str]:
+    words = text.split(' ')
+    lines: list[str] = []
+    cur = ""
+    for w in words:
+        test = f"{cur} {w}".strip()
+        bbox = draw.textbbox((0, 0), test, font=font)
+        if bbox[2] - bbox[0] <= max_width:
+            cur = test
+        else:
+            if cur:
+                lines.append(cur)
+            cur = w
+    if cur:
+        lines.append(cur)
+    return lines
+
+def _block_height(lines, font, line_spacing, draw) -> int:
+    total = 0
+    for line in lines:
+        bbox = draw.textbbox((0, 0), line, font=font)
+        total += bbox[3] - bbox[1] + line_spacing
+    if total > 0:
+        total -= line_spacing
+    return total
+
+async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark", lang: str = "en") -> BytesIO:
+    if lang == "ru":
+        TITLE = "ОТЧЁТ LOOKSMAXXING"; PSL_LABEL = "PSL"; STRENGTHS = "ПРЕИМУЩЕСТВ."; WEAKNESSES = "НЕДОСТАТКИ"
+        FULL_ANALYSIS = "Полный анализ в сообщении"
+        METRIC_NAMES = {
+            "skin": "Кожа", "eyes": "Глаза", "jawline": "Челюсть", "bloat": "Одутловатость",
+            "hair": "Волосы", "bone_structure": "Костная структура", "symmetry": "Симметрия",
+            "canthal_tilt": "Кант. наклон",
+        }
+        BETTER_THAN = "Вы превосходите {}% людей"; DISTRIBUTION_CAPTION = "Распределение тиров"
+        POTENTIAL_LABEL = "Потенциал:"
+    else:
+        TITLE = "LOOKSMAXXING REPORT"; PSL_LABEL = "PSL"; STRENGTHS = "STRENGTHS"; WEAKNESSES = "WEAKNESSES"
+        FULL_ANALYSIS = "Full analysis in the message"
+        METRIC_NAMES = {
+            "skin": "Skin", "eyes": "Eyes", "jawline": "Jawline", "bloat": "Bloat",
+            "hair": "Hair", "bone_structure": "Bone structure", "symmetry": "Symmetry",
+            "canthal_tilt": "Canthal tilt",
+        }
+        BETTER_THAN = "You outperform {}% of people"; DISTRIBUTION_CAPTION = "Tier distribution"
+        POTENTIAL_LABEL = "Potential:"
+
+    if theme == "light":
+        bg_color = "#F9F9FB"; text_primary = "#1A1A2E"; text_secondary = "#4A4A6A"
+        text_tertiary = "#6B6B80"; accent = "#2B6CB0"; line_color = "#D1D5DB"
+        scale_bg = "#E5E7EB"; weak_color = "#C53030"; highlight_outline = "#1A1A2E"
+    else:
+        bg_color = "#0E0E12"; text_primary = "#F3F4F6"; text_secondary = "#9CA3AF"
+        text_tertiary = "#6B6B80"; accent = "#10B981"; line_color = "#2A2A3A"
+        scale_bg = "#2A2A3A"; weak_color = "#E53E3E"; highlight_outline = "#FFFFFF"
+
+    canvas_w, canvas_h = 1000, 1000
+    image = Image.new("RGBA", (canvas_w, canvas_h), bg_color)
+    draw = ImageDraw.Draw(image)
+
+    font_title = load_font(34); font_psl_num = load_font(56); font_sub = load_font(24)
+    font_text = load_font(18); font_small = load_font(15); font_scale = load_font(16)
+    list_font = load_font(17); font_tier_label = load_font(13)
+
+    draw.text((40, 25), TITLE, fill=text_tertiary, font=font_title)
+    draw.line([(40, 70), (canvas_w - 40, 70)], fill=line_color, width=1)
+
+    user_img = Image.open(BytesIO(photo_bytes)).convert("RGBA")
+    user_img.thumbnail((430, 530), Image.Resampling.LANCZOS)
+    mask = Image.new("L", user_img.size, 0)
+    ImageDraw.Draw(mask).rounded_rectangle((0, 0) + user_img.size, radius=28, fill=255)
+    rounded_user_img = Image.new("RGBA", user_img.size, (0, 0, 0, 0))
+    rounded_user_img.paste(user_img, (0, 0), mask=mask)
+    photo_x, photo_y = 40, 100
+    image.paste(rounded_user_img, (photo_x, photo_y), rounded_user_img)
+
+    psl_score = data.get("psl", "N/A")
+    tier_name = str(data.get("tier", "N/A")).upper()
+    gender = data.get("gender", "N/A")
+    potential = data.get("potential", "N/A")
+
+    try:
+        psl_val = max(1.0, min(8.0, float(psl_score)))
+    except (ValueError, TypeError):
+        psl_val = 1.0
+
+    current_tier_idx = -1
+    found_key = find_tier_key(tier_name)
+    if found_key:
+        for idx, t in enumerate(TIER_DISTRIBUTION):
+            if t["key"] == found_key:
+                current_tier_idx = idx
+                break
+    if current_tier_idx == -1:
+        for idx, t in enumerate(TIER_DISTRIBUTION):
+            if t["psl_low"] <= psl_val <= t["psl_high"]:
+                current_tier_idx = idx
+                break
+    if current_tier_idx == -1:
+        current_tier_idx = 4
+
+    better_than = max(0.1, min(99.9, (psl_val - 1) / 7 * 100))
+    better_text = BETTER_THAN.format(round(better_than, 1))
+
+    photo_bottom = photo_y + rounded_user_img.size[1]
+    draw.text((40, photo_bottom + 20), better_text, fill=text_secondary, font=font_sub)
+
+    chart_x = 40; chart_y = photo_bottom + 65; chart_width = 430; chart_height = 20
+    total_psl_range = 8.0 - 1.0
+    for tier in TIER_DISTRIBUTION:
+        low = tier["psl_low"]; high = tier["psl_high"]
+        x_start = chart_x + (low - 1.0) / total_psl_range * chart_width
+        x_end = chart_x + (high - 1.0) / total_psl_range * chart_width
+        color = get_tier_color(tier["key"])
+        draw.rectangle([x_start, chart_y, x_end, chart_y + chart_height], fill=color)
+        if tier["key"] == TIER_DISTRIBUTION[current_tier_idx]["key"]:
+            draw.rectangle([x_start - 1, chart_y - 1, x_end + 1, chart_y + chart_height + 1],
+                           outline=highlight_outline, width=2)
+        tb = draw.textbbox((0, 0), tier["short"], font=font_tier_label)
+        tw = tb[2] - tb[0]
+        draw.text(((x_start + x_end) / 2 - tw / 2, chart_y + chart_height + 4),
+                  tier["short"], fill=text_secondary, font=font_tier_label)
+    draw.text((40, chart_y + chart_height + 30), DISTRIBUTION_CAPTION, fill=text_tertiary, font=font_small)
+
+    start_x = 510; right_top_y = 100
+    draw.text((start_x, right_top_y), PSL_LABEL, fill=text_tertiary, font=font_sub)
+    draw.text((start_x, right_top_y + 35), f"{psl_score}", fill=text_primary, font=font_psl_num)
+    draw.text((start_x, right_top_y + 110), f"{tier_name} · {gender}", fill=accent, font=font_sub)
+    draw.text((start_x, right_top_y + 145), f"{POTENTIAL_LABEL} {potential}", fill=text_secondary, font=font_small)
+
+    psl_bar_x, psl_bar_y = start_x, right_top_y + 200
+    psl_bar_w, psl_bar_h = 400, 20
+    draw.rounded_rectangle((psl_bar_x, psl_bar_y, psl_bar_x + psl_bar_w, psl_bar_y + psl_bar_h),
+                           radius=10, fill=scale_bg)
+    fill_w = int((psl_val - 1) / 7 * psl_bar_w)
+    if fill_w > 0:
+        draw.rounded_rectangle((psl_bar_x, psl_bar_y, psl_bar_x + fill_w, psl_bar_y + psl_bar_h),
+                               radius=10, fill=get_tier_color(tier_name))
+    for i in range(1, 9):
+        x = psl_bar_x + (i - 1) / 7 * psl_bar_w
+        draw.line([(x, psl_bar_y - 6), (x, psl_bar_y)], fill=text_tertiary, width=1)
+        bbox = draw.textbbox((0, 0), str(i), font=font_scale)
+        tw = bbox[2] - bbox[0]
+        draw.text((x - tw / 2, psl_bar_y - 24), str(i), fill=text_secondary, font=font_scale)
+
+    metrics_mapping = [
+        ("skin", data.get("skin", "N/A")), ("eyes", data.get("eyes", "N/A")),
+        ("jawline", data.get("jawline", "N/A")), ("bloat", data.get("bloat", "N/A")),
+        ("hair", data.get("hair", "N/A")), ("bone_structure", data.get("bone_structure", "N/A")),
+        ("symmetry", data.get("symmetry", "N/A")), ("canthal_tilt", data.get("canthal_tilt", "N/A")),
+    ]
+
+    right_margin = start_x + 430
+    col1_x = start_x; col1_width = 200
+    col2_x = col1_x + col1_width + 20
+    col2_width = right_margin - col2_x
+
+    base_row_height = 38; min_padding = 6; line_spacing = 2
+    table_start_y = psl_bar_y + psl_bar_h + 25
+    current_y = table_start_y
+
+    for key, val_str in metrics_mapping:
+        title = METRIC_NAMES.get(key, key)
+        tb = draw.textbbox((0, 0), title, font=font_text)
+        title_h = tb[3] - tb[1]
+        val_lines = _wrap_text(str(val_str), draw, font_text, col2_width)
+        val_block_h = _block_height(val_lines, font_text, line_spacing, draw)
+        row_height = max(base_row_height, title_h + 2 * min_padding, val_block_h + 2 * min_padding)
+        draw.line([(col1_x, current_y), (right_margin, current_y)], fill=line_color, width=1)
+        draw.text((col1_x, current_y + (row_height - title_h) / 2), title, fill=text_secondary, font=font_text)
+        val_y = current_y + (row_height - val_block_h) / 2
+        for line in val_lines:
+            bbox = draw.textbbox((0, 0), line, font=font_text)
+            lh = bbox[3] - bbox[1]
+            draw.text((col2_x, val_y), line, fill=text_primary, font=font_text)
+            val_y += lh + line_spacing
+        current_y += row_height
+    final_y = current_y
+    draw.line([(col1_x, final_y), (right_margin, final_y)], fill=line_color, width=1)
+
+    pros = data.get("pros", []); cons = data.get("cons", [])
+    if isinstance(pros, str): pros = [pros]
+    if isinstance(cons, str): cons = [cons]
+    pros = [add_bullet(p) for p in pros]
+    cons = [add_bullet(c) for c in cons]
+
+    col_y = final_y + 20
+    draw.text((start_x, col_y), STRENGTHS, fill=accent, font=font_sub)
+    draw.text((start_x + 220, col_y), WEAKNESSES, fill=weak_color, font=font_sub)
+    col_width = 200; line_height = 26; list_start_y = col_y + 38
+
+    def render_list(items, x, y, color, max_width=col_width):
+        cy = y
+        for item in items:
+            for line in _wrap_text(item, draw, list_font, max_width):
+                draw.text((x, cy), line, fill=color, font=list_font)
+                cy += line_height
+            cy += 4
+        return cy
+
+    end_left = render_list(pros, start_x + 10, list_start_y, text_primary)
+    end_right = render_list(cons, start_x + 230, list_start_y, text_primary)
+    max_y = max(end_left, end_right)
+    draw.text((40, max_y + 30), FULL_ANALYSIS, fill=text_tertiary, font=font_small)
+
+    out = BytesIO(); image.save(out, format="PNG"); out.seek(0)
+    return out
+
+async def create_battle_infographic(photo1_bytes: bytes, photo2_bytes: bytes, data: dict,
+                                     theme: str = "dark", lang: str = "en") -> BytesIO:
+    if lang == "ru":
+        TITLE = "БАТТЛ LOOKSMAXXING"
+        FACTOR_LABELS = {
+            "skin": "Кожа", "eyes": "Глаза", "jawline": "Челюсть", "bloat": "Одутловатость",
+            "hair": "Волосы", "bone_structure": "Костная структура", "symmetry": "Симметрия",
+            "canthal_tilt": "Кант. наклон",
+        }
+        MOGGED_TEXT = "МОГГНУТ"; WINNER_LABEL = "ПОБЕДИТЕЛЬ"
+    else:
+        TITLE = "LOOKSMAXXING BATTLE"
+        FACTOR_LABELS = {
+            "skin": "Skin", "eyes": "Eyes", "jawline": "Jawline", "bloat": "Bloat",
+            "hair": "Hair", "bone_structure": "Bone structure", "symmetry": "Symmetry",
+            "canthal_tilt": "Canthal tilt",
+        }
+        MOGGED_TEXT = "MOGGED"; WINNER_LABEL = "WINNER"
+
+    if theme == "light":
+        bg_color = "#F9F9FB"; text_primary = "#1A1A2E"; text_secondary = "#4A4A6A"
+        text_tertiary = "#6B6B80"; accent = "#2B6CB0"; line_color = "#D1D5DB"
+        scale_bg = "#E5E7EB"; mogged_color = (0, 0, 0, 180); mogged_text_color = "#E53E3E"
+    else:
+        bg_color = "#0E0E12"; text_primary = "#F3F4F6"; text_secondary = "#9CA3AF"
+        text_tertiary = "#6B6B80"; accent = "#10B981"; line_color = "#2A2A3A"
+        scale_bg = "#2A2A3A"; mogged_color = (0, 0, 0, 180); mogged_text_color = "#E53E3E"
+
+    canvas_w = 1300; canvas_h = 1300
+    image = Image.new("RGBA", (canvas_w, canvas_h), bg_color)
+    draw = ImageDraw.Draw(image)
+
+    font_title = load_font(34); font_psl_num = load_font(56); font_sub = load_font(24)
+    font_text = load_font(18); font_small = load_font(15); font_scale = load_font(16)
+    font_winner = load_font(30); font_mogged = load_font(48)
+
+    draw.text((canvas_w // 2, 25), TITLE, fill=text_tertiary, font=font_title, anchor="mm")
+    draw.line([(40, 70), (canvas_w - 40, 70)], fill=line_color, width=1)
+
+    col_width = 550; left_x = 50
+    right_x = canvas_w - 50 - col_width
+    photo_y = 110; photo_width = col_width; photo_height = 500
+
+    def paste_rounded(img_bytes, x, y, w, h, radius=28):
+        im = Image.open(BytesIO(img_bytes)).convert("RGBA")
+        im.thumbnail((w, h), Image.Resampling.LANCZOS)
+        ix = x + (w - im.width) // 2
+        iy = y + (h - im.height) // 2
+        mask = Image.new("L", im.size, 0)
+        ImageDraw.Draw(mask).rounded_rectangle((0, 0) + im.size, radius=radius, fill=255)
+        rounded = Image.new("RGBA", im.size, (0, 0, 0, 0))
+        rounded.paste(im, (0, 0), mask=mask)
+        image.paste(rounded, (ix, iy), rounded)
+        return ix, iy, im.width, im.height
+
+    left_rect = paste_rounded(photo1_bytes, left_x, photo_y, photo_width, photo_height)
+    right_rect = paste_rounded(photo2_bytes, right_x, photo_y, photo_width, photo_height)
+
+    winner_num = str(data.get("winner", "1"))
+    loser_num = "2" if winner_num == "1" else "1"
+    loser_rect = left_rect if loser_num == "1" else right_rect
+    strip_height = 80
+    strip_y = loser_rect[1] + (loser_rect[3] - strip_height) // 2
+    overlay = Image.new("RGBA", (loser_rect[2], strip_height), mogged_color)
+    image.paste(overlay, (loser_rect[0], strip_y), overlay)
+    draw.text((loser_rect[0] + loser_rect[2] // 2, strip_y + strip_height // 2),
+              MOGGED_TEXT, fill=mogged_text_color, font=font_mogged, anchor="mm")
+
+    winner_rect = left_rect if winner_num == "1" else right_rect
+    winner_y = photo_y + photo_height + 30
+    draw.text((winner_rect[0] + winner_rect[2] // 2, winner_y),
+              WINNER_LABEL, fill=accent, font=font_winner, anchor="mm")
+
+    info_y = winner_y + 70
+    for side, rect, key in [(1, left_rect, "photo1"), (2, right_rect, "photo2")]:
+        pd = data.get(key, {})
+        psl = pd.get("psl", "N/A")
+        tier = pd.get("tier", "N/A")
+        gender = pd.get("gender", "N/A")
+        factors = pd.get("factors", {})
+
+        if side == 1:
+            anchor = "ls"; bar_x = rect[0]
+        else:
+            anchor = "rs"; bar_x = rect[0] + rect[2]
+
+        draw.text((bar_x, info_y), f"PSL: {psl}", fill=text_primary, font=font_psl_num, anchor=anchor)
+        draw.text((bar_x, info_y + 50), f"{tier} · {gender}", fill=accent, font=font_sub, anchor=anchor)
+
+        try:
+            psl_val = float(psl)
+        except (ValueError, TypeError):
+            psl_val = 1.0
+        psl_val = max(1.0, min(8.0, psl_val))
+        bar_w = rect[2]; bar_y = info_y + 95; bar_h = 20
+        if side == 1:
+            draw.rounded_rectangle((bar_x, bar_y, bar_x + bar_w, bar_y + bar_h), radius=10, fill=scale_bg)
+            fw = int((psl_val - 1) / 7 * bar_w)
+            if fw > 0:
+                draw.rounded_rectangle((bar_x, bar_y, bar_x + fw, bar_y + bar_h), radius=10, fill=get_tier_color(tier))
+            for i in range(1, 9):
+                x = bar_x + (i - 1) / 7 * bar_w
+                draw.line([(x, bar_y - 6), (x, bar_y)], fill=text_tertiary, width=1)
+                bbox = draw.textbbox((0, 0), str(i), font=font_scale)
+                tw = bbox[2] - bbox[0]
+                draw.text((x - tw / 2, bar_y - 24), str(i), fill=text_secondary, font=font_scale)
+        else:
+            draw.rounded_rectangle((bar_x - bar_w, bar_y, bar_x, bar_y + bar_h), radius=10, fill=scale_bg)
+            fw = int((psl_val - 1) / 7 * bar_w)
+            if fw > 0:
+                draw.rounded_rectangle((bar_x - fw, bar_y, bar_x, bar_y + bar_h), radius=10, fill=get_tier_color(tier))
+            for i in range(1, 9):
+                x = bar_x - (i - 1) / 7 * bar_w
+                draw.line([(x, bar_y - 6), (x, bar_y)], fill=text_tertiary, width=1)
+                bbox = draw.textbbox((0, 0), str(i), font=font_scale)
+                tw = bbox[2] - bbox[0]
+                draw.text((x - tw / 2, bar_y - 24), str(i), fill=text_secondary, font=font_scale)
+
+        fy = bar_y + bar_h + 25
+        for idx, (fk, label) in enumerate(FACTOR_LABELS.items()):
+            if fk in factors:
+                val = factors[fk]
+                if isinstance(val, (int, float)):
+                    val = str(val)
+                draw.text((bar_x, fy + idx * 28), f"{label}: {val}",
+                          fill=text_secondary, font=font_text, anchor=anchor)
+
+    out = BytesIO(); image.save(out, format="PNG"); out.seek(0)
+    return out
+
+# ============================================================
+# LOOKSMAXXING: AI DATA
+# ============================================================
+TIER_RULES_M = "SUB 3, SUB 5, LTN, MTN, HTN, CHADLITE, CHAD, ADAMLITE, TRUE ADAM"
+TIER_RULES_F = "SUB 3, SUB 5, LTB, MTB, HTB, STACYLITE, STACY, EVELITE, TRUE EVE"
+TIER_RULES_STRICT = (
+    f"Мужские тиры (СТРОГО): {TIER_RULES_M}.\n"
+    f"Женские тиры (СТРОГО): {TIER_RULES_F}.\n"
+    "ИСПОЛЬЗУЙ ТОЛЬКО ЭТИ НАЗВАНИЯ. КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО писать 'High Normie', 'Low Tier Normie', "
+    "'Subhuman', 'Sub-five', 'Sub-5 (Canine)', 'Animal', 'Mid Tier Normie', 'True Adam' по-другому, и любые "
+    "другие выдуманные варианты. Если на фото не человек — верни tier 'N/A' и gender 'N/A'."
+)
+
+async def get_looksmaxxing_data(photo_bytes: bytes, include_advice: bool, lang: str = "en") -> dict[str, Any]:
+    if lang == "ru":
+        prompt = (
+            "Ты — чрезвычайно строгий и объективный AI-аналитик по looksmaxxing. Оцени лицо на фото критически. "
+            "Определи пол, состояние кожи, волос, костную структуру, челюсть, тип глаз, подкожный жир/одутловатость, "
+            "симметрию, кантальный наклон. Кратко, пару слов в каждом поле JSON. "
+            "Рассчитай PSL рейтинг от 1.0 до 8.0.\n\n"
+            f"{TIER_RULES_STRICT}\n\n"
+            "Диапазоны PSL: SUB 3: 1.0–2.4; SUB 5: 2.5–3.9; LTN/LTB: 4.0–5.5; MTN/MTB: 5.6–6.3; HTN/HTB: 6.4–6.9; "
+            "CHADLITE/STACYLITE: 7.0–7.4; CHAD/STACY: 7.5–7.6; ADAMLITE/EVELITE: 7.7–7.8; TRUE ADAM/TRUE EVE: 7.9–8.0.\n\n"
+            "Также оцени потенциал (максимально возможный тир). "
+            "Верни ТОЛЬКО валидный JSON без markdown. Поля: "
+            '"gender", "psl", "tier", "potential", "skin", "eyes", "jawline", "bloat", "hair", "bone_structure", '
+            '"symmetry", "canthal_tilt", "pros" (массив 2-3), "cons" (массив 2-3), "summary" (детальный анализ)'
+            + (', "advice" (практические советы).' if include_advice else ', "advice": ""')
+        )
+    else:
+        prompt = (
+            "You are an extremely strict and objective AI looksmaxxing analyst. Evaluate the face critically. "
+            "Determine gender, skin, hair, bone structure, jawline, eye type, bloat, symmetry, canthal tilt. "
+            "Brief fields. PSL rating 1.0-8.0.\n\n"
+            f"{TIER_RULES_STRICT}\n\n"
+            "PSL ranges: SUB 3: 1.0–2.4; SUB 5: 2.5–3.9; LTN/LTB: 4.0–5.5; MTN/MTB: 5.6–6.3; HTN/HTB: 6.4–6.9; "
+            "CHADLITE/STACYLITE: 7.0–7.4; CHAD/STACY: 7.5–7.6; ADAMLITE/EVELITE: 7.7–7.8; TRUE ADAM/TRUE EVE: 7.9–8.0.\n\n"
+            "Assess potential (max achievable tier). Return ONLY valid JSON, no markdown. Fields: "
+            '"gender", "psl", "tier", "potential", "skin", "eyes", "jawline", "bloat", "hair", "bone_structure", '
+            '"symmetry", "canthal_tilt", "pros" (array 2-3), "cons" (array 2-3), "summary"'
+            + (', "advice" (practical tips).' if include_advice else ', "advice": ""')
+        )
+    raw = await ask_ai_async(
+        prompt=prompt,
+        image_bytes=photo_bytes,
+        image_mime="image/jpeg",
+        system_instruction_override=(
+            "You are a professional looksmaxxing AI. Answer ONLY with the requested JSON. "
+            "STRICT tier names only: use exactly the names from the rules, no synonyms, no invented variants. "
+            "No greetings, no markdown, no extra text."
+        )
+    )
+    try:
+        return cast(dict[str, Any], json.loads(clean_json_text(raw)))
+    except json.JSONDecodeError:
+        logger.error(f"Looksmaxxing JSON decode failed: {raw[:200]}")
+        return {"error": "Не удалось распарсить ответ ИИ."}
+
+async def get_battle_data(photo1_bytes: bytes, photo2_bytes: bytes, lang: str = "en") -> dict[str, Any]:
+    if lang == "ru":
+        prompt = (
+            "Ты — строгий AI-аналитик looksmaxxing. Сравни два лица и выбери победителя по PSL и привлекательности.\n\n"
+            f"{TIER_RULES_STRICT}\n\n"
+            "Верни JSON: photo1 {psl, tier, gender, factors {skin, eyes, jawline, bloat, hair, bone_structure, "
+            "symmetry, canthal_tilt} (0-8), summary}, photo2 {...}, winner (\"1\" или \"2\"), reason. Без markdown. "
+            "Только указанные названия тиров. Нельзя выдумывать."
+        )
+    else:
+        prompt = (
+            "You are a strict looksmaxxing AI. Compare two faces, choose winner by PSL.\n\n"
+            f"{TIER_RULES_STRICT}\n\n"
+            "Return JSON: photo1 {psl, tier, gender, factors {skin, eyes, jawline, bloat, hair, bone_structure, "
+            "symmetry, canthal_tilt} (0-8), summary}, photo2 {...}, winner (\"1\" or \"2\"), reason. No markdown. "
+            "Only the exact tier names. Do NOT invent new ones."
+        )
+    raw = await ask_ai_async(
+        prompt=prompt,
+        system_instruction_override=(
+            "You are a looksmaxxing AI that outputs only JSON. STRICT tier names only: "
+            f"male = {TIER_RULES_M}; female = {TIER_RULES_F}. "
+            "Never use 'High Normie', 'Low Tier Normie', 'Subhuman', 'Animal', 'Sub-5 (Canine)', etc."
+        ),
+        image_bytes_list=[photo1_bytes, photo2_bytes],
+        image_mime_list=["image/jpeg", "image/jpeg"],
+    )
+    try:
+        return cast(dict[str, Any], json.loads(clean_json_text(raw)))
+    except json.JSONDecodeError:
+        logger.error(f"Battle JSON decode failed: {raw[:200]}")
+        return {"error": "Could not parse AI response as JSON."}
+
+# ============================================================
+# КНОПКИ С ЦВЕТОМ (Bot API 10.3)
+# ============================================================
+class StyledButton(InlineKeyboardButton):
+    """InlineKeyboardButton с поддержкой поля style (Bot API 10.3)."""
+    def __init__(self, text: str, style: str | None = None, **kwargs):
+        super().__init__(text, **kwargs)
+        self.style = style
+
+    def to_dict(self) -> dict:
+        d = super().to_dict()
+        if self.style:
+            d['style'] = self.style
+        return d
+
+def btn(text: str, style: str | None = None, **kwargs) -> StyledButton:
+    return StyledButton(text, style=style, **kwargs)
+
+# ============================================================
+# КОНФИГ: ТЕКСТ И КЛАВИАТУРЫ
+# ============================================================
+def _localize(lang: str, ru: str, en: str) -> str:
+    return ru if lang == "ru" else en
+
+def _config_text(platform: str, chat_id: int, user_id: int) -> str:
+    cfg = get_user_config(platform, chat_id, user_id)
+    lang = cfg.get("language", "ru")
+    prompt_safe = html.escape(cfg.get("custom_prompt") or _localize(lang, "стандартный", "default"))
+    title = _localize(lang, "⚙️ Настройки", "⚙️ Settings")
+    line = "━━━━━━━━━━━━━━━━━━━━"
+    lang_label = _localize(lang, "Язык", "Language")
+    theme_label = _localize(lang, "Тема", "Theme")
+    model_label = _localize(lang, "Модель", "Model")
+    temp_label = _localize(lang, "Температура", "Temperature")
+    sep_label = _localize(lang, "Разбивка на сообщения", "Message split")
+    stream_label = _localize(lang, "Стриминг ответов", "Streaming")
+    stickers_label = _localize(lang, "Стикеры/гифки", "Stickers/GIFs")
+    autoreply_label = _localize(lang, "Автоответ", "Auto-reply")
+    random_label = _localize(lang, "Случайные сообщения", "Random messages")
+    prompt_label = _localize(lang, "Кастомный промпт", "Custom prompt")
+    credits_label = _localize(lang, "Кредиты", "Credits")
+    on = "✅"; off = "❌"
+    theme_disp = _localize(lang, "тёмная", "dark") if cfg.get("theme", "dark") == "dark" else _localize(lang, "светлая", "light")
+    credits = get_user_credits(platform, user_id)
+    stream_txt = f"{on if cfg.get('streaming_enabled') else off} · {'premium' if premium_functions_enabled else 'off'}"
+    return (
+        f"{title}\n{line}\n"
+        f"🌐 {lang_label}: {'Русский 🇷🇺' if lang=='ru' else 'English 🇬🇧'}\n"
+        f"🌓 {theme_label}: {theme_disp}\n"
+        f"🧠 {model_label}: {model_display_name(cfg.get('model'))}\n"
+        f"🎛 {temp_label}: <code>{cfg.get('temperature', 0.9)}</code>\n"
+        f"💬 {sep_label}: {on if cfg.get('separate_enabled', True) else off}\n"
+        f"📡 {stream_label}: {stream_txt}\n"
+        f"🎨 {stickers_label}: {on if cfg.get('stickers_enabled', True) else off}\n"
+        f"🗣 {autoreply_label}: {on if cfg.get('random_reply_enabled') else off}\n"
+        f"📢 {random_label}: {on if cfg.get('random_messages_enabled', True) else off}\n"
+        f"💎 {credits_label}: <code>{credits}/{DAILY_CREDITS}</code>\n"
+        f"{line}\n"
+        f"📝 {prompt_label}: {prompt_safe}"
+    )
+
+def build_main_config_keyboard(platform: str, chat_id: int, user_id: int) -> InlineKeyboardMarkup:
+    cfg = get_user_config(platform, chat_id, user_id)
+    lang = cfg.get("language", "ru")
+    kb = InlineKeyboardMarkup()
+    kb.row(
+        btn(_localize(lang, "🌐 Язык", "🌐 Language"),
+            style=None, callback_data="cfg:lang"),
+        btn(_localize(lang, "🌓 Тема", "🌓 Theme"),
+            style=None, callback_data="cfg:theme"),
+    )
+    kb.row(
+        btn(f"🧠 {_localize(lang,'Модель','Model')}: {model_display_name(cfg.get('model'))}",
+            style="primary", callback_data="cfg:model"),
+        btn(f"🎛 {_localize(lang,'Температура','Temperature')}: {cfg.get('temperature',0.9)}",
+            style=None, callback_data="cfg:temp"),
+    )
+    kb.row(
+        btn(f"💬 {_localize(lang,'Разбивка','Split')}: {'✅' if cfg.get('separate_enabled',True) else '❌'}",
+            style=None, callback_data="cfg:separate"),
+        btn(f"📡 {_localize(lang,'Стриминг','Streaming')}: {'✅' if cfg.get('streaming_enabled') else '❌'}",
+            style=None, callback_data="cfg:streaming"),
+    )
+    kb.row(
+        btn(f"🎨 {_localize(lang,'Стикеры','Stickers')}: {'✅' if cfg.get('stickers_enabled',True) else '❌'}",
+            style=None, callback_data="cfg:stickers"),
+        btn(f"🗣 {_localize(lang,'Автоответ','Auto-reply')}: {'✅' if cfg.get('random_reply_enabled') else '❌'}",
+            style=None, callback_data="cfg:autoreply"),
+    )
+    kb.row(
+        btn(f"📢 {_localize(lang,'Рандом','Random')}: {'✅' if cfg.get('random_messages_enabled',True) else '❌'}",
+            style=None, callback_data="cfg:random"),
+    )
+    kb.row(
+        btn("🧹 " + _localize(lang, "Сбросить память", "Reset memory"),
+            style="danger", callback_data="cfg:reset_memory"),
+        btn("♻️ " + _localize(lang, "Сбросить промпт", "Reset prompt"),
+            style="danger", callback_data="cfg:reset_prompt"),
+    )
+    kb.row(
+        btn("✅ " + _localize(lang, "Применить и закрыть", "Apply & close"),
+            style="success", callback_data="cfg:apply")
+    )
+    return kb
+
+def build_model_keyboard(platform: str, chat_id: int, user_id: int) -> InlineKeyboardMarkup:
+    cfg = get_user_config(platform, chat_id, user_id)
+    lang = cfg.get("language", "ru")
+    cur = cfg.get("model")
+    kb = InlineKeyboardMarkup()
+    auto_mark = "🔘" if not cur else "▫️"
+    kb.row(btn(f"{auto_mark} 🎲 {_localize(lang,'Авто','Auto')}",
+               style=None, callback_data="cfg:model_set:auto"))
+    row: list[StyledButton] = []
+    for idx, model in enumerate(MODEL_LIST):
+        mark = "🔘" if cur == model else "▫️"
+        row.append(btn(f"{mark} {MODEL_DISPLAY.get(model, model)}",
+                       style=None, callback_data=f"cfg:model_set:{idx}"))
+        if len(row) == 2:
+            kb.row(*row); row = []
+    if row:
+        kb.row(*row)
+    kb.row(btn("🔙 " + _localize(lang, "Назад", "Back"),
+               style="primary", callback_data="cfg:model_back"))
+    return kb
+
+def build_lang_keyboard(platform: str, chat_id: int, user_id: int) -> InlineKeyboardMarkup:
+    cfg = get_user_config(platform, chat_id, user_id)
+    cur = cfg.get("language", "ru")
+    kb = InlineKeyboardMarkup()
+    kb.row(
+        btn(f"{'🔘' if cur=='ru' else '▫️'} Русский 🇷🇺",
+            style="primary" if cur == "ru" else None, callback_data="cfg:lang_set:ru"),
+        btn(f"{'🔘' if cur=='en' else '▫️'} English 🇬🇧",
+            style="primary" if cur == "en" else None, callback_data="cfg:lang_set:en"),
+    )
+    kb.row(btn("🔙 Назад / Back", style="primary", callback_data="cfg:sub_back"))
+    return kb
+
+def build_theme_keyboard(platform: str, chat_id: int, user_id: int) -> InlineKeyboardMarkup:
+    cfg = get_user_config(platform, chat_id, user_id)
+    cur = cfg.get("theme", "dark")
+    kb = InlineKeyboardMarkup()
+    kb.row(
+        btn(f"{'🔘' if cur=='dark' else '▫️'} Тёмная 🌑",
+            style="primary" if cur == "dark" else None, callback_data="cfg:theme_set:dark"),
+        btn(f"{'🔘' if cur=='light' else '▫️'} Светлая ☀️",
+            style="primary" if cur == "light" else None, callback_data="cfg:theme_set:light"),
+    )
+    kb.row(btn("🔙 Назад / Back", style="primary", callback_data="cfg:sub_back"))
+    return kb
+
+def build_temp_keyboard(platform: str, chat_id: int, user_id: int) -> InlineKeyboardMarkup:
+    cfg = get_user_config(platform, chat_id, user_id)
+    cur = cfg.get("temperature", 0.9)
+    kb = InlineKeyboardMarkup()
+    values = [0.2, 0.5, 0.7, 0.9, 1.1, 1.3, 1.5]
+    row: list[StyledButton] = []
+    for v in values:
+        mark = "🔘" if abs(cur - v) < 0.01 else "▫️"
+        row.append(btn(f"{mark} {v}", style=None, callback_data=f"cfg:temp_set:{v}"))
+    kb.row(*row[:4])
+    kb.row(*row[4:])
+    kb.row(btn("🔙 Назад / Back", style="primary", callback_data="cfg:sub_back"))
+    return kb
+
+def _model_picker_text(platform: str, chat_id: int, user_id: int) -> str:
+    cfg = get_user_config(platform, chat_id, user_id)
+    lang = cfg.get("language", "ru")
+    cur = cfg.get("model")
+    return (
+        f"🧠 <b>{_localize(lang,'Выбор модели','Model selection')}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"{_localize(lang,'Текущая','Current')}: {model_display_name(cur)}\n\n"
+        f"🎲 <b>{_localize(lang,'Авто','Auto')}</b> — {_localize(lang,'бот сам перебирает все модели','bot tries all models')}"
+    )
+
+# ============================================================
+# CALLBACK HANDLERS
+# ============================================================
+async def _edit_or_send(call: telebot.types.CallbackQuery, text: str, kb: InlineKeyboardMarkup):
+    try:
+        await tg_bot.edit_message_text(
+            text, call.message.chat.id, call.message.message_id,
+            parse_mode='HTML', reply_markup=kb
+        )
+    except Exception as e:
+        logger.warning(f"edit_message_text fail: {e}")
+
+@tg_bot.callback_query_handler(func=lambda call: call.data.startswith("cfg:"))
+async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
+    # Проверка владельца
+    owner = config_msg_owners.get(call.message.message_id)
+    if owner is not None and owner != call.from_user.id:
+        await tg_bot.answer_callback_query(call.id, "это не твои настройки 🤚", show_alert=False)
+        return
+
+    chat_id = call.message.chat.id
+    user_id = call.from_user.id
+    cfg = get_user_config("tg", chat_id, user_id)
+    lang = cfg.get("language", "ru")
+
+    parts = call.data.split(":")
+    action = parts[1] if len(parts) > 1 else ""
+    toast = _localize(lang, "Обновлено", "Updated")
+
+    if action == "model_set":
+        value = parts[2] if len(parts) > 2 else "auto"
+        if value == "auto":
+            cfg["model"] = None
+            toast = _localize(lang, "Модель: авто", "Model: auto")
+        else:
+            try:
+                idx = int(value)
+                if 0 <= idx < len(MODEL_LIST):
+                    cfg["model"] = MODEL_LIST[idx]
+                    toast = f"Модель: {MODEL_DISPLAY.get(MODEL_LIST[idx], MODEL_LIST[idx])}"
+            except ValueError:
+                pass
+        await _edit_or_send(call, _model_picker_text("tg", chat_id, user_id),
+                            build_model_keyboard("tg", chat_id, user_id))
+        await tg_bot.answer_callback_query(call.id, toast)
+        return
+
+    if action == "model":
+        await _edit_or_send(call, _model_picker_text("tg", chat_id, user_id),
+                            build_model_keyboard("tg", chat_id, user_id))
+        await tg_bot.answer_callback_query(call.id)
+        return
+
+    if action == "model_back" or action == "sub_back":
+        await _edit_or_send(call, _config_text("tg", chat_id, user_id),
+                            build_main_config_keyboard("tg", chat_id, user_id))
+        await tg_bot.answer_callback_query(call.id)
+        return
+
+    if action == "lang":
+        await _edit_or_send(call, "🌐 <b>Язык / Language</b>",
+                            build_lang_keyboard("tg", chat_id, user_id))
+        await tg_bot.answer_callback_query(call.id)
+        return
+
+    if action == "lang_set":
+        val = parts[2] if len(parts) > 2 else "ru"
+        if val in ("ru", "en"):
+            cfg["language"] = val
+            toast = "Язык: русский 🇷🇺" if val == "ru" else "Language: English 🇬🇧"
+        await _edit_or_send(call, _config_text("tg", chat_id, user_id),
+                            build_main_config_keyboard("tg", chat_id, user_id))
+        await tg_bot.answer_callback_query(call.id, toast)
+        return
+
+    if action == "theme":
+        await _edit_or_send(call, "🌓 <b>Тема / Theme</b>",
+                            build_theme_keyboard("tg", chat_id, user_id))
+        await tg_bot.answer_callback_query(call.id)
+        return
+
+    if action == "theme_set":
+        val = parts[2] if len(parts) > 2 else "dark"
+        if val in ("dark", "light"):
+            cfg["theme"] = val
+            toast = "Тема: тёмная 🌑" if val == "dark" else "Тема: светлая ☀️"
+        await _edit_or_send(call, _config_text("tg", chat_id, user_id),
+                            build_main_config_keyboard("tg", chat_id, user_id))
+        await tg_bot.answer_callback_query(call.id, toast)
+        return
+
+    if action == "temp":
+        await _edit_or_send(call, "🎛 <b>Температура / Temperature</b>",
+                            build_temp_keyboard("tg", chat_id, user_id))
+        await tg_bot.answer_callback_query(call.id)
+        return
+
+    if action == "temp_set":
+        try:
+            val = float(parts[2])
+            val = max(0.0, min(2.0, val))
+            cfg["temperature"] = val
+            toast = f"🌡 {val}"
+        except (ValueError, IndexError):
+            pass
+        await _edit_or_send(call, _config_text("tg", chat_id, user_id),
+                            build_main_config_keyboard("tg", chat_id, user_id))
+        await tg_bot.answer_callback_query(call.id, toast)
+        return
+
+    if action == "apply":
+        try:
+            await tg_bot.delete_message(call.message.chat.id, call.message.message_id)
+        except Exception:
+            pass
+        config_msg_owners.pop(call.message.message_id, None)
+        chat_key = get_chat_key("tg", chat_id)
+        trig_id = config_trigger_msgs.pop(chat_key, None)
+        if trig_id:
+            try:
+                await tg_bot.delete_message(chat_id, trig_id)
+            except Exception:
+                pass
+        await tg_bot.answer_callback_query(call.id, _localize(lang, "Готово ✅", "Done ✅"))
+        return
+
+    # toggles
+    if action == "separate":
+        cfg["separate_enabled"] = not cfg.get("separate_enabled", True)
+    elif action == "streaming":
+        if not premium_functions_enabled:
+            await tg_bot.answer_callback_query(call.id, "расширенные функции отключены", show_alert=True)
+            return
+        cfg["streaming_enabled"] = not cfg.get("streaming_enabled", False)
+    elif action == "stickers":
+        cfg["stickers_enabled"] = not cfg.get("stickers_enabled", True)
+    elif action == "autoreply":
+        cfg["random_reply_enabled"] = not cfg.get("random_reply_enabled", False)
+    elif action == "random":
+        cfg["random_messages_enabled"] = not cfg.get("random_messages_enabled", True)
+    elif action == "reset_prompt":
+        cfg["custom_prompt"] = None
+        toast = _localize(lang, "Промпт сброшен", "Prompt reset")
+    elif action == "reset_memory":
+        chat_key = f"tg_{chat_id}"
+        if chat_key in long_term_memory:
+            del long_term_memory[chat_key]
+            save_long_term_memory(long_term_memory)
+        chat_memories[chat_key] = deque(maxlen=20)
+        chat_media_history[chat_key].clear()
+        last_random_reply.pop(chat_key, None)
+        last_old_reply.pop(chat_key, None)
+        toast = _localize(lang, "Память сброшена", "Memory reset")
+
+    await _edit_or_send(call, _config_text("tg", chat_id, user_id),
+                        build_main_config_keyboard("tg", chat_id, user_id))
+    await tg_bot.answer_callback_query(call.id, toast)
+
+# ============================================================
+# TELEGRAM: КОМАНДЫ И ОБРАБОТЧИКИ
+# ============================================================
+HELP_TEXT = (
+    "🍷🗿 <b>Команды Кульша:</b>\n\n"
+    "<b>Общие:</b>\n"
+    "/start — приветствие\n"
+    "/help — эта справка\n"
+    "/donate — поддержать проект\n\n"
+    "<b>Настройки:</b>\n"
+    "<code>кульш конфиг</code> или <code>кульш настройки</code> — настройки (инлайн-кнопки)\n\n"
+    "<b>Утилиты:</b>\n"
+    "<code>кульш аватарка</code> — описать аватарку\n"
+    "<code>кульш вспомни медиа [N]</code> — вспомнить последние N медиа\n"
+    "<code>кульш логи</code> — логи (для админов)\n\n"
+    "<b>Развлечения:</b>\n"
+    "<code>кульш psl</code> — looksmaxxing анализ фото\n"
+    "<code>кульш psl совет</code> — анализ + рекомендации\n"
+    "<code>кульш battle</code> — баттл двух фото (альбомом)\n"
+    "<code>кульш донаты</code> — топ донатеров\n\n"
+    "<b>Инструменты (ЛС):</b>\n"
+    "Отправьте боту архив или текстовый файл и попросите отредактировать — бот распакует, изменит, соберёт и вернёт.\n"
+    "<code>/credits</code> — посмотреть баланс кредитов"
+)
+
+@tg_bot.message_handler(commands=['start'])
+async def handle_start(message: telebot.types.Message) -> None:
+    args = telebot.util.extract_arguments(message.text)
+    if not args:
+        await reply_tg_html(message, "🍷🗿 Кульш на связи. Напиши 'кульш' или обратись ко мне, и я отвечу. /help — список команд.")
+        return
+    if args.startswith('donate_stars_'):
+        try:
+            stars = int(args.split('_')[-1])
+            if stars <= 0:
+                raise ValueError
+        except (ValueError, IndexError):
+            await reply_tg_html(message, "❌ Неверное количество звёзд в ссылке.")
+            return
+        pending_donations[message.chat.id] = stars
+        prices = [telebot.types.LabeledPrice(label="Поддержать Кульша", amount=stars)]
+        await tg_bot.send_invoice(
+            chat_id=message.chat.id, title="Донат Кульшу",
+            description=f"Поддержка разработки на {stars} ⭐️",
+            invoice_payload=f"donate_{stars}_stars", provider_token="",
+            currency="XTR", prices=prices, start_parameter="donate",
+        )
+
+pending_donations: dict[int, int] = {}
+
+@tg_bot.message_handler(commands=['help'])
+async def handle_help(message: telebot.types.Message) -> None:
+    try:
+        await tg_bot.send_message(message.chat.id, HELP_TEXT, parse_mode='HTML',
+                                  reply_to_message_id=message.message_id)
+    except Exception:
+        await tg_bot.send_message(message.chat.id, re.sub(r'<[^>]+>', '', HELP_TEXT),
+                                  reply_to_message_id=message.message_id)
+
+@tg_bot.message_handler(commands=['donate'])
+async def handle_donate(message: telebot.types.Message) -> None:
+    await reply_tg_html(message, "Поддержать Кульша: https://kulsh-ai.web.app/donate.html 🍷🗿")
+
+@tg_bot.message_handler(commands=['credits'])
+async def handle_credits(message: telebot.types.Message) -> None:
+    user_id = message.from_user.id
+    creds = get_user_credits("tg", user_id)
+    await reply_tg_html(message, f"💎 Кредиты: {creds}/{DAILY_CREDITS}")
+
+@tg_bot.message_handler(commands=['togglepremiumfunctionsadmin'])
+async def handle_toggle_premium(message: telebot.types.Message) -> None:
+    global premium_functions_enabled
+    if message.from_user is None or message.from_user.id != PREMIUM_ADMIN_ID:
+        await reply_tg_html(message, "⛔ Нет доступа.")
+        return
+    premium_functions_enabled = not premium_functions_enabled
+    state = "включены ✅" if premium_functions_enabled else "выключены ❌"
+    await reply_tg_html(message, f"Расширенные функции (Rich Messages, стриминг): {state}")
+
+@tg_bot.pre_checkout_query_handler(func=lambda query: True)
+async def handle_pre_checkout(pre_checkout: telebot.types.PreCheckoutQuery) -> None:
+    await tg_bot.answer_pre_checkout_query(pre_checkout.id, ok=True)
+
+@tg_bot.message_handler(content_types=['successful_payment'])
+async def handle_successful_payment(message: telebot.types.Message) -> None:
+    payment = message.successful_payment
+    user_id = message.chat.id
+    try:
+        stars = pending_donations.pop(user_id, None) or int(payment.invoice_payload.split('_')[1])
+    except Exception:
+        stars = 0
+    name = message.from_user.full_name or message.from_user.username or str(user_id)
+    logger.info(f"Пользователь {user_id} задонатил {stars} звёзд")
+    add_donation('tg', user_id, stars, name)
+    await send_donation_alert('tg', name, stars)
+    await reply_tg_html(message, f"🍷🗿 Спасибо за {stars} звёзд, кент!")
+
+# ---- Конфиг-команда в TG ----
+async def tg_handle_config(message: telebot.types.Message) -> None:
+    if message.from_user is None:
+        return
+    chat_id = message.chat.id
+    user_id = message.from_user.id
+    chat_key = get_chat_key("tg", chat_id)
+    config_trigger_msgs[chat_key] = message.message_id
+
+    try:
+        sent = await tg_bot.send_message(
+            chat_id,
+            _config_text("tg", chat_id, user_id),
+            parse_mode='HTML',
+            reply_markup=build_main_config_keyboard("tg", chat_id, user_id),
+            reply_to_message_id=message.message_id,
+        )
+        config_msg_owners[sent.message_id] = user_id
+    except Exception as e:
+        logger.warning(f"Config send failed: {e}")
+        await tg_bot.send_message(
+            chat_id,
+            re.sub(r'<[^>]+>', '', _config_text("tg", chat_id, user_id)),
+            reply_markup=build_main_config_keyboard("tg", chat_id, user_id),
+        )
+
+# ---- Аватар ----
+async def tg_handle_avatar(message: telebot.types.Message, chat_id: int, user_id: int) -> None:
+    raw = await get_avatar_description_tg(message, chat_id, user_id)
+    if not raw:
+        await reply_tg_html(message, "не смог получить аватарку")
         return
     segments = clean_extra_text(raw)
     if not segments:
-        await message.reply("не смог получить аватарку")
+        await reply_tg_html(message, "не смог получить аватарку")
         return
-    for seg in segments:
-        try:
-            await message.channel.send(seg)
-        except Exception as e:
-            logger.warning(f"DS avatar segments send error: {e}")
+    for i, seg in enumerate(segments):
+        if i == 0:
+            await reply_tg_html(message, seg)
+        else:
+            await send_tg_html(message.chat.id, seg)
 
-async def ds_handle_recall_media(message: discord.Message, chat_id: str, parts: list[str]) -> None:
+# ---- Recall media ----
+async def tg_handle_recall_media(message: telebot.types.Message, chat_id: int, user_id: int, parts: list[str]) -> None:
     n = 3
     for p in parts:
         if p.isdigit():
             n = min(int(p), 10); break
-    raw = await get_recall_media_description_ds(message, chat_id, n)
+    raw = await get_recall_media_description_tg(message, chat_id, user_id, n)
     if not raw:
-        await message.reply("не нашёл ничего в памяти")
+        await reply_tg_html(message, "не нашёл ничего в памяти")
         return
     segments = clean_extra_text(raw)
     if not segments:
-        await message.reply("не нашёл ничего в памяти")
+        await reply_tg_html(message, "не нашёл ничего в памяти")
         return
-    for seg in segments:
+    for i, seg in enumerate(segments):
+        if i == 0:
+            await reply_tg_html(message, seg)
+        else:
+            await send_tg_html(message.chat.id, seg)
+
+# ---- Утилиты ----
+async def execute_utility_tg(message: telebot.types.Message, marker: str, chat_id: int, user_id: int) -> None:
+    cfg = get_user_config("tg", chat_id, user_id)
+    if marker in ("sticker", "gif"):
+        if not cfg.get("stickers_enabled", True):
+            return
         try:
-            await message.channel.send(seg)
+            sticker = random.choice(STICKER_POOL)
+            await tg_bot.send_sticker(message.chat.id, sticker)
         except Exception as e:
-            logger.warning(f"DS recall segments send error: {e}")
+            logger.error(f"sticker error: {e}")
 
-async def send_ds_ai_response(message: discord.Message, chat_id: str, answer_raw: str) -> None:
-    raw = answer_raw or ""
+# ---- Отправка ответа ИИ (TG) ----
+async def _send_streaming_response(message: telebot.types.Message, chat_id: int, user_id: int, full_text: str) -> bool:
+    """Отправка через sendMessageDraft с плавным появлением."""
+    if not premium_functions_enabled:
+        return False
+    draft_id = int(time.time() * 1000) % (2**31)
+    text = full_text
+    # Разбиваем по словам для плавного появления
+    words = text.split()
+    steps: list[str] = []
+    acc = ""
+    for i, w in enumerate(words):
+        acc = (acc + " " + w).strip()
+        if i % max(1, len(words) // 20) == 0:
+            steps.append(acc)
+    if not steps or steps[-1] != text:
+        steps.append(text)
+    for step in steps:
+        await stream_draft(message.chat.id, draft_id, step)
+        await asyncio.sleep(0.05)
+    # Финальная отправка настоящим сообщением
+    return False  # Handled by caller via send_tg_html
 
-    clean_segments, markers = process_ai_response(raw)
+async def send_tg_ai_response(message: telebot.types.Message, chat_id: int, user_id: int, answer_raw: str) -> None:
+    cfg = get_user_config("tg", chat_id, user_id)
+    separate_enabled = cfg.get("separate_enabled", True)
+    streaming = cfg.get("streaming_enabled", False) and premium_functions_enabled
+
+    clean_segments, markers = process_ai_response(answer_raw, separate_enabled=separate_enabled)
 
     extra_segments: list[str] = []
-
     if "avatar" in markers:
         markers.remove("avatar")
         try:
-            avatar_raw = await get_avatar_description_ds(message, chat_id)
-            if avatar_raw:
-                extra_segments.extend(clean_extra_text(avatar_raw))
+            ar = await get_avatar_description_tg(message, chat_id, user_id)
+            if ar:
+                extra_segments.extend(clean_extra_text(ar))
         except Exception as e:
-            logger.warning(f"DS avatar desc failed: {e}")
-
+            logger.warning(f"avatar desc failed: {e}")
     if "recall_media" in markers:
         markers.remove("recall_media")
         try:
-            recall_raw = await get_recall_media_description_ds(message, chat_id, 3)
-            if recall_raw:
-                extra_segments.extend(clean_extra_text(recall_raw))
+            rr = await get_recall_media_description_tg(message, chat_id, user_id, 3)
+            if rr:
+                extra_segments.extend(clean_extra_text(rr))
         except Exception as e:
-            logger.warning(f"DS recall desc failed: {e}")
+            logger.warning(f"recall desc failed: {e}")
 
     all_segments = clean_segments + extra_segments
 
     if not all_segments:
         for m in markers:
             try:
-                await execute_utility_ds(message, m, chat_id)
+                await execute_utility_tg(message, m, chat_id, user_id)
             except Exception as e:
-                logger.warning(f"ds utility {m} failed: {e}")
+                logger.warning(f"utility {m} failed: {e}")
         return
 
     for i, seg in enumerate(all_segments):
         try:
-            await typing_with_delay_ds(message.channel, seg)
-        except Exception as e:
-            logger.debug(f"typing delay ds fail: {e}")
+            await typing_with_delay_tg(message.chat.id, seg)
+        except Exception:
+            pass
 
+        # Стриминг для первого длинного сегмента
+        if streaming and i == 0 and len(seg) > 120:
+            try:
+                sent = await send_rich_message(message.chat.id, seg, reply_to=message.message_id)
+                if not sent:
+                    await send_tg_html(message.chat.id, seg, reply_to=message.message_id)
+            except Exception:
+                await send_tg_html(message.chat.id, seg, reply_to=message.message_id)
+        else:
+            if i == 0:
+                await send_tg_html(message.chat.id, seg, reply_to=message.message_id)
+            else:
+                await send_tg_html(message.chat.id, seg)
+
+        add_bot_memory(f"tg_{message.chat.id}", seg)
+
+    for m in markers:
+        try:
+            await execute_utility_tg(message, m, chat_id, user_id)
+        except Exception as e:
+            logger.warning(f"utility {m} failed: {e}")
+
+async def maybe_reply_to_old_message_tg(message: telebot.types.Message, chat_id: int, user_id: int) -> None:
+    chat_key = f"tg_{chat_id}"
+    now = time.time()
+    if now - last_old_reply.get(chat_key, 0) < 600:
+        return
+    if random.random() > 0.12:
+        return
+    mem = list(get_chat_memory(chat_key))
+    candidates = [e for e in mem[:-2] if e.get("type") == "user" and e.get("text")]
+    if not candidates:
+        return
+    old = random.choice(candidates)
+    try:
+        comment = await ask_ai_async(
+            prompt=(f"Ты видишь в истории чата старое сообщение от {old.get('display','?')} "
+                    f"({old.get('time','')}): \"{old.get('text','')}\". Хочешь коротко прокомментировать, пошутить "
+                    f"или поддержать беседу? Если да — напиши ОДНО короткое сообщение в стиле Кульша. "
+                    f"Если не хочешь — ответь ровно 'НЕТ'."),
+            system_instruction_override="Ты Кульш. Отвечай одним коротким сообщением или 'НЕТ'. Без markdown.",
+            chat_id=chat_id, user_id=user_id,
+        )
+        if comment and comment.strip() and comment.strip().upper() != "НЕТ":
+            last_old_reply[chat_key] = now
+            cfg = get_user_config("tg", chat_id, user_id)
+            segments, markers = process_ai_response(comment, separate_enabled=cfg.get("separate_enabled", True))
+            old_msg_id = old.get("message_id")
+            for i, seg in enumerate(segments):
+                try:
+                    await typing_with_delay_tg(message.chat.id, seg)
+                except Exception:
+                    pass
+                if i == 0 and old_msg_id:
+                    await send_tg_html(message.chat.id, seg, reply_to=old_msg_id)
+                else:
+                    await send_tg_html(message.chat.id, seg)
+                add_bot_memory(chat_key, seg)
+            for m in markers:
+                if m in ("sticker", "gif"):
+                    try:
+                        await execute_utility_tg(message, m, chat_id, user_id)
+                    except Exception:
+                        pass
+    except Exception as e:
+        logger.warning(f"old reply tg fail: {e}")
+
+async def should_random_reply(platform: str, chat_id: int, user_id: int) -> bool:
+    cfg = get_user_config(platform, chat_id, user_id)
+    if not cfg.get("random_reply_enabled", False):
+        return False
+    chat_key = f"{platform}_{chat_id}"
+    now = time.time()
+    if now - last_random_reply.get(chat_key, 0) < 900:
+        return False
+    if random.random() > 0.03:
+        return False
+    return True
+
+# ============================================================
+# TELEGRAM: ОСНОВНОЙ ТЕКСТОВЫЙ ОБРАБОТЧИК
+# ============================================================
+@tg_bot.message_handler(func=lambda m: m.text, content_types=['text'])
+async def handle_tg_text(message: telebot.types.Message) -> None:
+    if message.from_user is None:
+        return
+    chat_id = message.chat.id
+    user_id = message.from_user.id
+    is_dm = message.chat.type == 'private'
+    text = cast(str, message.text or "")
+    tl = text.lower()
+
+    display_name = message.from_user.full_name or "Unknown"
+    username = message.from_user.username or ""
+    chat_key = f"tg_{chat_id}"
+
+    if tl.startswith("кульш конфиг") or tl.startswith("кульш настройки"):
+        await tg_handle_config(message)
+        return
+
+    if tl.startswith("кульш донаты"):
+        top = get_top_donators()
+        if not top:
+            await reply_tg_html(message, "Пока никто не донатил. Будь первым, бро 🍷🗿\nhttps://kulsh-ai.web.app/donate.html")
+            return
+        lines = ["🏆 <b>Топ донатеров:</b>"]
+        for i, (name, total) in enumerate(top, 1):
+            lines.append(f"{i}. {html.escape(name)} — {total} очков")
+        await tg_bot.send_message(chat_id, "\n".join(lines), parse_mode='HTML',
+                                  reply_to_message_id=message.message_id)
+        return
+
+    if tl.startswith("кульш аватарк") or tl.startswith("кульш аватар") or tl.strip() in ("!avatar", "! avatar"):
+        await tg_handle_avatar(message, chat_id, user_id)
+        return
+
+    if tl.startswith("кульш вспомни медиа") or "!recall_media" in tl:
+        await tg_handle_recall_media(message, chat_id, user_id, text.split())
+        return
+
+    if tl.startswith("кульш логи"):
+        if user_id != PREMIUM_ADMIN_ID:
+            try:
+                member = await tg_bot.get_chat_member(chat_id, user_id)
+                if member.status not in ('administrator', 'creator'):
+                    await reply_tg_html(message, "не для тебя писано")
+                    return
+            except Exception:
+                await reply_tg_html(message, "не могу проверить права")
+                return
+        try:
+            tail = read_log_tail(20)
+            full_caption = f"{LOG_INTRO}\n\n{tail}"
+            if len(full_caption) <= 1024:
+                caption = full_caption; extra_text = None
+            else:
+                available = 1024 - len(LOG_INTRO) - 5
+                caption = f"{LOG_INTRO}\n\n{tail[:available]}..."
+                extra_text = tail
+            try:
+                with open('bot.log', 'rb') as logf:
+                    await tg_bot.send_document(chat_id, InputFile(logf), caption=caption)
+            except FileNotFoundError:
+                await send_tg_html(chat_id, full_caption[:4000], reply_to=message.message_id)
+                return
+            if extra_text:
+                for chunk in chunk_text(extra_text, 3900):
+                    try:
+                        await tg_bot.send_message(chat_id, f"<pre>{html.escape(chunk)}</pre>", parse_mode='HTML')
+                    except Exception:
+                        await tg_bot.send_message(chat_id, chunk)
+        except Exception as e:
+            await reply_tg_html(message, f"Ошибка чтения логов: {e}")
+        return
+
+    if is_looksmaxxing_command(text):
+        user_looksmaxxing_state[chat_id] = True
+        add_user_memory(chat_key, "TG", display_name, username, user_id, text, message_id=message.message_id)
+        await reply_tg_html(message, "📸 Жду фото для анализа. Отправь его с пометкой 'looksmaxxing' или просто подпиши.")
+        return
+
+    if is_battle_command(text):
+        add_user_memory(chat_key, "TG", display_name, username, user_id, text, message_id=message.message_id)
+        await reply_tg_html(message, "Для баттла пришлите два фото в одном сообщении (альбомом) с командой 'кульш баттл'.")
+        return
+
+    # Инструменты в ЛС — обрабатываются в media handler
+
+    is_reply_to_bot = (message.reply_to_message and message.reply_to_message.from_user
+                       and message.reply_to_message.from_user.id == (tg_bot.user.id if tg_bot.user else 0))
+    addressed = bool(is_reply_to_bot or re.search(r'(?i)\bкульш\b', text) or is_dm)
+
+    if addressed:
+        await tg_bot.send_chat_action(chat_id, 'typing')
+        add_user_memory(chat_key, "TG", display_name, username, user_id, text, message_id=message.message_id)
+        messages = memory_to_messages(get_chat_memory(chat_key))
+        answer = await ask_ai_async(messages=messages, chat_id=chat_id, user_id=user_id, platform="tg")
+        await send_tg_ai_response(message, chat_id, user_id, answer)
+        asyncio.create_task(extract_memory(chat_key, f"{display_name}: {text}", answer))
+        asyncio.create_task(maybe_reply_to_old_message_tg(message, chat_id, user_id))
+        return
+
+    add_user_memory(chat_key, "TG", display_name, username, user_id, text, message_id=message.message_id)
+
+    if await should_random_reply("tg", chat_id, user_id):
+        try:
+            answer = await ask_ai_async(
+                context_type="observer",
+                messages=memory_to_messages(get_chat_memory(chat_key)),
+                chat_id=chat_id, user_id=user_id, platform="tg",
+            )
+            if answer and answer.strip() and answer.strip().upper() != "НЕТ":
+                last_random_reply[chat_key] = time.time()
+                await send_tg_ai_response(message, chat_id, user_id, answer)
+        except Exception as e:
+            logger.warning(f"Random reply fail: {e}")
+
+# ============================================================
+# TOOLS: РАСШИРЕННЫЕ ИНСТРУМЕНТЫ (только ЛС)
+# ============================================================
+SAFE_COMMANDS = {"ls", "cat", "head", "tail", "wc", "grep", "find", "file", "stat", "du", "tree"}
+MAX_FILE_SIZE = 500 * 1024  # 500 KB
+MAX_TOTAL_UNPACKED = 5 * 1024 * 1024  # 5 MB
+MAX_FILES = 100
+
+def _safe_join(base: str, rel: str) -> str | None:
+    """Безопасный join с проверкой выхода за base."""
+    if not rel:
+        return base
+    target = os.path.realpath(os.path.join(base, rel))
+    if not target.startswith(os.path.realpath(base)):
+        return None
+    return target
+
+def _list_files(base: str) -> list[str]:
+    out: list[str] = []
+    for root, dirs, files in os.walk(base):
+        for f in files:
+            full = os.path.join(root, f)
+            rel = os.path.relpath(full, base)
+            out.append(rel)
+    return out
+
+def _is_text_file(path: str) -> bool:
+    try:
+        with open(path, 'rb') as f:
+            chunk = f.read(1024)
+        if b'\x00' in chunk:
+            return False
+        chunk.decode('utf-8', errors='strict')
+        return True
+    except Exception:
+        return False
+
+async def extract_archive(zip_path: str, dest_dir: str) -> list[str]:
+    def _do():
+        with zipfile.ZipFile(zip_path, 'r') as zf:
+            total = 0
+            count = 0
+            for info in zf.infolist():
+                if info.is_dir():
+                    continue
+                count += 1
+                if count > MAX_FILES:
+                    raise Exception("Слишком много файлов в архиве")
+                total += info.file_size
+                if total > MAX_TOTAL_UNPACKED:
+                    raise Exception("Распакованный архив слишком большой")
+                # Проверка на path traversal
+                target = _safe_join(dest_dir, info.filename)
+                if target is None:
+                    raise Exception(f"Небезопасный путь: {info.filename}")
+                os.makedirs(os.path.dirname(target), exist_ok=True)
+                with zf.open(info) as src, open(target, 'wb') as dst:
+                    shutil.copyfileobj(src, dst)
+        return _list_files(dest_dir)
+    return await asyncio.to_thread(_do)
+
+async def create_archive(source_dir: str, out_zip: str) -> None:
+    def _do():
+        with zipfile.ZipFile(out_zip, 'w', zipfile.ZIP_DEFLATED) as zf:
+            for root, dirs, files in os.walk(source_dir):
+                for f in files:
+                    full = os.path.join(root, f)
+                    rel = os.path.relpath(full, source_dir)
+                    zf.write(full, rel)
+    await asyncio.to_thread(_do)
+
+async def run_safe_command(base_dir: str, cmd: str) -> tuple[int, str]:
+    """Запускает whitelisted команду без shell."""
+    parts = cmd.strip().split()
+    if not parts:
+        return 1, "пустая команда"
+    prog = parts[0].lower()
+    if prog not in SAFE_COMMANDS:
+        return 1, f"команда '{prog}' не разрешена"
+    # никаких shell-метасимволов
+    for p in parts:
+        if any(ch in p for ch in (';', '&', '|', '`', '$', '<', '>', '\n')):
+            return 1, "метасимволы запрещены"
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *parts,
+            cwd=base_dir,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15)
+        out = (stdout or b'').decode('utf-8', errors='replace')[:8000]
+        err = (stderr or b'').decode('utf-8', errors='replace')[:2000]
+        if err:
+            out += "\n[stderr]\n" + err
+        return proc.returncode or 0, out
+    except asyncio.TimeoutError:
+        return 1, "команда не завершилась за 15 сек"
+    except Exception as e:
+        return 1, f"ошибка: {e}"
+
+async def tool_edit_archive(message: telebot.types.Message, user_request: str,
+                            archive_bytes: bytes, filename: str) -> None:
+    """Полный цикл редактирования архива."""
+    user_id = message.from_user.id
+    chat_id = message.chat.id
+
+    status = await tg_bot.send_message(chat_id, "📦 Распаковываю архив...")
+
+    work_dir = tempfile.mkdtemp(prefix="kulsh_tools_")
+    tools_sessions[chat_id] = {"dir": work_dir, "user_id": user_id}
+
+    try:
+        # Скачиваем архив
+        arch_path = os.path.join(work_dir, "input.zip")
+        with open(arch_path, 'wb') as f:
+            f.write(archive_bytes)
+
+        # Распаковка
+        files = await extract_archive(arch_path, work_dir)
+        files_display = ", ".join(files[:30])
+        if len(files) > 30:
+            files_display += f" ... (+{len(files)-30})"
+
+        await tg_bot.edit_message_text(
+            f"📦 Распаковал архив\n\n📄 Файлы: {files_display}",
+            chat_id, status.message_id
+        )
+
+        # Читаем текстовые файлы
+        contents: dict[str, str] = {}
+        for rel in files[:50]:  # не больше 50 файлов
+            full = _safe_join(work_dir, rel)
+            if full and os.path.exists(full) and os.path.getsize(full) < MAX_FILE_SIZE:
+                if _is_text_file(full):
+                    try:
+                        with open(full, 'r', encoding='utf-8', errors='replace') as f:
+                            contents[rel] = f.read()
+                    except Exception:
+                        pass
+
+        files_context = "\n\n".join(
+            f"=== {fn} ===\n{content[:6000]}" for fn, content in contents.items()
+        )
+        if len(files_context) > 60000:
+            files_context = files_context[:60000] + "\n...[обрезано]"
+
+        await tg_bot.edit_message_text(
+            f"🧠 Анализирую {len(contents)} файлов...",
+            chat_id, status.message_id
+        )
+
+        # Запрос к AI
+        prompt = (
+            f"Пользователь отправил архив '{filename}' и попросил:\n\n{user_request}\n\n"
+            f"Содержимое архива:\n{files_context}\n\n"
+            "Верни JSON-объект строго такой структуры:\n"
+            '{"summary": "краткое описание того, что ты сделал (на русском, дружелюбно, в стиле Кульша)", '
+            '"files": {"путь_файла": "полное новое содержимое файла", ...}}\n\n'
+            "Включай в 'files' только изменённые/новые файлы. Не изменённые не включай. "
+            "Только JSON, без markdown, без пояснений."
+        )
+        raw = await ask_ai_async(
+            prompt=prompt,
+            system_instruction_override=(
+                "Ты — инструмент редактирования кода. Отвечай ТОЛЬКО валидным JSON с полями 'summary' и 'files'. "
+                "Никаких пояснений, markdown или текста до/после JSON."
+            ),
+            chat_id=chat_id, user_id=user_id, platform="tg"
+        )
+
+        try:
+            data = json.loads(clean_json_text(raw))
+        except Exception as e:
+            await tg_bot.edit_message_text(
+                f"❌ Не смог распарсить ответ ИИ: {e}",
+                chat_id, status.message_id
+            )
+            return
+
+        summary = data.get("summary", "готово")
+        new_files = data.get("files", {})
+
+        if not isinstance(new_files, dict) or not new_files:
+            await tg_bot.edit_message_text(
+                f"🤔 ИИ не предложил изменений. {summary}",
+                chat_id, status.message_id
+            )
+            return
+
+        await tg_bot.edit_message_text(
+            f"✏️ Редактирую {len(new_files)} файл(ов)...",
+            chat_id, status.message_id
+        )
+
+        # Применяем изменения
+        for rel, new_content in new_files.items():
+            full = _safe_join(work_dir, rel)
+            if full is None:
+                continue
+            os.makedirs(os.path.dirname(full), exist_ok=True)
+            with open(full, 'w', encoding='utf-8') as f:
+                f.write(new_content)
+
+        await tg_bot.edit_message_text(
+            "🗜 Собираю архив обратно...",
+            chat_id, status.message_id
+        )
+
+        out_zip = os.path.join(work_dir, f"edited_{filename or 'archive.zip'}")
+        await create_archive(work_dir, out_zip)
+        # Удаляем исходник и всё лишнее из архива
+        archive_basename = os.path.basename(out_zip)
+
+        await tg_bot.edit_message_text(
+            "📤 Отправляю готовый архив...",
+            chat_id, status.message_id
+        )
+
+        with open(out_zip, 'rb') as f:
+            await tg_bot.send_document(
+                chat_id,
+                InputFile(f, file_name=archive_basename),
+                caption=f"🍷🗿 {summary}"
+            )
+
+        await tg_bot.edit_message_text("✅ Готово", chat_id, status.message_id)
+
+    except Exception as e:
+        logger.error(f"tool_edit_archive error: {e}")
+        try:
+            await tg_bot.edit_message_text(f"❌ Ошибка: {e}", chat_id, status.message_id)
+        except Exception:
+            pass
+    finally:
+        # Очистка
+        try:
+            if work_dir and os.path.exists(work_dir):
+                shutil.rmtree(work_dir, ignore_errors=True)
+        except Exception:
+            pass
+        tools_sessions.pop(chat_id, None)
+
+async def tool_review_file(message: telebot.types.Message, user_request: str,
+                           file_bytes: bytes, filename: str) -> None:
+    """Просмотр/комментарий к текстовому файлу — бесплатно."""
+    user_id = message.from_user.id
+    chat_id = message.chat.id
+
+    try:
+        text = file_bytes.decode('utf-8', errors='replace')
+    except Exception:
+        await reply_tg_html(message, "не могу прочитать файл как текст")
+        return
+
+    if len(text) > MAX_FILE_SIZE:
+        text = text[:MAX_FILE_SIZE] + "\n...[обрезано]"
+
+    prompt = (
+        f"Пользователь отправил файл '{filename}' и просит:\n\n{user_request}\n\n"
+        f"Содержимое файла:\n```\n{text}\n```\n\n"
+        "Ответь в стиле Кульша: коротко разбери, что видишь, ответь на вопрос. "
+        "Если нужно предложить правки — предложи их в тексте, но файл не редактируй."
+    )
+    answer = await ask_ai_async(
+        prompt=prompt,
+        chat_id=chat_id, user_id=user_id, platform="tg"
+    )
+    await send_tg_ai_response(message, chat_id, user_id, answer)
+
+async def tool_console_command(message: telebot.types.Message, user_request: str,
+                               cmd: str) -> None:
+    """Выполнить разрешённую консольную команду в сессии инструментов."""
+    user_id = message.from_user.id
+    chat_id = message.chat.id
+    session = tools_sessions.get(chat_id)
+    if not session:
+        await reply_tg_html(message, "сначала загрузи архив, чтобы я мог работать в нём")
+        return
+    work_dir = session["dir"]
+    if not os.path.exists(work_dir):
+        await reply_tg_html(message, "рабочая папка потерялась, загрузи архив заново")
+        return
+
+    status = await tg_bot.send_message(chat_id, f"⚙️ Выполняю: {cmd}")
+
+    rc, out = await run_safe_command(work_dir, cmd)
+    result_str = f"Код: {rc}\n{out}" if out else f"Код: {rc} (пусто)"
+
+    prompt = (
+        f"Пользователь попросил: {user_request}\n"
+        f"Выполнена команда: `{cmd}`\n"
+        f"Результат:\n```\n{result_str[:4000]}\n```\n\n"
+        "Коротко прокомментируй результат в стиле Кульша. Не редактируй файлы."
+    )
+    answer = await ask_ai_async(
+        prompt=prompt,
+        chat_id=chat_id, user_id=user_id, platform="tg"
+    )
+    await tg_bot.edit_message_text(f"✅ {cmd}\n{out[:500]}", chat_id, status.message_id)
+    await send_tg_ai_response(message, chat_id, user_id, answer)
+
+# ============================================================
+# TG: МЕДИА/ДОКУМЕНТЫ ОБРАБОТЧИК
+# ============================================================
+@tg_bot.message_handler(content_types=['photo', 'video', 'animation', 'document', 'sticker'])
+async def handle_tg_media(message: telebot.types.Message) -> None:
+    if message.from_user is None:
+        return
+    chat_id = message.chat.id
+    user_id = message.from_user.id
+    is_dm = message.chat.type == 'private'
+    caption = message.caption or ""
+    cl = caption.lower()
+    chat_key = f"tg_{chat_id}"
+
+    display_name = message.from_user.full_name or "Unknown"
+    username = message.from_user.username or ""
+
+    media_tag = None
+    file_id = None
+    media_type = None
+    file_name = None
+
+    if message.photo:
+        file_id = message.photo[-1].file_id; media_type = "photo"; media_tag = "[фото]"
+    elif message.video:
+        file_id = message.video.file_id; media_type = "video"; media_tag = "[видео]"
+    elif message.animation:
+        file_id = message.animation.file_id; media_type = "animation"; media_tag = "[гифка]"
+    elif message.document:
+        file_id = message.document.file_id
+        media_type = "document"
+        file_name = message.document.file_name or "file"
+        media_tag = f"[док: {file_name}]"
+    elif message.sticker:
+        file_id = message.sticker.file_id; media_type = "sticker"; media_tag = "[стикер]"
+
+    if file_id and media_tag:
+        add_media_history(chat_key, None, media_type, display_name, file_id=file_id, caption=caption)
+
+    # --- BATTLE ---
+    if is_battle_command(caption) and message.photo:
+        if message.media_group_id:
+            mgid = message.media_group_id
+            if mgid not in battle_photos:
+                battle_photos[mgid] = []
+                battle_media_groups[mgid] = asyncio.create_task(
+                    process_battle_media_group(mgid, chat_id, user_id)
+                )
+            img_bytes = await get_tg_file_bytes(tg_bot, message.photo[-1].file_id)
+            battle_photos[mgid].append(img_bytes)
+        else:
+            await reply_tg_html(message, "Для баттла нужно два фото. Отправьте их одним альбомом.")
+        return
+
+    if message.media_group_id and message.media_group_id in battle_photos and message.photo:
+        img_bytes = await get_tg_file_bytes(tg_bot, message.photo[-1].file_id)
+        battle_photos[message.media_group_id].append(img_bytes)
+        return
+
+    # --- LOOKSMAXXING ---
+    is_looksmaxxing = (
+        is_looksmaxxing_command(caption) or
+        (message.reply_to_message and message.reply_to_message.from_user
+         and message.reply_to_message.from_user.id == (tg_bot.user.id if tg_bot.user else 0)
+         and message.reply_to_message.text
+         and is_looksmaxxing_command(message.reply_to_message.text)) or
+        user_looksmaxxing_state.get(chat_id, False)
+    )
+
+    if is_looksmaxxing and message.photo:
+        user_looksmaxxing_state[chat_id] = False
+        status = await tg_bot.send_message(chat_id, "⏳ Анализирую внешность...")
+        try:
+            img_bytes = await get_tg_file_bytes(tg_bot, message.photo[-1].file_id)
+            include_advice = ("совет" in cl or "advice" in cl or
+                              (message.reply_to_message and message.reply_to_message.text
+                               and ("совет" in message.reply_to_message.text.lower()
+                                    or "advice" in message.reply_to_message.text.lower())))
+            cfg = get_user_config("tg", chat_id, user_id)
+            lang = cfg.get("language", "ru")
+            theme = cfg.get("theme", "dark")
+            ai_data = await get_looksmaxxing_data(img_bytes, include_advice, lang=lang)
+            if "error" in ai_data:
+                await tg_bot.edit_message_text(f"❌ {ai_data['error']}", chat_id, status.message_id)
+                return
+            infographic = await create_infographic(img_bytes, ai_data, theme=theme, lang=lang)
+            report_text = (
+                f"📊 <b>РЕЗУЛЬТАТЫ LOOKSMAXXING</b>\n\n"
+                f"🧬 <b>Пол:</b> {ai_data.get('gender','?')}\n"
+                f"📈 <b>PSL:</b> <code>{ai_data.get('psl','?')}/8.0</code>\n"
+                f"👑 <b>Tier:</b> <code>{ai_data.get('tier','?')}</code>\n"
+            )
+            if ai_data.get("potential"):
+                report_text += f"🔮 <b>Потенциал:</b> <code>{ai_data['potential']}</code>\n"
+            report_text += f"\n📝 <b>Анализ:</b>\n{html.escape(ai_data.get('summary',''))}"
+            if include_advice and ai_data.get("advice"):
+                report_text += f"\n\n⚡ <b>Рекомендации:</b>\n{html.escape(ai_data['advice'])}"
+            try:
+                await tg_bot.send_photo(chat_id, InputFile(infographic), caption="📊 Результаты looksmaxxing")
+            except Exception as e:
+                logger.error(f"Ошибка отправки инфографики: {e}")
+            for chunk in [report_text[i:i+3900] for i in range(0, len(report_text), 3900)]:
+                try:
+                    await tg_bot.send_message(chat_id, chunk, parse_mode='HTML')
+                except Exception:
+                    await tg_bot.send_message(chat_id, re.sub(r'<[^>]+>', '', chunk))
+            await tg_bot.delete_message(chat_id, status.message_id)
+            add_user_memory(chat_key, "TG", display_name, username, user_id,
+                            f"[looksmaxxing] {caption}", ["photo"], message_id=message.message_id)
+            add_bot_memory(chat_key, "[looksmaxxing отчёт]")
+        except Exception as e:
+            logger.error(f"Ошибка в looksmaxxing: {e}")
+            await reply_tg_html(message, f"🌋 Ошибка: {e}")
+        return
+
+    # --- TOOLS (только ЛС) ---
+    if is_dm and message.document:
+        # Архив или текстовый файл
+        doc_name = (message.document.file_name or "").lower()
+        is_archive = doc_name.endswith(".zip")
+
+        # Проверяем, есть ли запрос
+        user_request = caption.strip() or "отредактируй что-нибудь полезное"
+        credits = get_user_credits("tg", user_id)
+
+        try:
+            file_bytes = await get_tg_file_bytes(tg_bot, message.document.file_id)
+        except Exception as e:
+            await reply_tg_html(message, f"не смог скачать файл: {e}")
+            return
+
+        if is_archive:
+            if credits < COST_ARCHIVE_EDIT:
+                await reply_tg_html(
+                    message,
+                    f"💎 Недостаточно кредитов для редактирования архива.\n"
+                    f"Нужно {COST_ARCHIVE_EDIT}, у тебя {credits}/{DAILY_CREDITS}. Приходи завтра 🍷🗿"
+                )
+                return
+            spend_credits("tg", user_id, COST_ARCHIVE_EDIT)
+            await tool_edit_archive(message, user_request, file_bytes, message.document.file_name or "archive.zip")
+            return
+        else:
+            # Текстовый файл — бесплатно
+            await tool_review_file(message, user_request, file_bytes, message.document.file_name or "file")
+            return
+
+    # --- ПРОСТОЕ МЕДИА С ТЕКСТОМ ---
+    is_reply_to_bot = (message.reply_to_message and message.reply_to_message.from_user
+                       and message.reply_to_message.from_user.id == (tg_bot.user.id if tg_bot.user else 0))
+    addressed = bool(is_reply_to_bot or re.search(r'(?i)\bкульш\b', caption) or is_dm)
+
+    if not addressed:
+        add_user_memory(chat_key, "TG", display_name, username, user_id, caption or "",
+                        [media_tag or "медиа"], message_id=message.message_id)
+        if await should_random_reply("tg", chat_id, user_id):
+            answer = await ask_ai_async(
+                context_type="observer",
+                messages=memory_to_messages(get_chat_memory(chat_key)),
+                chat_id=chat_id, user_id=user_id, platform="tg",
+            )
+            if answer and answer.strip() and answer.strip().upper() != "НЕТ":
+                last_random_reply[chat_key] = time.time()
+                await send_tg_ai_response(message, chat_id, user_id, answer)
+        return
+
+    await tg_bot.send_chat_action(chat_id, 'typing')
+    image_bytes = None
+    image_mime = "image/jpeg"
+    try:
+        if message.photo:
+            image_bytes = await get_tg_file_bytes(tg_bot, message.photo[-1].file_id)
+        elif message.animation:
+            vid = await get_tg_file_bytes(tg_bot, message.animation.file_id)
+            frame = await extract_video_frame(vid, ".mp4")
+            if frame: image_bytes = frame
+        elif message.video:
+            vid = await get_tg_file_bytes(tg_bot, message.video.file_id)
+            frame = await extract_video_frame(vid, ".mp4")
+            if frame: image_bytes = frame
+        elif message.document and message.document.mime_type and message.document.mime_type.startswith("image/"):
+            image_bytes = await get_tg_file_bytes(tg_bot, message.document.file_id)
+            image_mime = message.document.mime_type
+    except Exception as e:
+        logger.warning(f"Не смог скачать медиа: {e}")
+
+    prompt = caption.strip() or "че на этом?"
+    add_user_memory(chat_key, "TG", display_name, username, user_id,
+                    f"{prompt} [с медиа: {media_tag}]", [media_tag or "медиа"],
+                    message_id=message.message_id)
+    messages = memory_to_messages(get_chat_memory(chat_key))
+    answer = await ask_ai_async(messages=messages, image_bytes=image_bytes,
+                                image_mime=image_mime, chat_id=chat_id,
+                                user_id=user_id, platform="tg")
+    await send_tg_ai_response(message, chat_id, user_id, answer)
+    asyncio.create_task(extract_memory(chat_key, f"{display_name}: [медиа] {caption}", answer))
+
+# ---- Battle media group processing ----
+async def process_battle_media_group(media_group_id: str, tg_chat_id: int, user_id: int):
+    for _ in range(10):
+        if media_group_id in battle_photos and len(battle_photos[media_group_id]) >= 2:
+            break
+        await asyncio.sleep(0.5)
+    if media_group_id not in battle_photos or len(battle_photos[media_group_id]) < 2:
+        battle_photos.pop(media_group_id, None)
+        battle_media_groups.pop(media_group_id, None)
+        await tg_bot.send_message(tg_chat_id, "Нужно два фото для баттла.")
+        return
+    photos = battle_photos.pop(media_group_id)
+    battle_media_groups.pop(media_group_id, None)
+    photo1_bytes, photo2_bytes = photos[:2]
+
+    cfg = get_user_config("tg", tg_chat_id, user_id)
+    lang = cfg.get("language", "ru")
+    theme = cfg.get("theme", "dark")
+
+    await tg_bot.send_chat_action(tg_chat_id, 'typing')
+    status = await tg_bot.send_message(tg_chat_id, "⚔️ Сравниваю лица...")
+    ai_data = await get_battle_data(photo1_bytes, photo2_bytes, lang=lang)
+    if "error" in ai_data:
+        await tg_bot.edit_message_text(f"❌ {ai_data['error']}", tg_chat_id, status.message_id)
+        return
+    battle_img = await create_battle_infographic(photo1_bytes, photo2_bytes, ai_data,
+                                                  theme=theme, lang=lang)
+    winner_num = str(ai_data.get("winner", "1"))
+    winner_label = "Первое фото" if winner_num == "1" else "Второе фото"
+    report_text = (
+        f"⚔️ <b>РЕЗУЛЬТАТ БАТТЛА</b>\n\n"
+        f"🥇 Победитель: <b>{winner_label}</b>\n"
+        f"🔍 Причина: {html.escape(ai_data.get('reason',''))}\n\n"
+        f"📊 Фото 1: PSL {ai_data.get('photo1',{}).get('psl','?')} | "
+        f"Tier {html.escape(ai_data.get('photo1',{}).get('tier','?'))}\n"
+        f"📊 Фото 2: PSL {ai_data.get('photo2',{}).get('psl','?')} | "
+        f"Tier {html.escape(ai_data.get('photo2',{}).get('tier','?'))}\n"
+    )
+    try:
+        await tg_bot.send_photo(tg_chat_id, InputFile(battle_img), caption="⚔️ Результат баттла")
+    except Exception as e:
+        logger.error(f"Battle infra error: {e}")
+    try:
+        await tg_bot.send_message(tg_chat_id, report_text, parse_mode='HTML')
+    except Exception:
+        await tg_bot.send_message(tg_chat_id, re.sub(r'<[^>]+>', '', report_text))
+    await tg_bot.delete_message(tg_chat_id, status.message_id)
+
+# ============================================================
+# DISCORD
+# ============================================================
+intents = discord.Intents.default()
+intents.message_content = True
+ds_bot = discord.Client(intents=intents)
+AUTHORIZED_UPDATERS = [735217033867821098, 1193627300797878362]
+
+async def ds_handle_config(message: discord.Message, user_id: int) -> None:
+    chat_id = message.channel.id
+    if message.guild and not message.author.guild_permissions.administrator:
+        await message.reply("только админы могут менять конфиг")
+        return
+    cfg = get_user_config("ds", chat_id, user_id)
+    lang = cfg.get("language", "ru")
+    series = "✅" if cfg["series_reminder_enabled"] else "❌"
+    stickers = "✅" if cfg["stickers_enabled"] else "❌"
+    sep = "✅" if cfg.get("separate_enabled", True) else "❌"
+    stream = "✅" if cfg.get("streaming_enabled") else "❌"
+    prompt = cfg["custom_prompt"] or "стандартный"
+    model_str = model_display_name(cfg.get("model"))
+    embed = discord.Embed(title="⚙️ Настройки (для тебя)", color=0x10b981)
+    embed.add_field(name="🎬 Серия", value=series, inline=True)
+    embed.add_field(name="🎨 Стикеры", value=stickers, inline=True)
+    embed.add_field(name="💬 Разбивка", value=sep, inline=True)
+    embed.add_field(name="📡 Стриминг", value=stream, inline=True)
+    embed.add_field(name="🧠 Модель", value=model_str, inline=False)
+    embed.add_field(name="🎛 Температура", value=str(cfg.get("temperature", 0.9)), inline=True)
+    embed.add_field(name="📝 Промпт", value=prompt[:1000], inline=False)
+    embed.add_field(
+        name="Что можно менять",
+        value=(
+            "`кульш конфиг серия вкл|выкл`\n"
+            "`кульш конфиг стикеры вкл|выкл`\n"
+            "`кульш конфиг разбивка вкл|выкл`\n"
+            "`кульш конфиг стриминг вкл|выкл`\n"
+            "`кульш конфиг температура 0.9`\n"
+            "`кульш конфиг промпт <текст | сброс>`\n"
+            "`кульш конфиг модель` — список\n"
+            "`кульш конфиг модель <номер | авто>`"
+        ),
+        inline=False,
+    )
+    await message.reply(embed=embed)
+
+async def ds_handle_config_param(message: discord.Message, user_id: int, parts: list[str]) -> None:
+    chat_id = message.channel.id
+    cfg = get_user_config("ds", chat_id, user_id)
+    if len(parts) < 3:
+        await ds_handle_config(message, user_id); return
+    param = parts[2].lower()
+    val = parts[3].lower() if len(parts) >= 4 else ""
+
+    if param == "серия":
+        cfg["series_reminder_enabled"] = val in ("вкл", "on", "1")
+        await message.reply("🎬 Авто-серия: " + ("вкл" if cfg["series_reminder_enabled"] else "выкл"))
+    elif param == "стикеры":
+        cfg["stickers_enabled"] = val in ("вкл", "on", "1")
+        await message.reply("🎨 Стикеры: " + ("вкл" if cfg["stickers_enabled"] else "выкл"))
+    elif param == "разбивка":
+        cfg["separate_enabled"] = val in ("вкл", "on", "1")
+        await message.reply("💬 Разбивка: " + ("вкл" if cfg["separate_enabled"] else "выкл"))
+    elif param == "стриминг":
+        cfg["streaming_enabled"] = val in ("вкл", "on", "1")
+        await message.reply("📡 Стриминг: " + ("вкл" if cfg["streaming_enabled"] else "выкл"))
+    elif param == "температура":
+        try:
+            t = max(0.0, min(2.0, float(val)))
+            cfg["temperature"] = t
+            await message.reply(f"🎛 Температура: {t}")
+        except ValueError:
+            await message.reply("введите число 0.0-2.0")
+    elif param == "промпт":
+        new_prompt = " ".join(parts[3:]).strip()
+        if new_prompt.lower() in ("сброс", "убрать", "стандарт"):
+            cfg["custom_prompt"] = None
+            await message.reply("📝 Промпт сброшен")
+        elif new_prompt:
+            cfg["custom_prompt"] = new_prompt
+            await message.reply("📝 Промпт установлен")
+        else:
+            await message.reply("Введите текст или 'сброс'")
+    elif param == "модель":
+        if not val:
+            lines = [f"`{i}` — {MODEL_DISPLAY.get(m, m)}" for i, m in enumerate(MODEL_LIST)]
+            cur = model_display_name(cfg.get("model"))
+            await message.reply(f"🧠 Текущая: {cur}\n\n" + "\n".join(lines))
+        elif val in ("авто", "auto"):
+            cfg["model"] = None
+            await message.reply("🧠 Модель: авто")
+        else:
+            try:
+                idx = int(val)
+                if 0 <= idx < len(MODEL_LIST):
+                    cfg["model"] = MODEL_LIST[idx]
+                    await message.reply(f"🧠 Модель: {MODEL_DISPLAY.get(MODEL_LIST[idx], MODEL_LIST[idx])}")
+                else:
+                    await message.reply("❌ Неверный номер")
+            except ValueError:
+                await message.reply("❌ Введите номер или 'авто'.")
+
+async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: int, answer_raw: str) -> None:
+    cfg = get_user_config("ds", chat_id, user_id)
+    separate_enabled = cfg.get("separate_enabled", True)
+    clean_segments, markers = process_ai_response(answer_raw, separate_enabled=separate_enabled)
+    extra_segments: list[str] = []
+    if "sticker" in markers or "gif" in markers:
+        markers = [m for m in markers if m not in ("sticker", "gif")]
+    all_segments = clean_segments + extra_segments
+
+    if not all_segments:
+        return
+    for i, seg in enumerate(all_segments):
+        try:
+            await typing_with_delay_ds(message.channel, seg)
+        except Exception:
+            pass
         if i == 0:
             try:
                 await message.reply(seg)
@@ -2771,92 +3064,28 @@ async def send_ds_ai_response(message: discord.Message, chat_id: str, answer_raw
                 await message.channel.send(seg)
         else:
             await message.channel.send(seg)
-        add_bot_memory(chat_id, seg)
+        add_bot_memory(f"ds_{chat_id}", seg)
 
     for m in markers:
-        try:
-            await execute_utility_ds(message, m, chat_id)
-        except Exception as e:
-            logger.warning(f"ds utility {m} failed: {e}")
-
-async def maybe_reply_to_old_message_ds(message: discord.Message, chat_id: str) -> None:
-    now = time.time()
-    if now - last_old_reply.get(chat_id, 0) < 600:
-        return
-    if random.random() > 0.12:
-        return
-    mem = list(get_chat_memory(chat_id))
-    candidates = [e for e in mem[:-2] if e.get("type") == "user" and e.get("text") and e.get("message_id")]
-    if not candidates:
-        return
-    old = random.choice(candidates)
-    try:
-        comment = await ask_ai_async(
-            prompt=(
-                f"Ты видишь в истории чата старое сообщение от {old.get('display','?')}: "
-                f"\"{old.get('text','')}\". Хочешь коротко прокомментировать или пошутить? "
-                f"Если да — напиши ОДНО короткое сообщение в стиле Кульша. Если нет — ответь ровно 'НЕТ'."
-            ),
-            system_instruction_override="Ты Кульш. Отвечай одним коротким сообщением или 'НЕТ'. Без markdown.",
-            messages=None,
-            chat_id=chat_id
-        )
-        if comment and comment.strip() and comment.strip().upper() != "НЕТ":
-            last_old_reply[chat_id] = now
-            segments, markers = process_ai_response(comment)
-            old_msg_id = old.get("message_id")
-            sent_any = False
-            for i, seg in enumerate(segments):
-                try:
-                    await typing_with_delay_ds(message.channel, seg)
-                except Exception:
-                    pass
-                if i == 0 and old_msg_id:
-                    try:
-                        old_msg = await message.channel.fetch_message(int(old_msg_id))
-                        await old_msg.reply(seg)
-                    except Exception as e:
-                        logger.warning(f"DS old reply fetch failed (id={old_msg_id}): {e}")
-                        await message.channel.send(seg)
-                else:
-                    await message.channel.send(seg)
-                add_bot_memory(chat_id, seg)
-                sent_any = True
-            for m in markers:
-                if m in ("sticker", "gif"):
-                    try:
-                        await execute_utility_ds(message, m, chat_id)
-                        sent_any = True
-                    except Exception as e:
-                        logger.warning(f"ds old-reply utility {m} failed: {e}")
-            if not sent_any:
-                return
-    except Exception as e:
-        logger.warning(f"old reply ds fail: {e}")
+        if m in ("sticker", "gif"):
+            try:
+                gif_url = random.choice(GIF_POOL)
+                embed = discord.Embed().set_image(url=gif_url)
+                await message.reply(embed=embed)
+            except Exception as e:
+                logger.error(f"gif error: {e}")
 
 @ds_bot.event
 async def on_message(message: discord.Message) -> None:
-    if message.author == ds_bot.user:
+    if message.author == ds_bot.user or message.author.bot:
         return
-    if message.author.bot:
-        return
-
     is_dm = message.guild is None
-    if is_dm:
-        chat_id = f"ds_dm_{message.author.id}"
-    else:
-        chat_id = f"ds_guild_{message.guild.id}"
-
+    chat_id = message.author.id if is_dm else message.guild.id
+    user_id = message.author.id
     content_lower = message.content.lower()
 
     display_name = getattr(message.author, "display_name", message.author.name)
     username = message.author.name
-    user_id = message.author.id
-
-    is_reply_to_bot = False
-    if message.reference and message.reference.resolved and isinstance(message.reference.resolved, discord.Message):
-        if message.reference.resolved.author == ds_bot.user:
-            is_reply_to_bot = True
 
     if not is_dm and content_lower.startswith("кульш обновись"):
         if message.author.id not in AUTHORIZED_UPDATERS:
@@ -2864,7 +3093,8 @@ async def on_message(message: discord.Message) -> None:
         await message.reply("ща попробую обновиться...")
         try:
             repo_path = os.getenv('REPO_PATH', os.getcwd())
-            result = subprocess.run(["git","pull","origin","main"], cwd=repo_path, capture_output=True, text=True, timeout=30)
+            result = subprocess.run(["git", "pull", "origin", "main"], cwd=repo_path,
+                                    capture_output=True, text=True, timeout=30)
             output = result.stdout + result.stderr
             if "Already up to date" in result.stdout:
                 await message.reply(f"я и так свежий:\n```\n{output}\n```")
@@ -2875,8 +3105,13 @@ async def on_message(message: discord.Message) -> None:
             await message.reply(f"ошибка обновления:\n```\n{e}\n```")
         return
 
-    if content_lower.startswith("кульш конфиг"):
-        await ds_handle_config(message, chat_id, message.content.split()); return
+    if content_lower.startswith("кульш конфиг") or content_lower.startswith("кульш настройки"):
+        parts = message.content.split()
+        if len(parts) == 2:
+            await ds_handle_config(message, user_id)
+        else:
+            await ds_handle_config_param(message, user_id, parts)
+        return
 
     if content_lower.startswith("кульш донаты"):
         top = get_top_donators()
@@ -2888,36 +3123,25 @@ async def on_message(message: discord.Message) -> None:
         await message.reply(embed=embed); return
 
     if content_lower.startswith("кульш аватарк") or content_lower.startswith("кульш аватар"):
-        await ds_handle_avatar(message, chat_id); return
+        raw = await get_avatar_description_ds(message, chat_id, user_id)
+        if not raw:
+            await message.reply("не смог получить аватарку"); return
+        for seg in clean_extra_text(raw):
+            try: await message.channel.send(seg)
+            except Exception as e: logger.warning(f"DS avatar segments: {e}")
+        return
 
     if content_lower.startswith("кульш вспомни медиа") or "!recall_media" in content_lower:
-        await ds_handle_recall_media(message, chat_id, message.content.split()); return
-
-    if not is_dm and "кульш серия" in content_lower:
-        async with message.channel.typing():
-            try:
-                prompt = "Попроси пользователя @1364588699589021890 отправить Фолзу сообщение в TikTok чтобы продлить серию. Одно короткое сообщение в стиле Кульша."
-                answer = await ask_ai_async(prompt=prompt, context_type="default", chat_id=chat_id)
-                segments, markers = process_ai_response(answer)
-                target_channel = cast(discord.TextChannel, ds_bot.get_channel(DS_SERIES_CHANNEL_ID))
-                if target_channel:
-                    if segments:
-                        await target_channel.send(f"<@{DS_SERIES_TARGET_USER_ID}> {segments[0]}")
-                        for seg in segments[1:]:
-                            await target_channel.send(seg)
-                    for m in markers:
-                        if m in ("sticker", "gif"):
-                            try:
-                                gif_url = random.choice(GIF_POOL)
-                                embed = discord.Embed().set_image(url=gif_url)
-                                await target_channel.send(embed=embed)
-                            except Exception as e:
-                                logger.warning(f"series utility {m} failed: {e}")
-                    await message.reply("Напоминание отправлено 🍷🗿")
-                else:
-                    await message.reply("Целевой канал не найден.")
-            except Exception as e:
-                await message.reply(f"Ошибка: {e}")
+        n = 3
+        for p in message.content.split():
+            if p.isdigit(): n = min(int(p), 10); break
+        # Простой recall для Discord
+        history = list(chat_media_history.get(f"ds_{chat_id}", []))
+        if not history:
+            await message.reply("не нашёл ничего в памяти"); return
+        last = history[-n:]
+        lines = [f"- {it.get('type','media')} от {it.get('sender','?')}: {(it.get('caption') or '')[:100]}" for it in last]
+        await message.channel.send("Недавние медиа:\n" + "\n".join(lines))
         return
 
     if not is_dm and "кульш логи" in content_lower:
@@ -2965,18 +3189,6 @@ async def on_message(message: discord.Message) -> None:
             await message.reply("не могу зайти.")
         return
 
-    if not is_dm and "кульш скажи в войсе" in content_lower:
-        vc = cast(discord.VoiceChannel, message.guild.voice_client)
-        if vc and vc.is_connected():
-            phrase = content_lower.split("войсе", 1)[-1].strip()
-            if phrase:
-                await say_in_voice(vc, phrase); await message.add_reaction("🗣️")
-            else:
-                await message.reply("че сказать то?")
-        else:
-            await message.reply("я не в войсе")
-        return
-
     if not is_dm and "кульш выйди из войса" in content_lower:
         vc = cast(discord.VoiceChannel, message.guild.voice_client)
         if vc and vc.is_connected():
@@ -2990,12 +3202,14 @@ async def on_message(message: discord.Message) -> None:
         return
 
     if is_looksmaxxing_command(message.content) and len(message.attachments) == 0:
-        add_user_memory(chat_id, "DS", display_name, username, user_id, message.content, message_id=message.id)
-        await message.reply("📸 Пришли фото с командой `кульш psl` (или прикрепи картинку).")
+        add_user_memory(f"ds_{chat_id}", "DS", display_name, username, user_id,
+                        message.content, message_id=message.id)
+        await message.reply("📸 Пришли фото с командой `кульш psl`.")
         return
 
     if is_battle_command(message.content) and len(message.attachments) == 0:
-        add_user_memory(chat_id, "DS", display_name, username, user_id, message.content, message_id=message.id)
+        add_user_memory(f"ds_{chat_id}", "DS", display_name, username, user_id,
+                        message.content, message_id=message.id)
         await message.reply("Для баттла пришлите два фото в одном сообщении.")
         return
 
@@ -3009,25 +3223,30 @@ async def on_message(message: discord.Message) -> None:
             try:
                 p1 = await download_image_bytes(image_attachments[0].url)
                 p2 = await download_image_bytes(image_attachments[1].url)
-                lang = get_user_lang("ds", message.author.id)
+                cfg = get_user_config("ds", chat_id, user_id)
+                lang = cfg.get("language", "ru")
+                theme = cfg.get("theme", "dark")
                 ai_data = await get_battle_data(p1, p2, lang=lang)
                 if "error" in ai_data:
                     await status.edit(content=f"❌ {ai_data['error']}"); return
-                theme = get_user_theme("ds", message.author.id)
                 img = await create_battle_infographic(p1, p2, ai_data, theme=theme, lang=lang)
-                winner_num = ai_data.get("winner", "1")
+                winner_num = str(ai_data.get("winner", "1"))
                 winner_label = "Первое фото" if winner_num == "1" else "Второе фото"
                 report = (
                     f"⚔️ **РЕЗУЛЬТАТ БАТТЛА**\n\n"
                     f"🥇 Победитель: **{winner_label}**\n"
                     f"🔍 {ai_data.get('reason','')}\n\n"
-                    f"📊 Фото 1: PSL {ai_data['photo1'].get('psl','?')} | {ai_data['photo1'].get('tier','?')}\n"
-                    f"📊 Фото 2: PSL {ai_data['photo2'].get('psl','?')} | {ai_data['photo2'].get('tier','?')}"
+                    f"📊 Фото 1: PSL {ai_data.get('photo1',{}).get('psl','?')} | "
+                    f"{ai_data.get('photo1',{}).get('tier','?')}\n"
+                    f"📊 Фото 2: PSL {ai_data.get('photo2',{}).get('psl','?')} | "
+                    f"{ai_data.get('photo2',{}).get('tier','?')}"
                 )
-                await message.reply(file=discord.File(fp=img, filename="battle.png"), content=report[:1900])
+                await message.reply(file=discord.File(fp=img, filename="battle.png"),
+                                    content=report[:1900])
                 await status.delete()
-                add_user_memory(chat_id, "DS", display_name, username, user_id, "[battle]", message_id=message.id)
-                add_bot_memory(chat_id, "[battle результат]")
+                add_user_memory(f"ds_{chat_id}", "DS", display_name, username, user_id,
+                                "[battle]", message_id=message.id)
+                add_bot_memory(f"ds_{chat_id}", "[battle результат]")
             except Exception as e:
                 logger.error(f"DS battle error: {e}")
                 await status.edit(content=f"Ошибка: {e}")
@@ -3039,11 +3258,12 @@ async def on_message(message: discord.Message) -> None:
             try:
                 img_bytes = await download_image_bytes(image_attachments[0].url)
                 include_advice = "совет" in content_lower or "advice" in content_lower
-                lang = get_user_lang("ds", message.author.id)
+                cfg = get_user_config("ds", chat_id, user_id)
+                lang = cfg.get("language", "ru")
+                theme = cfg.get("theme", "dark")
                 ai_data = await get_looksmaxxing_data(img_bytes, include_advice, lang=lang)
                 if "error" in ai_data:
                     await message.reply(f"❌ {ai_data['error']}"); return
-                theme = get_user_theme("ds", message.author.id)
                 infographic = await create_infographic(img_bytes, ai_data, theme=theme, lang=lang)
                 report = (
                     f"📊 **LOOKSMAXXING**\n"
@@ -3056,45 +3276,48 @@ async def on_message(message: discord.Message) -> None:
                 report += f"\n📝 {ai_data.get('summary','')}"
                 if include_advice and ai_data.get("advice"):
                     report += f"\n\n⚡ {ai_data['advice']}"
-                await message.reply(file=discord.File(fp=infographic, filename="psl.png"), content=report[:1900])
+                await message.reply(file=discord.File(fp=infographic, filename="psl.png"),
+                                    content=report[:1900])
                 if len(report) > 1900:
                     await message.channel.send(report[1900:])
-                add_user_memory(chat_id, "DS", display_name, username, user_id, f"[looksmaxxing] {message.content}", message_id=message.id)
-                add_bot_memory(chat_id, "[looksmaxxing report]")
             except Exception as e:
                 logger.error(f"DS looksmaxxing error: {e}")
                 await message.reply(f"Ошибка: {e}")
         return
 
     for att in image_attachments:
-        add_media_history(chat_id, att.url, "photo", display_name, caption=message.content[:200])
+        add_media_history(f"ds_{chat_id}", att.url, "photo", display_name, caption=message.content[:200])
     for att in video_attachments:
-        add_media_history(chat_id, att.url, "video", display_name, caption=message.content[:200])
+        add_media_history(f"ds_{chat_id}", att.url, "video", display_name, caption=message.content[:200])
+
+    is_reply_to_bot = False
+    if message.reference and message.reference.resolved and isinstance(message.reference.resolved, discord.Message):
+        if message.reference.resolved.author == ds_bot.user:
+            is_reply_to_bot = True
 
     addressed = bool(is_reply_to_bot or re.search(r'(?i)\bкульш\b', message.content) or is_dm)
+
     if (image_attachments or video_attachments) and addressed:
         async with message.channel.typing():
             try:
-                img_bytes = None
-                img_mime = "image/jpeg"
+                img_bytes = None; img_mime = "image/jpeg"
                 if image_attachments:
                     img_bytes = await download_image_bytes(image_attachments[0].url)
                     img_mime = image_attachments[0].content_type or "image/jpeg"
                 elif video_attachments:
-                    vid_bytes = await download_image_bytes(video_attachments[0].url)
-                    frame = await extract_video_frame(vid_bytes, ".mp4")
-                    if frame:
-                        img_bytes = frame; img_mime = "image/jpeg"
+                    vid = await download_image_bytes(video_attachments[0].url)
+                    frame = await extract_video_frame(vid, ".mp4")
+                    if frame: img_bytes = frame
                 prompt = message.content.strip() or "че на этом?"
-                add_user_memory(chat_id, "DS", display_name, username, user_id, f"{prompt} [с медиа]", ["photo" if image_attachments else "video"], message_id=message.id)
-                messages = memory_to_messages(get_chat_memory(chat_id))
-                answer = await ask_ai_async(messages=messages, image_bytes=img_bytes, image_mime=img_mime, chat_id=chat_id)
-                if message.guild and message.guild.voice_client and message.guild.voice_client.is_connected():
-                    clean_for_voice, _ = extract_utility_markers(answer)
-                    if clean_for_voice:
-                        await say_in_voice(message.guild.voice_client, clean_for_voice)
-                await send_ds_ai_response(message, chat_id, answer)
-                asyncio.create_task(extract_memory(chat_id, f"{display_name}: [медиа]", answer))
+                add_user_memory(f"ds_{chat_id}", "DS", display_name, username, user_id,
+                                f"{prompt} [с медиа]", ["photo" if image_attachments else "video"],
+                                message_id=message.id)
+                messages = memory_to_messages(get_chat_memory(f"ds_{chat_id}"))
+                answer = await ask_ai_async(messages=messages, image_bytes=img_bytes,
+                                            image_mime=img_mime, chat_id=chat_id,
+                                            user_id=user_id, platform="ds")
+                await send_ds_ai_response(message, chat_id, user_id, answer)
+                asyncio.create_task(extract_memory(f"ds_{chat_id}", f"{display_name}: [медиа]", answer))
             except Exception as e:
                 logger.info(f"DS media error: {e}")
                 await message.reply("не могу глянуть, сломалась")
@@ -3102,38 +3325,154 @@ async def on_message(message: discord.Message) -> None:
 
     if addressed:
         async with message.channel.typing():
-            if wants_photo(message.content):
-                photo_url = await get_random_photo_url()
-                caption = await ask_ai_async(prompt=None, context_type="caption", chat_id=chat_id)
-                add_user_memory(chat_id, "DS", display_name, username, user_id, message.content, message_id=message.id)
-                add_bot_memory(chat_id, f"[фото: {caption}]")
-                await message.reply(f"{caption}\n{photo_url}")
-                return
-            add_user_memory(chat_id, "DS", display_name, username, user_id, message.content, message_id=message.id)
-            messages = memory_to_messages(get_chat_memory(chat_id))
-            answer = await ask_ai_async(messages=messages, chat_id=chat_id)
-            if message.guild and message.guild.voice_client and message.guild.voice_client.is_connected():
-                clean_for_voice, _ = extract_utility_markers(answer)
-                if clean_for_voice:
-                    await say_in_voice(message.guild.voice_client, clean_for_voice)
-            await send_ds_ai_response(message, chat_id, answer)
-            asyncio.create_task(extract_memory(chat_id, f"{display_name}: {message.content}", answer))
-            asyncio.create_task(maybe_reply_to_old_message_ds(message, chat_id))
+            add_user_memory(f"ds_{chat_id}", "DS", display_name, username, user_id,
+                            message.content, message_id=message.id)
+            messages = memory_to_messages(get_chat_memory(f"ds_{chat_id}"))
+            answer = await ask_ai_async(messages=messages, chat_id=chat_id,
+                                        user_id=user_id, platform="ds")
+            await send_ds_ai_response(message, chat_id, user_id, answer)
+            asyncio.create_task(extract_memory(f"ds_{chat_id}", f"{display_name}: {message.content}", answer))
         return
 
-    add_user_memory(chat_id, "DS", display_name, username, user_id, message.content, message_id=message.id)
-    if await should_random_reply(chat_id):
+    add_user_memory(f"ds_{chat_id}", "DS", display_name, username, user_id,
+                    message.content, message_id=message.id)
+    if await should_random_reply("ds", chat_id, user_id):
         try:
             answer = await ask_ai_async(
                 context_type="observer",
-                messages=memory_to_messages(get_chat_memory(chat_id)),
-                chat_id=chat_id
+                messages=memory_to_messages(get_chat_memory(f"ds_{chat_id}")),
+                chat_id=chat_id, user_id=user_id, platform="ds",
             )
             if answer and answer.strip() and answer.strip().upper() != "НЕТ":
-                last_random_reply[chat_id] = time.time()
-                await send_ds_ai_response(message, chat_id, answer)
+                last_random_reply[f"ds_{chat_id}"] = time.time()
+                await send_ds_ai_response(message, chat_id, user_id, answer)
         except Exception as e:
             logger.warning(f"DS random reply fail: {e}")
+
+# ============================================================
+# DONATION ALERTS
+# ============================================================
+async def send_donation_alert(platform: str, name: str, amount: int, message_text: str = '') -> None:
+    if platform == 'tg':
+        text = f"🍷🗿 {name} задонатил {amount} звёзд! Спасибо!"
+        if message_text:
+            text += f"\nСообщение: {message_text}"
+        try:
+            await send_tg_html(TG_TARGET_CHAT, text)
+        except Exception as e:
+            logger.error(f"Донат в ТГ: {e}")
+    elif platform == 'ds':
+        text = f"💎 {name} задонатил {amount} руб."
+        if message_text:
+            text += f"\n> {message_text}"
+        if DS_DONATION_CHANNEL_ID:
+            channel = ds_bot.get_channel(DS_DONATION_CHANNEL_ID)
+            if channel:
+                try: await channel.send(text)
+                except Exception as e: logger.error(f"Донат в DS: {e}")
+
+async def donation_alerts_listener() -> None:
+    if not DONATIONALERTS_TOKEN:
+        logger.info("🔕 DonationAlerts токен не задан, слушатель не запущен.")
+        return
+    await ds_bot.wait_until_ready()
+    sio = socketio.AsyncClient(query={'token': DONATIONALERTS_TOKEN})
+
+    @sio.event
+    async def connect() -> None:
+        logger.info("🔌 Подключились к DonationAlerts Socket.IO")
+
+    @sio.event
+    async def disconnect() -> None:
+        logger.warning("🔌 Отключились от DonationAlerts")
+
+    @sio.on('donation')
+    async def on_donation(data: dict[str, Any]) -> None:
+        try:
+            amount = float(data.get('amount', 0))
+            currency = data.get('currency', 'RUB')
+            if currency != 'RUB':
+                return
+            points = int(amount)
+            username = data.get('username', 'Аноним')
+            message = data.get('message', '')
+            logger.info(f"💰 DonationAlerts: {username} → {points}")
+            add_donation('ds', 0, points, name=username)
+            await send_donation_alert('ds', username, points, message)
+        except Exception as e:
+            logger.error(f"DonationAlerts error: {e}")
+
+    try:
+        await sio.connect('https://socket.donationalerts.ru:443',
+                          transports=['websocket'], ssl_verify=False)
+        await sio.wait()
+    except Exception as e:
+        logger.error(f"Не подключились к DonationAlerts: {e}")
+
+# ============================================================
+# VOICE
+# ============================================================
+if VOICE_RECOGNITION_ENABLED and VOICE_RECV_AVAILABLE:
+    class RecognitionSink(voice_recv.AudioSink):
+        def __init__(self, bot, guild, text_channel):
+            super().__init__()
+            self.bot = bot; self.guild = guild; self.text_channel = text_channel
+            self.buffers = {}; self.recognizer = sr.Recognizer(); self.processing_tasks = {}
+
+        def wants_opus(self) -> bool:
+            return False
+
+        def write(self, user, data):
+            user_id = user.id if user else "unknown_session"
+            user_name = user.name if user else "Аноним"
+            if user and user.bot:
+                return
+            if user_id not in self.buffers:
+                self.buffers[user_id] = bytearray()
+            self.buffers[user_id].extend(data.pcm)
+            if len(self.buffers[user_id]) > 380000:
+                if user_id in self.processing_tasks:
+                    self.processing_tasks[user_id].cancel()
+                self.processing_tasks[user_id] = asyncio.run_coroutine_threadsafe(
+                    self.wait_and_process(user_id, user_name), self.bot.loop
+                )
+
+        def _sync_recognize(self, pcm_data):
+            try:
+                audio = AudioSegment(data=pcm_data, sample_width=2, frame_rate=48000,
+                                     channels=2).set_channels(1).set_frame_rate(16000)
+                wav_io = BytesIO(); audio.export(wav_io, format="wav"); wav_io.seek(0)
+                with sr.AudioFile(wav_io) as source:
+                    return self.recognizer.recognize_google(self.recognizer.record(source), language="ru-RU")
+            except sr.UnknownValueError:
+                return None
+            except Exception as e:
+                logger.error(f"Ошибка распознавания: {e}")
+                return None
+
+        async def wait_and_process(self, user_id, user_name):
+            try:
+                await asyncio.sleep(1.5)
+                if user_id in self.buffers:
+                    pcm_data = bytes(self.buffers.pop(user_id))
+                    text = await asyncio.to_thread(self._sync_recognize, pcm_data)
+                    if text and random.random() <= 0.65:
+                        logger.info(f"Распознано: {text}")
+            except asyncio.CancelledError:
+                pass
+
+        def cleanup(self):
+            for task in self.processing_tasks.values():
+                task.cancel()
+            self.buffers.clear()
+else:
+    class RecognitionSink:
+        pass
+
+# ============================================================
+# ИНИЦИАЛИЗАЦИЯ БОТОВ
+# ============================================================
+tg_bot = AsyncTeleBot(TG_TOKEN)
 
 # ============================================================
 # TTS
@@ -3157,44 +3496,36 @@ async def say_in_voice(voice_client, text):
 async def random_post_loop() -> None:
     while True:
         await asyncio.sleep(random.randint(3600, 14400))
-        chat_id = f"tg_{TG_TARGET_CHAT}"
-        config = get_chat_config(chat_id)
-        if not config.get("random_messages_enabled", True):
-            continue
-        memory = get_chat_memory(chat_id)
+        chat_key = f"tg_{TG_TARGET_CHAT}"
+        # Ищем любого пользователя с включёнными random_messages (по умолчанию)
+        memory = get_chat_memory(chat_key)
         try:
             if memory:
                 answer = await ask_ai_async(
-                    prompt="Посмотри на историю чата. Если хочешь что-то добавить или пошутить, напиши одно короткое сообщение. Если нет — ответь ровно 'НЕТ'.",
+                    prompt=("Посмотри на историю чата. Если хочешь что-то добавить или пошутить, напиши одно короткое "
+                            "сообщение. Если нет — ответь ровно 'НЕТ'."),
                     context_type="observer",
                     messages=memory_to_messages(memory),
-                    system_instruction_override=None,
-                    chat_id=chat_id
+                    chat_id=TG_TARGET_CHAT, user_id=0, platform="tg",
                 )
             else:
-                answer = await ask_ai_async(prompt=None, context_type="random", chat_id=chat_id)
-
+                answer = await ask_ai_async(prompt=None, context_type="random",
+                                            chat_id=TG_TARGET_CHAT, user_id=0, platform="tg")
             if not answer or not answer.strip() or answer.strip().upper() == "НЕТ":
                 continue
-
-            segments, markers = process_ai_response(answer)
+            segments, markers = process_ai_response(answer, separate_enabled=True)
             markers = [m for m in markers if m in ("sticker", "gif")]
-
             for seg in segments:
                 await send_tg_html(TG_TARGET_CHAT, seg)
-                add_bot_memory(chat_id, seg)
+                add_bot_memory(chat_key, seg)
             for m in markers:
                 try:
                     if m == "sticker":
-                        sticker = random.choice(STICKER_POOL)
-                        await tg_bot.send_sticker(TG_TARGET_CHAT, sticker)
-                    elif m == "gif":
-                        sticker = random.choice(STICKER_POOL)
-                        await tg_bot.send_sticker(TG_TARGET_CHAT, sticker)
+                        await tg_bot.send_sticker(TG_TARGET_CHAT, random.choice(STICKER_POOL))
                 except Exception as e:
-                    logger.warning(f"random_post utility {m} failed: {e}")
+                    logger.warning(f"random_post utility: {e}")
         except Exception as e:
-            logger.info(f"Ошибка random_post_loop: {e}")
+            logger.info(f"random_post_loop: {e}")
 
 async def series_reminder_loop() -> None:
     await ds_bot.wait_until_ready()
@@ -3203,26 +3534,26 @@ async def series_reminder_loop() -> None:
         logger.error("Канал для напоминаний о серии не найден")
         return
     while True:
-        config = get_chat_config(f"ds_guild_{DS_SERIES_GUILD_ID}")
-        if config.get("series_reminder_enabled", True):
-            try:
-                prompt = "Попроси Антона отправить Фолзу сообщение в TikTok чтобы продлить серию. Одно короткое сообщение в стиле Кульша."
-                answer = await ask_ai_async(prompt=prompt, context_type="default")
-                segments, markers = process_ai_response(answer)
-                markers = [m for m in markers if m in ("sticker", "gif")]
-                if segments:
-                    await channel.send(f"<@{DS_SERIES_TARGET_USER_ID}> {segments[0]}")
-                    for seg in segments[1:]:
-                        await channel.send(seg)
-                for m in markers:
-                    try:
-                        gif_url = random.choice(GIF_POOL)
-                        embed = discord.Embed().set_image(url=gif_url)
-                        await channel.send(embed=embed)
-                    except Exception as e:
-                        logger.warning(f"series utility {m} failed: {e}")
-            except Exception as e:
-                logger.error(f"Ошибка серии: {e}")
+        try:
+            prompt = ("Попроси Антона отправить Фолзу сообщение в TikTok чтобы продлить серию. "
+                      "Одно короткое сообщение в стиле Кульша.")
+            answer = await ask_ai_async(prompt=prompt, context_type="default",
+                                        chat_id=DS_SERIES_CHANNEL_ID, user_id=0, platform="ds")
+            segments, markers = process_ai_response(answer, separate_enabled=True)
+            markers = [m for m in markers if m in ("sticker", "gif")]
+            if segments:
+                await channel.send(f"<@{DS_SERIES_TARGET_USER_ID}> {segments[0]}")
+                for seg in segments[1:]:
+                    await channel.send(seg)
+            for m in markers:
+                try:
+                    gif_url = random.choice(GIF_POOL)
+                    embed = discord.Embed().set_image(url=gif_url)
+                    await channel.send(embed=embed)
+                except Exception as e:
+                    logger.warning(f"series utility: {e}")
+        except Exception as e:
+            logger.error(f"Ошибка серии: {e}")
         await asyncio.sleep(86400)
 
 # ============================================================
