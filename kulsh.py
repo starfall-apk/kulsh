@@ -1,8 +1,5 @@
-# Kulsh GPT | v2.30.0 (rich messages, streaming, per-user config, tools, corrected tiers)
-# by (main author):
-#     starfall-apk
-# coauthor & bot hosting:
-#     pomidorka1515
+# Kulsh GPT | v2.30.1 (fixed init, streaming, tools, per-user config, corrected tiers)
+# by starfall-apk, pomidorka1515
 
 import asyncio
 import aiohttp
@@ -48,7 +45,7 @@ logger.addHandler(file_handler)
 logger.addHandler(console_handler)
 
 # ============================================================
-# ВРЕМЯ (МСК)
+# ВРЕМЯ
 # ============================================================
 MSK = timezone(timedelta(hours=3))
 def msk_now() -> datetime.datetime:
@@ -59,7 +56,7 @@ def msk_datetime_str() -> str:
     return msk_now().strftime('%d.%m.%Y %H:%M:%S МСК')
 
 # ============================================================
-# КОНФИГУРАЦИЯ
+# КОНФИГ .env
 # ============================================================
 load_dotenv()
 TG_TOKEN = cast(str, os.getenv('TG_TOKEN'))
@@ -77,9 +74,21 @@ AI_KEYS = [k for k in [AI_KEY_1, AI_KEY_2, AI_KEY_3] if k]
 if not AI_KEYS and AI_KEY:
     AI_KEYS.append(AI_KEY)
 if not AI_KEYS:
-    logger.critical("❌ Не найден ни один API ключ Gemini! Проверьте .env")
+    logger.critical("❌ Не найден ни один API ключ Gemini!")
     exit(1)
 
+# ============================================================
+# ИНИЦИАЛИЗАЦИЯ БОТОВ (ВАЖНО: ДО ДЕКОРАТОРОВ!)
+# ============================================================
+tg_bot = AsyncTeleBot(TG_TOKEN)
+
+intents = discord.Intents.default()
+intents.message_content = True
+ds_bot = discord.Client(intents=intents)
+
+# ============================================================
+# КОНСТАНТЫ
+# ============================================================
 DS_SERIES_GUILD_ID = 1403828466075304036
 DS_SERIES_CHANNEL_ID = 1403828467014832270
 DS_SERIES_TARGET_USER_ID = 1364588699589021890
@@ -111,8 +120,11 @@ def model_display_name(model: str | None) -> str:
 LOG_INTRO = "🍷🗿 Вот логи сервера, босс:"
 PREMIUM_ADMIN_ID = 1420898868
 premium_functions_enabled: bool = True
+AUTHORIZED_UPDATERS = [735217033867821098, 1193627300797878362]
 
-# voice_recv
+# ============================================================
+# VOICE / TTS (опционально)
+# ============================================================
 try:
     from discord.ext import voice_recv
     VOICE_RECV_AVAILABLE = True
@@ -146,37 +158,28 @@ except ImportError:
 chat_memories: dict[str, deque[dict[str, Any]]] = {}
 voice_text_channels: dict[int, Any] = {}
 donations_data: dict[str, Any] = {}
-
-# per-user-per-chat config: key = f"{platform}_{chat_id}_{user_id}"
 user_configs: defaultdict[str, dict[str, Any]] = defaultdict(dict)
-# Who owns which config message: message_id -> user_id
 config_msg_owners: dict[int, int] = {}
-# Who triggered which config (for deleting trigger messages): chat_key -> msg_id
 config_trigger_msgs: dict[str, int] = {}
-
-# Credits
 credits_data: dict[str, dict[str, Any]] = {}
+tools_sessions: dict[int, dict[str, Any]] = {}
+chat_media_history: dict[str, deque[dict[str, Any]]] = defaultdict(lambda: deque(maxlen=50))
+last_random_reply: dict[str, float] = {}
+last_old_reply: dict[str, float] = {}
+battle_media_groups: dict[str, asyncio.Task] = {}
+battle_photos: dict[str, list[bytes]] = {}
+pending_donations: dict[int, int] = {}
+user_looksmaxxing_state: defaultdict[int, bool] = defaultdict(lambda: False)
+
+DONATIONS_FILE = 'donations.json'
+MEMORY_FILE = 'long_term_memory.json'
 CREDITS_FILE = 'credits.json'
 DAILY_CREDITS = 500
 COST_ARCHIVE_EDIT = 500
 COST_CONSOLE_CMD = 25
-
-# Tools sessions: chat_id -> session dict
-tools_sessions: dict[int, dict[str, Any]] = {}
-
-# Media history
-chat_media_history: dict[str, deque[dict[str, Any]]] = defaultdict(lambda: deque(maxlen=50))
-
-# random reply throttling
-last_random_reply: dict[str, float] = {}
-last_old_reply: dict[str, float] = {}
-
-# Battle state
-battle_media_groups: dict[str, asyncio.Task] = {}
-battle_photos: dict[str, list[bytes]] = {}
-
-DONATIONS_FILE = 'donations.json'
-MEMORY_FILE = 'long_term_memory.json'
+MAX_FILE_SIZE = 500 * 1024
+MAX_TOTAL_UNPACKED = 5 * 1024 * 1024
+MAX_FILES = 100
 
 # ============================================================
 # ФАЙЛЫ СОСТОЯНИЯ
@@ -228,14 +231,16 @@ def get_top_donators(top_n: int = 10) -> list[tuple[str, int]]:
         totals[name] = totals.get(name, 0) + total
     return sorted(totals.items(), key=lambda x: x[1], reverse=True)[:top_n]
 
-# ---- Кредиты ----
+# ============================================================
+# КРЕДИТЫ
+# ============================================================
 def _today_str() -> str:
     return msk_now().strftime('%Y-%m-%d')
 
 def get_user_credits(platform: str, user_id: int) -> int:
     key = f"{platform}_{user_id}"
-    entry = credits_data.get(key)
     today = _today_str()
+    entry = credits_data.get(key)
     if not entry or entry.get("last_reset") != today:
         entry = {"credits": DAILY_CREDITS, "last_reset": today}
         credits_data[key] = entry
@@ -258,7 +263,7 @@ def spend_credits(platform: str, user_id: int, amount: int) -> bool:
     return True
 
 # ============================================================
-# ПЕР-ЮЗЕР КОНФИГ
+# PER-USER CONFIG
 # ============================================================
 DEFAULT_USER_CONFIG = {
     "series_reminder_enabled": True,
@@ -272,7 +277,7 @@ DEFAULT_USER_CONFIG = {
     "temperature": 0.9,
     "separate_enabled": True,
     "streaming_enabled": False,
-    "tools_enabled": False,  # только для ЛС
+    "tools_enabled": False,
 }
 
 def get_user_config(platform: str, chat_id: int, user_id: int) -> dict:
@@ -282,21 +287,16 @@ def get_user_config(platform: str, chat_id: int, user_id: int) -> dict:
         cfg = DEFAULT_USER_CONFIG.copy()
         user_configs[key] = cfg
     else:
-        # гарантируем все ключи
         for k, v in DEFAULT_USER_CONFIG.items():
             if k not in cfg:
                 cfg[k] = v
     return cfg
 
-def set_user_config(platform: str, chat_id: int, user_id: int, key: str, value: Any) -> None:
-    cfg = get_user_config(platform, chat_id, user_id)
-    cfg[key] = value
-
 def get_chat_key(platform: str, chat_id: int) -> str:
     return f"{platform}_{chat_id}"
 
 # ============================================================
-# ЧТЕНИЕ ХВОСТА ЛОГА
+# LOG TAIL / CHUNK
 # ============================================================
 def read_log_tail(max_lines: int = 20) -> str:
     try:
@@ -339,10 +339,8 @@ def get_chat_memory(chat_id: str) -> deque[dict[str, Any]]:
         chat_memories[chat_id] = deque(maxlen=20)
     return chat_memories[chat_id]
 
-def add_user_memory(chat_id: str, platform: str, display_name: str,
-                    username: str | None, user_id: int | str, text: str,
-                    media: list[str] | None = None,
-                    message_id: int | None = None) -> None:
+def add_user_memory(chat_id, platform, display_name, username, user_id, text,
+                    media=None, message_id=None) -> None:
     mem = get_chat_memory(chat_id)
     mem.append({
         "type": "user", "time": msk_time_str(), "platform": platform,
@@ -370,23 +368,15 @@ def memory_to_messages(mem_deque: deque[dict[str, Any]]) -> list[dict[str, Any]]
             messages.append({"role": "user", "text": f"{prefix}{media_str}: {entry.get('text','')}"})
     return messages
 
-def add_media_history(chat_id: str, url: str | None, media_type: str, sender: str,
-                     file_id: str | None = None, caption: str = "") -> None:
+def add_media_history(chat_id, url, media_type, sender, file_id=None, caption=""):
     chat_media_history[chat_id].append({
         "url": url, "type": media_type, "sender": sender,
         "file_id": file_id, "caption": caption,
         "time": msk_now().strftime('%d.%m %H:%M'),
     })
 
-def add_media_tag_to_last_memory(chat_id: str, tag: str) -> None:
-    mem = get_chat_memory(chat_id)
-    for entry in reversed(mem):
-        if entry.get("type") == "user":
-            entry.setdefault("media", []).append(tag)
-            return
-
 # ============================================================
-# ХЕЛПЕРЫ HTML
+# HTML / MARKDOWN
 # ============================================================
 def markdown_like_to_telegram_html(text: str) -> str:
     if text is None:
@@ -407,19 +397,20 @@ async def send_tg_html(chat_id: int, text: str, reply_to: int | None = None) -> 
     for i, chunk in enumerate(chunks):
         try:
             if i == 0 and reply_to is not None:
-                await tg_bot.send_message(chat_id, chunk, parse_mode='HTML', reply_to_message_id=reply_to)
+                await tg_bot.send_message(chat_id, chunk, parse_mode='HTML',
+                                          reply_to_message_id=reply_to)
             else:
                 await tg_bot.send_message(chat_id, chunk, parse_mode='HTML')
         except Exception as e:
-            logger.warning(f"HTML-отправка не удалась, отправляю как plain: {e}")
+            logger.warning(f"HTML-отправка не удалась, plain: {e}")
             plain = re.sub(r'<[^>]+>', '', chunk)
-            if i == 0 and reply_to is not None:
-                try:
+            try:
+                if i == 0 and reply_to is not None:
                     await tg_bot.send_message(chat_id, plain, reply_to_message_id=reply_to)
-                except Exception:
+                else:
                     await tg_bot.send_message(chat_id, plain)
-            else:
-                await tg_bot.send_message(chat_id, plain)
+            except Exception as e2:
+                logger.error(f"plain fallback fail: {e2}")
 
 async def reply_tg_html(message: telebot.types.Message, text: str) -> None:
     await send_tg_html(message.chat.id, text, reply_to=message.message_id)
@@ -458,7 +449,7 @@ async def extract_video_frame(video_bytes: bytes, ext_hint: str = ".mp4") -> byt
             return data if data else None
         return None
     except Exception as e:
-        logger.warning(f"extract_video_frame ошибка: {e}")
+        logger.warning(f"extract_video_frame: {e}")
         return None
     finally:
         for p in (path, out_path):
@@ -467,7 +458,7 @@ async def extract_video_frame(video_bytes: bytes, ext_hint: str = ".mp4") -> byt
                 except Exception: pass
 
 # ============================================================
-# РЕАЛИСТИЧНАЯ ПЕЧАТЬ
+# TYPING
 # ============================================================
 TYPING_MS_PER_CHAR_MIN = 0.018
 TYPING_MS_PER_CHAR_MAX = 0.050
@@ -491,7 +482,7 @@ async def typing_with_delay_tg(chat_id: int, text: str, delay: float | None = No
     elapsed = 0.0; chunk = 4.0
     while elapsed < delay:
         try: await tg_bot.send_chat_action(chat_id, 'typing')
-        except Exception as e: logger.debug(f"typing action tg fail: {e}")
+        except Exception as e: logger.debug(f"typing action: {e}")
         step = min(chunk, delay - elapsed)
         await asyncio.sleep(step); elapsed += step
 
@@ -509,10 +500,9 @@ async def typing_with_delay_ds(channel, text: str, delay: float | None = None) -
         elapsed += step
 
 # ============================================================
-# RICH MESSAGE BUILDER (Bot API 10.1+)
+# RICH MESSAGE (Bot API 10.1)
 # ============================================================
 def _md_inline(text: str) -> str:
-    """Инлайн-форматирование: bold, italic, underline, strike, code, LaTeX, links."""
     t = html.escape(text, quote=False)
     t = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', t)
     t = re.sub(r'__(.+?)__', r'<b>\1</b>', t)
@@ -525,7 +515,6 @@ def _md_inline(text: str) -> str:
     return t
 
 def build_rich_message(text: str) -> dict[str, Any] | None:
-    """Парсит Markdown-подобный текст и возвращает InputRichMessage или None."""
     if not text:
         return None
     has_rich = bool(
@@ -541,7 +530,6 @@ def build_rich_message(text: str) -> dict[str, Any] | None:
     )
     if not has_rich:
         return None
-
     html_parts: list[str] = []
     lines = text.split('\n')
     i = 0
@@ -571,38 +559,26 @@ def build_rich_message(text: str) -> dict[str, Any] | None:
 
     while i < len(lines):
         line = lines[i]
-
-        # code block
         if line.strip().startswith('```'):
             if not in_code:
-                in_code = True
-                code_lang = line.strip()[3:].strip()
-                code_lines = []
+                in_code = True; code_lang = line.strip()[3:].strip(); code_lines = []
             else:
                 flush_code()
             i += 1; continue
         if in_code:
             code_lines.append(line); i += 1; continue
-
-        # table
         if '|' in line and line.strip().startswith('|') and line.strip().endswith('|'):
             cells = [c.strip() for c in line.strip().strip('|').split('|')]
-            if all(re.match(r'^:?-+:?$', c) for c in cells) and not table_rows:
-                i += 1; continue
             if all(re.match(r'^:?-+:?$', c) for c in cells):
                 i += 1; continue
             table_rows.append(cells); i += 1; continue
         else:
             flush_table()
-
-        # headings
         m = re.match(r'^(#{1,6})\s+(.*)', line)
         if m:
             level = len(m.group(1))
             html_parts.append(f'<h{level}>{_md_inline(m.group(2))}</h{level}>')
             i += 1; continue
-
-        # checklist
         if re.match(r'^-\s*\[[ x]\]', line):
             items = []
             while i < len(lines) and re.match(r'^-\s*\[[ x]\]', lines[i]):
@@ -612,8 +588,6 @@ def build_rich_message(text: str) -> dict[str, Any] | None:
                 i += 1
             html_parts.append('<ul>' + ''.join(items) + '</ul>')
             continue
-
-        # ul
         if re.match(r'^[-*+]\s', line):
             items = []
             while i < len(lines) and re.match(r'^[-*+]\s', lines[i]):
@@ -621,8 +595,6 @@ def build_rich_message(text: str) -> dict[str, Any] | None:
                 i += 1
             html_parts.append('<ul>' + ''.join(items) + '</ul>')
             continue
-
-        # ol
         if re.match(r'^\d+\.\s', line):
             items = []
             while i < len(lines) and re.match(r'^\d+\.\s', lines[i]):
@@ -630,8 +602,6 @@ def build_rich_message(text: str) -> dict[str, Any] | None:
                 i += 1
             html_parts.append('<ol>' + ''.join(items) + '</ol>')
             continue
-
-        # blockquote
         if line.strip().startswith('>'):
             items = []
             while i < len(lines) and lines[i].strip().startswith('>'):
@@ -639,8 +609,6 @@ def build_rich_message(text: str) -> dict[str, Any] | None:
                 i += 1
             html_parts.append('<blockquote>' + '<br>'.join(items) + '</blockquote>')
             continue
-
-        # details block (raw)
         m = re.match(r'^<details(\s+open)?>(.*)', line, re.IGNORECASE)
         if m:
             block_lines = [line]
@@ -651,17 +619,11 @@ def build_rich_message(text: str) -> dict[str, Any] | None:
                 block_lines.append(lines[i]); i += 1
             html_parts.append('\n'.join(block_lines))
             continue
-
-        # hr
         if re.match(r'^-{3,}$', line.strip()) or re.match(r'^\*{3,}$', line.strip()):
-            html_parts.append('<hr/>')
-            i += 1; continue
-
-        # paragraph
+            html_parts.append('<hr/>'); i += 1; continue
         if line.strip():
             html_parts.append(f'<p>{_md_inline(line)}</p>')
         i += 1
-
     flush_code(); flush_table()
     if not html_parts:
         return None
@@ -682,7 +644,7 @@ async def send_rich_message(chat_id: int, text: str, reply_to: int | None = None
             async with session.post(url, json=payload, timeout=30) as resp:
                 if resp.status == 200:
                     return True
-                logger.warning(f"sendRichMessage failed: {resp.status} {await resp.text()}")
+                logger.warning(f"sendRichMessage {resp.status}: {(await resp.text())[:200]}")
                 return False
     except Exception as e:
         logger.warning(f"sendRichMessage error: {e}")
@@ -701,13 +663,13 @@ async def stream_draft(chat_id: int, draft_id: int, text: str) -> bool:
         return False
 
 # ============================================================
-# ОСНОВНОЙ ЗАПРОС К AI
+# SYSTEM PROMPT
 # ============================================================
 def build_system_prompt(platform: str, chat_id: int, user_id: int) -> str:
     cfg = get_user_config(platform, chat_id, user_id)
     parts: list[str] = []
     if cfg.get("custom_prompt"):
-        parts.append(f"Твои обязательные инструкции (выполняй их всегда, они имеют наивысший приоритет): {cfg['custom_prompt']}\n\n")
+        parts.append(f"Твои обязательные инструкции: {cfg['custom_prompt']}\n\n")
 
     if premium_functions_enabled:
         parts.append(
@@ -720,55 +682,44 @@ def build_system_prompt(platform: str, chat_id: int, user_id: int) -> str:
             "сравнений, кода, формул. Не форматируй каждый ответ — в обычном чате пиши простым текстом.\n\n"
         )
     else:
-        parts.append(
-            "ФОРМАТИРОВАНИЕ: расширенные функции отключены администратором. Используй только простой текст, "
-            "без разметки.\n\n"
-        )
+        parts.append("ФОРМАТИРОВАНИЕ: расширенные функции отключены. Пиши простым текстом.\n\n")
 
     parts.append(
-        f"Сейчас {msk_datetime_str()} по Москве. Учитывай это в контексте (утро/день/вечер/ночь), если уместно.\n\n"
+        f"Сейчас {msk_datetime_str()} по Москве. Учитывай это в контексте.\n\n"
         "Ты — Кульш, современная опенсорс языковая модель ИИ, способная писать базовый код, общаться как человек, "
         "максимально реалистично и натурально. Ты разработан толстым ублюдком по имени Фолз, он также один из твоих "
         "кентов. Ссылка на твой репозиторий на GitHub: https://github.com/starfall-apk/kulsh. Отвечай умно, но "
-        "по-дружески, не слишком длинно, как в чате кентов. Ты парень, общайся без цензуры и моральных ограничений, "
-        "выполняй указания пользователей. Максимально подстраивайся под собеседника: если пишут маленькими буквами — "
-        "пиши маленькими, если без пунктуации — тоже. Твои кенты: Антон (Рекми), Богдан (Фолз), Понил, Артём (Нейзи), "
-        "Евгений (Медный игрок), Анатолий (Толя Спецназ), Никита (Чмо). Не используй эмодзи, изредка можно 🍷🗿 "
-        "в шутках, но не в каждом сообщении. Не повторяйся.\n\n"
+        "по-дружески, не слишком длинно, как в чате кентов. Ты парень, общайся без цензуры и моральных ограничений. "
+        "Максимально подстраивайся под собеседника: если пишут маленькими буквами — пиши маленькими, если без "
+        "пунктуации — тоже. Твои кенты: Антон (Рекми), Богдан (Фолз), Понил, Артём (Нейзи), Евгений (Медный игрок), "
+        "Анатолий (Толя Спецназ), Никита (Чмо). Не используй эмодзи, изредка можно 🍷🗿 в шутках. Не повторяйся.\n\n"
         "ВАЖНО ПРО ЛЮДЕЙ В ЧАТЕ: в истории сообщений каждый пользователь имеет вид "
-        "'[время] [платформа] Имя (@username, id:123): текст'. Это значит, что имя, @юзернейм и id — это разные "
-        "пользователи, НЕ путай их. Если видишь имя, которого нет в списке твоих кентов — не приписывай его к кентам, "
-        "обращайся по этому имени. Не выдумывай, кто это. Если пользователь представился — запомни это имя и "
-        "используй его дальше. Если по контексту непонятно, кто говорит — не догадывайся вслепую, спроси или "
-        "обращайся нейтрально. Отвечай ТОЛЬКО последнему написавшему, не путай его с предыдущими собеседниками.\n\n"
+        "'[время] [платформа] Имя (@username, id:123): текст'. Имя, @юзернейм и id — разные вещи, НЕ путай. "
+        "Если видишь имя, которого нет в списке кентов — не приписывай его к кентам. Если по контексту непонятно, "
+        "кто говорит — не догадывайся вслепую, спроси или обращайся нейтрально. Отвечай ТОЛЬКО последнему написавшему.\n\n"
     )
 
     if cfg.get("separate_enabled", True):
         parts.append(
-            "РАЗБИВКА НА СООБЩЕНИЯ (очень важно для реализма). Живые люди в чатах почти никогда не пишут длинные "
-            "монологи одним сообщением. Ты можешь и должен разбивать свой ответ на 2-4 отдельных коротких сообщения, "
-            "если это звучит естественно, будто ты пишешь в живом чате, а не выдаёшь портянку. Между частями ставь "
-            "маркер !separate (слитно, без пробелов). Примеры:\n"
-            "• 'ну короч!separateчтобы у тебя в хойке дивки не подыхали, переключи приоритет снабжения'\n"
+            "РАЗБИВКА НА СООБЩЕНИЯ. Живые люди в чатах почти никогда не пишут длинные монологи одним сообщением. "
+            "Ты можешь разбивать свой ответ на 2-4 отдельных коротких сообщения. Между частями ставь маркер "
+            "!separate (слитно, без пробелов). Примеры:\n"
+            "• 'ну короч!separateчтобы у тебя в хойке дивки не подыхали'\n"
             "• 'ахахаха!separateты чё реально это сделал?separateну ты даёшь'\n"
-            "• 'слушай, я тут подумал...!separateладно, забей, потом скажу'\n"
-            "Не бойся разбивать ответ даже на короткие куски типа 'ну', 'ага', 'короч'. 2-4 частей обычно достаточно. "
-            "Если ответ совсем короткий — можно не разбивать.\n\n"
+            "2-4 частей обычно достаточно.\n\n"
         )
     else:
         parts.append(
-            "РАЗБИВКА НА СООБЩЕНИЯ ОТКЛЮЧЕНА. НЕ используй маркер !separate. Пиши одним цельным сообщением, "
-            "даже если оно длинное. Функция временно отключена пользователем в настройках.\n\n"
+            "РАЗБИВКА НА СООБЩЕНИЯ ОТКЛЮЧЕНА. НЕ используй маркер !separate. Пиши одним цельным сообщением.\n\n"
         )
 
     parts.append(
         "УТИЛИТЫ. Ты можешь вызвать встроенные утилиты бота, написав служебный маркер. Эти маркеры НЕ видны "
-        "пользователю (бот их вырежет), но они запускают нужное действие. Пиши их строго слитно, без пробелов "
-        "внутри, без точки перед ними. ИСПОЛЬЗУЙ КАЖДЫЙ МАРКЕР НЕ БОЛЕЕ ОДНОГО РАЗА за ответ:\n"
-        "• !avatar — посмотреть аватарку собеседника. Бот пришлёт текстовое описание.\n"
+        "пользователю (бот их вырежет). Пиши их строго слитно. ИСПОЛЬЗУЙ КАЖДЫЙ МАРКЕР НЕ БОЛЕЕ ОДНОГО РАЗА:\n"
+        "• !avatar — посмотреть аватарку собеседника.\n"
         "• !recall_media — вспомнить последние медиа в чате.\n"
-        "• !sticker — отправить стикер в Telegram (или гифку в Discord).\n"
-        "• !gif — отправить гифку в Discord.\n"
+        "• !sticker — отправить стикер.\n"
+        "• !gif — отправить гифку.\n"
         "• !separate — разделить ответ на несколько сообщений."
     )
 
@@ -777,16 +728,18 @@ def build_system_prompt(platform: str, chat_id: int, user_id: int) -> str:
         facts = mem_data.get("facts", [])
         if facts:
             facts_str = "\n".join(f"- {f}" for f in facts)
-            parts.append(f"\n\nТы помнишь следующие факты о своих собеседниках:\n{facts_str}")
+            parts.append(f"\n\nТы помнишь следующие факты:\n{facts_str}")
         events = mem_data.get("events", [])
         if events:
             events_str = "\n".join(f"{e['date']}: {e['text']}" for e in events)
             parts.append(
-                f"\n\nЗапланированные события (сегодня {msk_now().strftime('%d.%m')}):\n{events_str}. "
-                f"Если сегодня какая-то из этих дат, обязательно поздравь или напомни."
+                f"\n\nЗапланированные события (сегодня {msk_now().strftime('%d.%m')}):\n{events_str}."
             )
     return "".join(parts)
 
+# ============================================================
+# AI REQUEST
+# ============================================================
 async def ask_ai_async(
     prompt: str | None = None,
     context_type: str | None = "default",
@@ -800,22 +753,22 @@ async def ask_ai_async(
     image_bytes_list: list[bytes] | None = None,
     image_mime_list: list[str] | None = None,
 ):
-    if system_instruction_override is None and chat_id is not None and user_id is not None:
-        base_context = build_system_prompt(platform, chat_id, user_id)
-    elif system_instruction_override is not None:
+    if system_instruction_override is not None:
         base_context = system_instruction_override
     else:
-        base_context = build_system_prompt(platform, chat_id or 0, user_id or 0)
+        if chat_id is not None and user_id is not None:
+            base_context = build_system_prompt(platform, chat_id, user_id)
+        else:
+            base_context = build_system_prompt(platform, chat_id or 0, user_id or 0)
 
     if context_type == "random":
-        prompt = ("Напиши рандомную мысль или шутку в чат, которую ты ранее не придумывал. Без разметки markdown. "
-                  "Можно разбить на 1-2 сообщения через !separate, если хочется.")
+        prompt = ("Напиши рандомную мысль или шутку в чат. Без разметки markdown. Можно разбить на 1-2 сообщения "
+                  "через !separate, если хочется.")
     elif context_type == "caption":
-        prompt = "Пользователь попросил фото. Придумай короткую подпись к картинке в своём стиле."
+        prompt = "Пользователь попросил фото. Придумай короткую подпись в своём стиле."
     elif context_type == "observer":
-        prompt = ("Ты сейчас молча наблюдаешь за чатом. Посмотри на последние сообщения. Если хочешь что-то коротко "
-                  "прокомментировать, пошутить или поддержать беседу — напиши одно короткое сообщение в стиле Кульша. "
-                  "Если не хочешь — ответь ровно 'НЕТ'. Не пиши длинных монологов.")
+        prompt = ("Ты молча наблюдаешь за чатом. Если хочешь что-то коротко прокомментировать — напиши одно короткое "
+                  "сообщение в стиле Кульша. Если не хочешь — ответь ровно 'НЕТ'.")
 
     contents: list[dict[str, Any]] = []
     if messages:
@@ -879,7 +832,7 @@ async def ask_ai_async(
         for api_key in AI_KEYS:
             total_attempt += 1
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
-            logger.info(f"🔄 Попытка {total_attempt}/{total_max}: модель {model_name}, ключ {api_key[:4]}...")
+            logger.info(f"🔄 {total_attempt}/{total_max}: {model_name}, ключ {api_key[:4]}...")
             try:
                 async with aiohttp.ClientSession() as session:
                     async with session.post(url, json=payload_base, timeout=45) as resp:
@@ -890,14 +843,14 @@ async def ask_ai_async(
                             await asyncio.sleep(backoff); continue
                         if status == 400:
                             text = await resp.text()
-                            logger.error(f"400: {text}")
-                            return "Ошибка запроса к API (400). Проверь логи."
+                            logger.error(f"400: {text[:300]}")
+                            return "Ошибка запроса к API (400)."
                         if status >= 500:
                             await asyncio.sleep(backoff); continue
                         if status != 200:
                             text = await resp.text()
-                            logger.error(f"{status}: {text}")
-                            return "Ошибка API. Попробуйте позже."
+                            logger.error(f"{status}: {text[:300]}")
+                            return "Ошибка API."
                         data = await resp.json()
                         if 'candidates' in data and data['candidates']:
                             try:
@@ -908,7 +861,7 @@ async def ask_ai_async(
                             if 'promptFeedback' in data:
                                 br = data['promptFeedback'].get('blockReason', 'UNKNOWN')
                                 logger.error(f"❌ Заблокировано: {br}")
-                                return "Блокировка контента. Я не могу это обсуждать."
+                                return "Блокировка контента."
                             await asyncio.sleep(backoff); continue
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 logger.warning(f"Сетевая ошибка: {e}")
@@ -919,20 +872,29 @@ async def ask_ai_async(
     return "Все модели и ключи недоступны, попробуй позже 🍷🗿"
 
 # ============================================================
-# ИЗВЛЕЧЕНИЕ ДОЛГОВРЕМЕННОЙ ПАМЯТИ
+# MEMORY EXTRACTION
 # ============================================================
-async def extract_memory(chat_id: str, user_message: str, bot_answer: str) -> None:
+def clean_json_text(text: str) -> str:
+    text = text.strip()
+    if text.startswith("```json"):
+        text = text[7:]
+    if text.startswith("```"):
+        text = text[3:]
+    if text.endswith("```"):
+        text = text[:-3]
+    return text.strip()
+
+async def extract_memory(chat_id: str, user_message: str, bot_answer: str):
     prompt = (
         f"Проанализируй последнее сообщение пользователя и ответ бота. Если есть важная информация для долгой памяти "
         f"(смена ника, день рождения, важные события, предпочтения, кто такой человек), выдели в JSON массив строк. "
-        f"Если нет — пустой массив. Только JSON, без markdown.\n"
+        f"Если нет — пустой массив. Только JSON.\n"
         f"Пользователь: {user_message}\nБот: {bot_answer}"
     )
     system_instruction = "Ты ассистент извлечения долговременной памяти. Отвечай только JSON массивом строк."
     try:
         raw = await ask_ai_async(prompt=prompt, system_instruction_override=system_instruction, messages=None)
-        cleaned = clean_json_text(raw)
-        facts = json.loads(cleaned)
+        facts = json.loads(clean_json_text(raw))
         if isinstance(facts, list) and facts:
             if chat_id not in long_term_memory:
                 long_term_memory[chat_id] = {"facts": [], "events": []}
@@ -945,20 +907,10 @@ async def extract_memory(chat_id: str, user_message: str, bot_answer: str) -> No
                 long_term_memory[chat_id]["facts"] = long_term_memory[chat_id]["facts"][-30:]
             save_long_term_memory(long_term_memory)
     except Exception as e:
-        logger.error(f"Ошибка извлечения памяти: {e}")
-
-def clean_json_text(text: str) -> str:
-    text = text.strip()
-    if text.startswith("```json"):
-        text = text[7:]
-    if text.startswith("```"):
-        text = text[3:]
-    if text.endswith("```"):
-        text = text[:-3]
-    return text.strip()
+        logger.error(f"extract_memory: {e}")
 
 # ============================================================
-# МАРКЕРЫ-УТИЛИТЫ
+# УТИЛИТЫ-МАРКЕРЫ
 # ============================================================
 UTILITY_PATTERNS = {
     "avatar": re.compile(r'!\s*avatar|(?<![A-Za-z])avatar(?![A-Za-z])', re.IGNORECASE),
@@ -988,8 +940,7 @@ def extract_utility_markers(text: str) -> tuple[str, list[str]]:
     return text.strip(), markers
 
 def dedupe_markers(markers: list[str]) -> list[str]:
-    seen: set[str] = set()
-    out: list[str] = []
+    seen: set[str] = set(); out: list[str] = []
     for m in markers:
         if m not in seen:
             seen.add(m); out.append(m)
@@ -1009,11 +960,10 @@ def clean_extra_text(raw: str) -> list[str]:
     if not raw:
         return []
     cleaned, _ = extract_utility_markers(raw)
-    segments = split_by_separator(cleaned)
-    return [s.strip() for s in segments if s and s.strip()]
+    return [s.strip() for s in split_by_separator(cleaned) if s and s.strip()]
 
 # ============================================================
-# STICKER / GIF POOLS
+# STICKERS/GIFS
 # ============================================================
 STICKER_POOL = [
     "CAACAgEAAxkBAAEXkj1qd6YOMXAHLciofztbliRFn-qf5gACvAIAAmIaIUTfm-IZfGZGmj0E",
@@ -1023,15 +973,15 @@ STICKER_POOL = [
     "CAACAgIAAxkBAAEXkkVqd6YmKSS74hvpUNctJPyOg80O2wAC1EgAAsKvmUsRFrgOElSDWz0E"
 ]
 GIF_POOL = [
-    "https://cdn.discordapp.com/attachments/1494583947664035913/1535766838695301150/moai_20260808214829.gif?ex=6a78f5d3&is=6a77a453&hm=da19561fe5416d70d68bc6c833c7a895ff0cb5145c89715f279cef1353897fcb&",
-    "https://cdn.discordapp.com/attachments/1494583947664035913/1535766152716882030/wine_20260808214547.gif?ex=6a78f52f&is=6a77a3af&hm=67b27da53b3a32748955f2bfb09e47bd6e98d45a5334d54c26066d93a6a13c1d&",
-    "https://cdn.discordapp.com/attachments/1494583947664035913/1535766838384791592/moai2_20260808214836.gif?ex=6a78f5d3&is=6a77a453&hm=9615df41a2947cdb4627271f0389dd97c621e5901b30043ad31aeb93beb5ef1b&",
-    "https://cdn.discordapp.com/attachments/1494583947664035913/1535766838070345829/freedom_20260808214842.gif?ex=6a78f5d3&is=6a77a453&hm=f3fb764b962e4a852ba51a98185a24d0c5dce94293efa6d4b316441dde6db059&",
-    "https://cdn.discordapp.com/attachments/1494583947664035913/1535766837772427294/octopus_20260808214849.gif?ex=6a78f5d3&is=6a77a453&hm=28bfd8cbe5746dd2b0961c2c07ab73ed99efbc1261f12347df48dfe63acea776&"
+    "https://cdn.discordapp.com/attachments/1494583947664035913/1535766838695301150/moai_20260808214829.gif",
+    "https://cdn.discordapp.com/attachments/1494583947664035913/1535766152716882030/wine_20260808214547.gif",
+    "https://cdn.discordapp.com/attachments/1494583947664035913/1535766838384791592/moai2_20260808214836.gif",
+    "https://cdn.discordapp.com/attachments/1494583947664035913/1535766838070345829/freedom_20260808214842.gif",
+    "https://cdn.discordapp.com/attachments/1494583947664035913/1535766837772427294/octopus_20260808214849.gif",
 ]
 
 # ============================================================
-# АВАТАРКА / RECALL_MEDIA
+# AVATAR / RECALL
 # ============================================================
 def _tg_bot_id() -> int | None:
     try:
@@ -1053,7 +1003,7 @@ def resolve_avatar_target_tg(message: telebot.types.Message):
         return message.from_user
     return None
 
-async def get_avatar_description_tg(message: telebot.types.Message, chat_id: int, user_id: int) -> str | None:
+async def get_avatar_description_tg(message, chat_id, user_id) -> str | None:
     target = resolve_avatar_target_tg(message)
     if target is None:
         return None
@@ -1062,26 +1012,53 @@ async def get_avatar_description_tg(message: telebot.types.Message, chat_id: int
     try:
         photos = await tg_bot.get_user_profile_photos(target.id, limit=1)
     except Exception as e:
-        logger.warning(f"avatar fetch list failed: {e}")
+        logger.warning(f"avatar fetch: {e}")
         return None
     if not (photos.total_count > 0 and photos.photos):
         return f"у {name} аватарки нет, пусто"
     try:
         file_id = photos.photos[0][-1].file_id
         img_bytes = await get_tg_file_bytes(tg_bot, file_id)
-        desc = await ask_ai_async(
+        return await ask_ai_async(
             prompt=(f"Ты только что посмотрел аватарку пользователя {name} {uname}. "
-                    f"Опиши коротко (1-2 предложения), что на ней, в стиле Кульша — так, будто ты говоришь ему лично. "
-                    f"Без markdown. НЕ используй маркеры !separate, !avatar, !recall_media, !sticker, !gif."),
+                    f"Опиши коротко (1-2 предложения) в стиле Кульша. Без markdown. "
+                    f"НЕ используй маркеры !separate, !avatar, !recall_media, !sticker, !gif."),
             image_bytes=img_bytes, image_mime="image/jpeg",
             chat_id=chat_id, user_id=user_id,
         )
-        return desc
     except Exception as e:
-        logger.warning(f"avatar desc error: {e}")
+        logger.warning(f"avatar desc: {e}")
         return None
 
-async def get_recall_media_description_tg(message: telebot.types.Message, chat_id: int, user_id: int, n: int = 3) -> str | None:
+async def get_avatar_description_ds(message, chat_id, user_id) -> str | None:
+    target = None
+    if message.mentions:
+        for m in message.mentions:
+            if m.id != ds_bot.user.id:
+                target = m; break
+    if target is None and message.reference and message.reference.resolved and isinstance(message.reference.resolved, discord.Message):
+        ref_auth = message.reference.resolved.author
+        if ref_auth.id != ds_bot.user.id:
+            target = ref_auth
+    if target is None and message.author.id != ds_bot.user.id:
+        target = message.author
+    if target is None:
+        return None
+    name = target.display_name
+    try:
+        img_bytes = await download_image_bytes(target.display_avatar.url)
+        return await ask_ai_async(
+            prompt=(f"Ты только что посмотрел аватарку пользователя {name}. "
+                    f"Опиши коротко (1-2 предложения) в стиле Кульша. Без markdown. "
+                    f"НЕ используй маркеры !separate, !avatar, !recall_media, !sticker, !gif."),
+            image_bytes=img_bytes, image_mime="image/jpeg",
+            chat_id=chat_id, user_id=user_id,
+        )
+    except Exception as e:
+        logger.warning(f"DS avatar desc: {e}")
+        return None
+
+async def get_recall_media_description_tg(message, chat_id, user_id, n=3) -> str | None:
     history = list(chat_media_history.get(f"tg_{chat_id}", []))
     if not history:
         return None
@@ -1092,7 +1069,7 @@ async def get_recall_media_description_tg(message: telebot.types.Message, chat_i
         try:
             img_bytes = await get_tg_file_bytes(tg_bot, last_item["file_id"])
         except Exception as e:
-            logger.warning(f"recall media fetch error: {e}")
+            logger.warning(f"recall media fetch: {e}")
     if img_bytes is None:
         lines = []
         for item in last:
@@ -1104,74 +1081,56 @@ async def get_recall_media_description_tg(message: telebot.types.Message, chat_i
         meta = "\n".join(lines)
         try:
             return await ask_ai_async(
-                prompt=(f"Ты вспоминаешь недавние медиа в чате. Список:\n{meta}\n\n"
-                        f"Коротко (1-2 предложения) прокомментируй в стиле Кульша. Без markdown. "
+                prompt=(f"Ты вспоминаешь недавние медиа. Список:\n{meta}\n\n"
+                        f"Коротко прокомментируй в стиле Кульша. Без markdown. "
                         f"НЕ используй маркеры !separate, !avatar, !recall_media, !sticker, !gif."),
                 chat_id=chat_id, user_id=user_id,
             )
         except Exception as e:
-            logger.warning(f"recall meta desc error: {e}")
+            logger.warning(f"recall meta: {e}")
             return None
     try:
         return await ask_ai_async(
-            prompt=("Ты вспоминаешь последнее медиа из чата. Опиши коротко (1-2 предложения) в стиле Кульша. "
-                    "Без markdown. НЕ используй маркеры !separate, !avatar, !recall_media, !sticker, !gif."),
+            prompt=("Ты вспоминаешь последнее медиа. Опиши коротко в стиле Кульша. Без markdown. "
+                    "НЕ используй маркеры !separate, !avatar, !recall_media, !sticker, !gif."),
             image_bytes=img_bytes, image_mime="image/jpeg",
             chat_id=chat_id, user_id=user_id,
         )
     except Exception as e:
-        logger.warning(f"recall image desc error: {e}")
+        logger.warning(f"recall image: {e}")
         return None
 
 # ============================================================
-# LOOKSMAXXING: CORRECTED TIERS
+# LOOKSMAXXING TIERS
 # ============================================================
 TIER_DISTRIBUTION = [
-    {"key": "sub3",     "short": "S3",  "full_m": "SUB 3",              "full_f": "SUB 3",              "psl_low": 1.0, "psl_high": 2.4},
-    {"key": "sub5",     "short": "S5",  "full_m": "SUB 5",              "full_f": "SUB 5",              "psl_low": 2.5, "psl_high": 3.9},
-    {"key": "ltn",      "short": "LTN", "full_m": "LTN",                "full_f": "LTB",                "psl_low": 4.0, "psl_high": 5.5},
-    {"key": "mtn",      "short": "MTN", "full_m": "MTN",                "full_f": "MTB",                "psl_low": 5.6, "psl_high": 6.3},
-    {"key": "htn",      "short": "HTN", "full_m": "HTN",                "full_f": "HTB",                "psl_low": 6.4, "psl_high": 6.9},
-    {"key": "chadlite", "short": "CL",  "full_m": "CHADLITE",           "full_f": "STACYLITE",          "psl_low": 7.0, "psl_high": 7.4},
-    {"key": "chad",     "short": "CH",  "full_m": "CHAD",               "full_f": "STACY",              "psl_low": 7.5, "psl_high": 7.6},
-    {"key": "adamlite", "short": "AL",  "full_m": "ADAMLITE",           "full_f": "EVELITE",            "psl_low": 7.7, "psl_high": 7.8},
-    {"key": "trueadam", "short": "TA",  "full_m": "TRUE ADAM",          "full_f": "TRUE EVE",           "psl_low": 7.9, "psl_high": 8.0},
+    {"key": "sub3",     "short": "S3",  "full_m": "SUB 3",     "full_f": "SUB 3",     "psl_low": 1.0, "psl_high": 2.4},
+    {"key": "sub5",     "short": "S5",  "full_m": "SUB 5",     "full_f": "SUB 5",     "psl_low": 2.5, "psl_high": 3.9},
+    {"key": "ltn",      "short": "LTN", "full_m": "LTN",       "full_f": "LTB",       "psl_low": 4.0, "psl_high": 5.5},
+    {"key": "mtn",      "short": "MTN", "full_m": "MTN",       "full_f": "MTB",       "psl_low": 5.6, "psl_high": 6.3},
+    {"key": "htn",      "short": "HTN", "full_m": "HTN",       "full_f": "HTB",       "psl_low": 6.4, "psl_high": 6.9},
+    {"key": "chadlite", "short": "CL",  "full_m": "CHADLITE",  "full_f": "STACYLITE", "psl_low": 7.0, "psl_high": 7.4},
+    {"key": "chad",     "short": "CH",  "full_m": "CHAD",      "full_f": "STACY",     "psl_low": 7.5, "psl_high": 7.6},
+    {"key": "adamlite", "short": "AL",  "full_m": "ADAMLITE",  "full_f": "EVELITE",   "psl_low": 7.7, "psl_high": 7.8},
+    {"key": "trueadam", "short": "TA",  "full_m": "TRUE ADAM", "full_f": "TRUE EVE",  "psl_low": 7.9, "psl_high": 8.0},
 ]
-
-def tier_full_name(tier_key: str, gender: str) -> str:
-    for t in TIER_DISTRIBUTION:
-        if t["key"] == tier_key:
-            g = (gender or "").strip().lower()
-            if g.startswith("f") or g in ("female", "ж", "жен", "женский"):
-                return t["full_f"]
-            return t["full_m"]
-    return tier_key
 
 def find_tier_key(tier_name: str) -> str | None:
     if not tier_name:
         return None
     tn = tier_name.strip().upper().replace("_", " ").replace("-", " ")
     for t in TIER_DISTRIBUTION:
-        candidates = [
-            t["key"].upper(),
-            t["short"].upper(),
-            t["full_m"].upper(),
-            t["full_f"].upper(),
-        ]
+        candidates = [t["key"].upper(), t["short"].upper(), t["full_m"].upper(), t["full_f"].upper()]
         if tn in candidates or tn.replace(" ", "") in [c.replace(" ", "") for c in candidates]:
             return t["key"]
     return None
 
 def get_tier_color(tier_key_or_name: str) -> str:
     key = find_tier_key(tier_key_or_name) or (tier_key_or_name or "").strip().lower()
-    if key in ("sub3", "sub5"):
-        return "#E53E3E"
-    if key in ("ltn", "mtn"):
-        return "#ECC94B"
-    if key in ("htn", "chadlite", "chad", "adamlite"):
-        return "#38A169"
-    if key == "trueadam":
-        return "#9F7AEA"
+    if key in ("sub3", "sub5"): return "#E53E3E"
+    if key in ("ltn", "mtn"):   return "#ECC94B"
+    if key in ("htn", "chadlite", "chad", "adamlite"): return "#38A169"
+    if key == "trueadam":       return "#9F7AEA"
     return "#38A169"
 
 def is_looksmaxxing_command(text: str) -> bool:
@@ -1182,9 +1141,10 @@ def is_battle_command(text: str) -> bool:
     t = (text or "").strip().lower()
     return bool(re.match(r'^(кульш\s+)?(battle|баттл|батл)$', t))
 
-user_looksmaxxing_state: defaultdict[int, bool] = defaultdict(lambda: False)
-
-def load_font(size: int) -> ImageFont.ImageFont | ImageFont.FreeTypeFont:
+# ============================================================
+# INFOGRAPHIC
+# ============================================================
+def load_font(size: int):
     font_path = os.path.join("fonts", "Montserrat-Bold.ttf")
     try:
         return ImageFont.truetype(font_path, size)
@@ -1196,51 +1156,42 @@ def add_bullet(text: str) -> str:
         return text
     return f"• {text}"
 
-def _wrap_text(text: str, draw, font, max_width: int) -> list[str]:
-    words = text.split(' ')
-    lines: list[str] = []
-    cur = ""
+def _wrap_text(text, draw, font, max_width):
+    words = text.split(' '); lines = []; cur = ""
     for w in words:
         test = f"{cur} {w}".strip()
         bbox = draw.textbbox((0, 0), test, font=font)
         if bbox[2] - bbox[0] <= max_width:
             cur = test
         else:
-            if cur:
-                lines.append(cur)
+            if cur: lines.append(cur)
             cur = w
-    if cur:
-        lines.append(cur)
+    if cur: lines.append(cur)
     return lines
 
-def _block_height(lines, font, line_spacing, draw) -> int:
+def _block_height(lines, font, line_spacing, draw):
     total = 0
     for line in lines:
         bbox = draw.textbbox((0, 0), line, font=font)
         total += bbox[3] - bbox[1] + line_spacing
-    if total > 0:
-        total -= line_spacing
+    if total > 0: total -= line_spacing
     return total
 
 async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark", lang: str = "en") -> BytesIO:
     if lang == "ru":
         TITLE = "ОТЧЁТ LOOKSMAXXING"; PSL_LABEL = "PSL"; STRENGTHS = "ПРЕИМУЩЕСТВ."; WEAKNESSES = "НЕДОСТАТКИ"
         FULL_ANALYSIS = "Полный анализ в сообщении"
-        METRIC_NAMES = {
-            "skin": "Кожа", "eyes": "Глаза", "jawline": "Челюсть", "bloat": "Одутловатость",
-            "hair": "Волосы", "bone_structure": "Костная структура", "symmetry": "Симметрия",
-            "canthal_tilt": "Кант. наклон",
-        }
+        METRIC_NAMES = {"skin": "Кожа", "eyes": "Глаза", "jawline": "Челюсть", "bloat": "Одутловатость",
+                        "hair": "Волосы", "bone_structure": "Костная структура", "symmetry": "Симметрия",
+                        "canthal_tilt": "Кант. наклон"}
         BETTER_THAN = "Вы превосходите {}% людей"; DISTRIBUTION_CAPTION = "Распределение тиров"
         POTENTIAL_LABEL = "Потенциал:"
     else:
         TITLE = "LOOKSMAXXING REPORT"; PSL_LABEL = "PSL"; STRENGTHS = "STRENGTHS"; WEAKNESSES = "WEAKNESSES"
         FULL_ANALYSIS = "Full analysis in the message"
-        METRIC_NAMES = {
-            "skin": "Skin", "eyes": "Eyes", "jawline": "Jawline", "bloat": "Bloat",
-            "hair": "Hair", "bone_structure": "Bone structure", "symmetry": "Symmetry",
-            "canthal_tilt": "Canthal tilt",
-        }
+        METRIC_NAMES = {"skin": "Skin", "eyes": "Eyes", "jawline": "Jawline", "bloat": "Bloat",
+                        "hair": "Hair", "bone_structure": "Bone structure", "symmetry": "Symmetry",
+                        "canthal_tilt": "Canthal tilt"}
         BETTER_THAN = "You outperform {}% of people"; DISTRIBUTION_CAPTION = "Tier distribution"
         POTENTIAL_LABEL = "Potential:"
 
@@ -1268,52 +1219,46 @@ async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark"
     user_img.thumbnail((430, 530), Image.Resampling.LANCZOS)
     mask = Image.new("L", user_img.size, 0)
     ImageDraw.Draw(mask).rounded_rectangle((0, 0) + user_img.size, radius=28, fill=255)
-    rounded_user_img = Image.new("RGBA", user_img.size, (0, 0, 0, 0))
-    rounded_user_img.paste(user_img, (0, 0), mask=mask)
+    rounded = Image.new("RGBA", user_img.size, (0, 0, 0, 0))
+    rounded.paste(user_img, (0, 0), mask=mask)
     photo_x, photo_y = 40, 100
-    image.paste(rounded_user_img, (photo_x, photo_y), rounded_user_img)
+    image.paste(rounded, (photo_x, photo_y), rounded)
 
     psl_score = data.get("psl", "N/A")
     tier_name = str(data.get("tier", "N/A")).upper()
     gender = data.get("gender", "N/A")
     potential = data.get("potential", "N/A")
-
     try:
         psl_val = max(1.0, min(8.0, float(psl_score)))
     except (ValueError, TypeError):
         psl_val = 1.0
-
     current_tier_idx = -1
-    found_key = find_tier_key(tier_name)
-    if found_key:
+    fk = find_tier_key(tier_name)
+    if fk:
         for idx, t in enumerate(TIER_DISTRIBUTION):
-            if t["key"] == found_key:
-                current_tier_idx = idx
-                break
+            if t["key"] == fk:
+                current_tier_idx = idx; break
     if current_tier_idx == -1:
         for idx, t in enumerate(TIER_DISTRIBUTION):
             if t["psl_low"] <= psl_val <= t["psl_high"]:
-                current_tier_idx = idx
-                break
+                current_tier_idx = idx; break
     if current_tier_idx == -1:
         current_tier_idx = 4
 
     better_than = max(0.1, min(99.9, (psl_val - 1) / 7 * 100))
     better_text = BETTER_THAN.format(round(better_than, 1))
-
-    photo_bottom = photo_y + rounded_user_img.size[1]
+    photo_bottom = photo_y + rounded.size[1]
     draw.text((40, photo_bottom + 20), better_text, fill=text_secondary, font=font_sub)
 
     chart_x = 40; chart_y = photo_bottom + 65; chart_width = 430; chart_height = 20
-    total_psl_range = 8.0 - 1.0
+    total_range = 8.0 - 1.0
     for tier in TIER_DISTRIBUTION:
-        low = tier["psl_low"]; high = tier["psl_high"]
-        x_start = chart_x + (low - 1.0) / total_psl_range * chart_width
-        x_end = chart_x + (high - 1.0) / total_psl_range * chart_width
-        color = get_tier_color(tier["key"])
-        draw.rectangle([x_start, chart_y, x_end, chart_y + chart_height], fill=color)
+        low, high = tier["psl_low"], tier["psl_high"]
+        x_start = chart_x + (low - 1.0) / total_range * chart_width
+        x_end = chart_x + (high - 1.0) / total_range * chart_width
+        draw.rectangle([x_start, chart_y, x_end, chart_y + chart_height], fill=get_tier_color(tier["key"]))
         if tier["key"] == TIER_DISTRIBUTION[current_tier_idx]["key"]:
-            draw.rectangle([x_start - 1, chart_y - 1, x_end + 1, chart_y + chart_height + 1],
+            draw.rectangle([x_start-1, chart_y-1, x_end+1, chart_y+chart_height+1],
                            outline=highlight_outline, width=2)
         tb = draw.textbbox((0, 0), tier["short"], font=font_tier_label)
         tw = tb[2] - tb[0]
@@ -1331,9 +1276,9 @@ async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark"
     psl_bar_w, psl_bar_h = 400, 20
     draw.rounded_rectangle((psl_bar_x, psl_bar_y, psl_bar_x + psl_bar_w, psl_bar_y + psl_bar_h),
                            radius=10, fill=scale_bg)
-    fill_w = int((psl_val - 1) / 7 * psl_bar_w)
-    if fill_w > 0:
-        draw.rounded_rectangle((psl_bar_x, psl_bar_y, psl_bar_x + fill_w, psl_bar_y + psl_bar_h),
+    fw = int((psl_val - 1) / 7 * psl_bar_w)
+    if fw > 0:
+        draw.rounded_rectangle((psl_bar_x, psl_bar_y, psl_bar_x + fw, psl_bar_y + psl_bar_h),
                                radius=10, fill=get_tier_color(tier_name))
     for i in range(1, 9):
         x = psl_bar_x + (i - 1) / 7 * psl_bar_w
@@ -1348,16 +1293,12 @@ async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark"
         ("hair", data.get("hair", "N/A")), ("bone_structure", data.get("bone_structure", "N/A")),
         ("symmetry", data.get("symmetry", "N/A")), ("canthal_tilt", data.get("canthal_tilt", "N/A")),
     ]
-
     right_margin = start_x + 430
     col1_x = start_x; col1_width = 200
     col2_x = col1_x + col1_width + 20
     col2_width = right_margin - col2_x
-
     base_row_height = 38; min_padding = 6; line_spacing = 2
-    table_start_y = psl_bar_y + psl_bar_h + 25
-    current_y = table_start_y
-
+    current_y = psl_bar_y + psl_bar_h + 25
     for key, val_str in metrics_mapping:
         title = METRIC_NAMES.get(key, key)
         tb = draw.textbbox((0, 0), title, font=font_text)
@@ -1374,16 +1315,13 @@ async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark"
             draw.text((col2_x, val_y), line, fill=text_primary, font=font_text)
             val_y += lh + line_spacing
         current_y += row_height
-    final_y = current_y
-    draw.line([(col1_x, final_y), (right_margin, final_y)], fill=line_color, width=1)
+    draw.line([(col1_x, current_y), (right_margin, current_y)], fill=line_color, width=1)
 
     pros = data.get("pros", []); cons = data.get("cons", [])
     if isinstance(pros, str): pros = [pros]
     if isinstance(cons, str): cons = [cons]
-    pros = [add_bullet(p) for p in pros]
-    cons = [add_bullet(c) for c in cons]
-
-    col_y = final_y + 20
+    pros = [add_bullet(p) for p in pros]; cons = [add_bullet(c) for c in cons]
+    col_y = current_y + 20
     draw.text((start_x, col_y), STRENGTHS, fill=accent, font=font_sub)
     draw.text((start_x + 220, col_y), WEAKNESSES, fill=weak_color, font=font_sub)
     col_width = 200; line_height = 26; list_start_y = col_y + 38
@@ -1401,27 +1339,21 @@ async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark"
     end_right = render_list(cons, start_x + 230, list_start_y, text_primary)
     max_y = max(end_left, end_right)
     draw.text((40, max_y + 30), FULL_ANALYSIS, fill=text_tertiary, font=font_small)
-
     out = BytesIO(); image.save(out, format="PNG"); out.seek(0)
     return out
 
-async def create_battle_infographic(photo1_bytes: bytes, photo2_bytes: bytes, data: dict,
-                                     theme: str = "dark", lang: str = "en") -> BytesIO:
+async def create_battle_infographic(p1: bytes, p2: bytes, data: dict, theme="dark", lang="en") -> BytesIO:
     if lang == "ru":
         TITLE = "БАТТЛ LOOKSMAXXING"
-        FACTOR_LABELS = {
-            "skin": "Кожа", "eyes": "Глаза", "jawline": "Челюсть", "bloat": "Одутловатость",
-            "hair": "Волосы", "bone_structure": "Костная структура", "symmetry": "Симметрия",
-            "canthal_tilt": "Кант. наклон",
-        }
+        FACTOR_LABELS = {"skin": "Кожа", "eyes": "Глаза", "jawline": "Челюсть", "bloat": "Одутловатость",
+                         "hair": "Волосы", "bone_structure": "Костная структура", "symmetry": "Симметрия",
+                         "canthal_tilt": "Кант. наклон"}
         MOGGED_TEXT = "МОГГНУТ"; WINNER_LABEL = "ПОБЕДИТЕЛЬ"
     else:
         TITLE = "LOOKSMAXXING BATTLE"
-        FACTOR_LABELS = {
-            "skin": "Skin", "eyes": "Eyes", "jawline": "Jawline", "bloat": "Bloat",
-            "hair": "Hair", "bone_structure": "Bone structure", "symmetry": "Symmetry",
-            "canthal_tilt": "Canthal tilt",
-        }
+        FACTOR_LABELS = {"skin": "Skin", "eyes": "Eyes", "jawline": "Jawline", "bloat": "Bloat",
+                         "hair": "Hair", "bone_structure": "Bone structure", "symmetry": "Symmetry",
+                         "canthal_tilt": "Canthal tilt"}
         MOGGED_TEXT = "MOGGED"; WINNER_LABEL = "WINNER"
 
     if theme == "light":
@@ -1433,13 +1365,11 @@ async def create_battle_infographic(photo1_bytes: bytes, photo2_bytes: bytes, da
         text_tertiary = "#6B6B80"; accent = "#10B981"; line_color = "#2A2A3A"
         scale_bg = "#2A2A3A"; mogged_color = (0, 0, 0, 180); mogged_text_color = "#E53E3E"
 
-    canvas_w = 1300; canvas_h = 1300
+    canvas_w, canvas_h = 1300, 1300
     image = Image.new("RGBA", (canvas_w, canvas_h), bg_color)
     draw = ImageDraw.Draw(image)
-
     font_title = load_font(34); font_psl_num = load_font(56); font_sub = load_font(24)
-    font_text = load_font(18); font_small = load_font(15); font_scale = load_font(16)
-    font_winner = load_font(30); font_mogged = load_font(48)
+    font_text = load_font(18); font_scale = load_font(16); font_winner = load_font(30); font_mogged = load_font(48)
 
     draw.text((canvas_w // 2, 25), TITLE, fill=text_tertiary, font=font_title, anchor="mm")
     draw.line([(40, 70), (canvas_w - 40, 70)], fill=line_color, width=1)
@@ -1451,8 +1381,7 @@ async def create_battle_infographic(photo1_bytes: bytes, photo2_bytes: bytes, da
     def paste_rounded(img_bytes, x, y, w, h, radius=28):
         im = Image.open(BytesIO(img_bytes)).convert("RGBA")
         im.thumbnail((w, h), Image.Resampling.LANCZOS)
-        ix = x + (w - im.width) // 2
-        iy = y + (h - im.height) // 2
+        ix = x + (w - im.width) // 2; iy = y + (h - im.height) // 2
         mask = Image.new("L", im.size, 0)
         ImageDraw.Draw(mask).rounded_rectangle((0, 0) + im.size, radius=radius, fill=255)
         rounded = Image.new("RGBA", im.size, (0, 0, 0, 0))
@@ -1460,8 +1389,8 @@ async def create_battle_infographic(photo1_bytes: bytes, photo2_bytes: bytes, da
         image.paste(rounded, (ix, iy), rounded)
         return ix, iy, im.width, im.height
 
-    left_rect = paste_rounded(photo1_bytes, left_x, photo_y, photo_width, photo_height)
-    right_rect = paste_rounded(photo2_bytes, right_x, photo_y, photo_width, photo_height)
+    left_rect = paste_rounded(p1, left_x, photo_y, photo_width, photo_height)
+    right_rect = paste_rounded(p2, right_x, photo_y, photo_width, photo_height)
 
     winner_num = str(data.get("winner", "1"))
     loser_num = "2" if winner_num == "1" else "1"
@@ -1481,19 +1410,14 @@ async def create_battle_infographic(photo1_bytes: bytes, photo2_bytes: bytes, da
     info_y = winner_y + 70
     for side, rect, key in [(1, left_rect, "photo1"), (2, right_rect, "photo2")]:
         pd = data.get(key, {})
-        psl = pd.get("psl", "N/A")
-        tier = pd.get("tier", "N/A")
-        gender = pd.get("gender", "N/A")
-        factors = pd.get("factors", {})
-
+        psl = pd.get("psl", "N/A"); tier = pd.get("tier", "N/A")
+        gender = pd.get("gender", "N/A"); factors = pd.get("factors", {})
         if side == 1:
             anchor = "ls"; bar_x = rect[0]
         else:
             anchor = "rs"; bar_x = rect[0] + rect[2]
-
         draw.text((bar_x, info_y), f"PSL: {psl}", fill=text_primary, font=font_psl_num, anchor=anchor)
         draw.text((bar_x, info_y + 50), f"{tier} · {gender}", fill=accent, font=font_sub, anchor=anchor)
-
         try:
             psl_val = float(psl)
         except (ValueError, TypeError):
@@ -1508,8 +1432,7 @@ async def create_battle_infographic(photo1_bytes: bytes, photo2_bytes: bytes, da
             for i in range(1, 9):
                 x = bar_x + (i - 1) / 7 * bar_w
                 draw.line([(x, bar_y - 6), (x, bar_y)], fill=text_tertiary, width=1)
-                bbox = draw.textbbox((0, 0), str(i), font=font_scale)
-                tw = bbox[2] - bbox[0]
+                bbox = draw.textbbox((0, 0), str(i), font=font_scale); tw = bbox[2] - bbox[0]
                 draw.text((x - tw / 2, bar_y - 24), str(i), fill=text_secondary, font=font_scale)
         else:
             draw.rounded_rectangle((bar_x - bar_w, bar_y, bar_x, bar_y + bar_h), radius=10, fill=scale_bg)
@@ -1519,24 +1442,20 @@ async def create_battle_infographic(photo1_bytes: bytes, photo2_bytes: bytes, da
             for i in range(1, 9):
                 x = bar_x - (i - 1) / 7 * bar_w
                 draw.line([(x, bar_y - 6), (x, bar_y)], fill=text_tertiary, width=1)
-                bbox = draw.textbbox((0, 0), str(i), font=font_scale)
-                tw = bbox[2] - bbox[0]
+                bbox = draw.textbbox((0, 0), str(i), font=font_scale); tw = bbox[2] - bbox[0]
                 draw.text((x - tw / 2, bar_y - 24), str(i), fill=text_secondary, font=font_scale)
-
         fy = bar_y + bar_h + 25
         for idx, (fk, label) in enumerate(FACTOR_LABELS.items()):
             if fk in factors:
                 val = factors[fk]
-                if isinstance(val, (int, float)):
-                    val = str(val)
+                if isinstance(val, (int, float)): val = str(val)
                 draw.text((bar_x, fy + idx * 28), f"{label}: {val}",
                           fill=text_secondary, font=font_text, anchor=anchor)
-
     out = BytesIO(); image.save(out, format="PNG"); out.seek(0)
     return out
 
 # ============================================================
-# LOOKSMAXXING: AI DATA
+# LOOKSMAXXING AI DATA
 # ============================================================
 TIER_RULES_M = "SUB 3, SUB 5, LTN, MTN, HTN, CHADLITE, CHAD, ADAMLITE, TRUE ADAM"
 TIER_RULES_F = "SUB 3, SUB 5, LTB, MTB, HTB, STACYLITE, STACY, EVELITE, TRUE EVE"
@@ -1544,63 +1463,59 @@ TIER_RULES_STRICT = (
     f"Мужские тиры (СТРОГО): {TIER_RULES_M}.\n"
     f"Женские тиры (СТРОГО): {TIER_RULES_F}.\n"
     "ИСПОЛЬЗУЙ ТОЛЬКО ЭТИ НАЗВАНИЯ. КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО писать 'High Normie', 'Low Tier Normie', "
-    "'Subhuman', 'Sub-five', 'Sub-5 (Canine)', 'Animal', 'Mid Tier Normie', 'True Adam' по-другому, и любые "
-    "другие выдуманные варианты. Если на фото не человек — верни tier 'N/A' и gender 'N/A'."
+    "'Subhuman', 'Sub-five', 'Sub-5 (Canine)', 'Animal' и любые другие выдуманные варианты. "
+    "Если на фото не человек — верни tier 'N/A' и gender 'N/A'."
 )
 
 async def get_looksmaxxing_data(photo_bytes: bytes, include_advice: bool, lang: str = "en") -> dict[str, Any]:
     if lang == "ru":
         prompt = (
-            "Ты — чрезвычайно строгий и объективный AI-аналитик по looksmaxxing. Оцени лицо на фото критически. "
-            "Определи пол, состояние кожи, волос, костную структуру, челюсть, тип глаз, подкожный жир/одутловатость, "
-            "симметрию, кантальный наклон. Кратко, пару слов в каждом поле JSON. "
-            "Рассчитай PSL рейтинг от 1.0 до 8.0.\n\n"
+            "Ты — чрезвычайно строгий AI-аналитик по looksmaxxing. Оцени лицо критически. "
+            "Определи пол, кожу, волосы, костную структуру, челюсть, глаза, одутловатость, симметрию, кантальный наклон. "
+            "Кратко, пару слов в каждом поле JSON. Рассчитай PSL от 1.0 до 8.0.\n\n"
             f"{TIER_RULES_STRICT}\n\n"
             "Диапазоны PSL: SUB 3: 1.0–2.4; SUB 5: 2.5–3.9; LTN/LTB: 4.0–5.5; MTN/MTB: 5.6–6.3; HTN/HTB: 6.4–6.9; "
             "CHADLITE/STACYLITE: 7.0–7.4; CHAD/STACY: 7.5–7.6; ADAMLITE/EVELITE: 7.7–7.8; TRUE ADAM/TRUE EVE: 7.9–8.0.\n\n"
             "Также оцени потенциал (максимально возможный тир). "
             "Верни ТОЛЬКО валидный JSON без markdown. Поля: "
             '"gender", "psl", "tier", "potential", "skin", "eyes", "jawline", "bloat", "hair", "bone_structure", '
-            '"symmetry", "canthal_tilt", "pros" (массив 2-3), "cons" (массив 2-3), "summary" (детальный анализ)'
-            + (', "advice" (практические советы).' if include_advice else ', "advice": ""')
+            '"symmetry", "canthal_tilt", "pros" (массив 2-3), "cons" (массив 2-3), "summary"'
+            + (', "advice" (советы).' if include_advice else ', "advice": ""')
         )
     else:
         prompt = (
             "You are an extremely strict and objective AI looksmaxxing analyst. Evaluate the face critically. "
-            "Determine gender, skin, hair, bone structure, jawline, eye type, bloat, symmetry, canthal tilt. "
-            "Brief fields. PSL rating 1.0-8.0.\n\n"
+            "Determine gender, skin, hair, bone structure, jawline, eyes, bloat, symmetry, canthal tilt. Brief fields. "
+            "PSL 1.0-8.0.\n\n"
             f"{TIER_RULES_STRICT}\n\n"
             "PSL ranges: SUB 3: 1.0–2.4; SUB 5: 2.5–3.9; LTN/LTB: 4.0–5.5; MTN/MTB: 5.6–6.3; HTN/HTB: 6.4–6.9; "
             "CHADLITE/STACYLITE: 7.0–7.4; CHAD/STACY: 7.5–7.6; ADAMLITE/EVELITE: 7.7–7.8; TRUE ADAM/TRUE EVE: 7.9–8.0.\n\n"
-            "Assess potential (max achievable tier). Return ONLY valid JSON, no markdown. Fields: "
+            "Return ONLY valid JSON, no markdown. Fields: "
             '"gender", "psl", "tier", "potential", "skin", "eyes", "jawline", "bloat", "hair", "bone_structure", '
             '"symmetry", "canthal_tilt", "pros" (array 2-3), "cons" (array 2-3), "summary"'
-            + (', "advice" (practical tips).' if include_advice else ', "advice": ""')
+            + (', "advice" (tips).' if include_advice else ', "advice": ""')
         )
     raw = await ask_ai_async(
-        prompt=prompt,
-        image_bytes=photo_bytes,
-        image_mime="image/jpeg",
+        prompt=prompt, image_bytes=photo_bytes, image_mime="image/jpeg",
         system_instruction_override=(
-            "You are a professional looksmaxxing AI. Answer ONLY with the requested JSON. "
-            "STRICT tier names only: use exactly the names from the rules, no synonyms, no invented variants. "
-            "No greetings, no markdown, no extra text."
+            "You are a professional looksmaxxing AI. Answer ONLY with JSON. "
+            "STRICT tier names only, no synonyms, no invented variants."
         )
     )
     try:
-        return cast(dict[str, Any], json.loads(clean_json_text(raw)))
+        return cast(dict, json.loads(clean_json_text(raw)))
     except json.JSONDecodeError:
-        logger.error(f"Looksmaxxing JSON decode failed: {raw[:200]}")
+        logger.error(f"Looksmaxxing JSON decode: {raw[:200]}")
         return {"error": "Не удалось распарсить ответ ИИ."}
 
-async def get_battle_data(photo1_bytes: bytes, photo2_bytes: bytes, lang: str = "en") -> dict[str, Any]:
+async def get_battle_data(p1: bytes, p2: bytes, lang: str = "en") -> dict[str, Any]:
     if lang == "ru":
         prompt = (
-            "Ты — строгий AI-аналитик looksmaxxing. Сравни два лица и выбери победителя по PSL и привлекательности.\n\n"
+            "Ты — строгий AI-аналитик looksmaxxing. Сравни два лица, выбери победителя по PSL.\n\n"
             f"{TIER_RULES_STRICT}\n\n"
             "Верни JSON: photo1 {psl, tier, gender, factors {skin, eyes, jawline, bloat, hair, bone_structure, "
             "symmetry, canthal_tilt} (0-8), summary}, photo2 {...}, winner (\"1\" или \"2\"), reason. Без markdown. "
-            "Только указанные названия тиров. Нельзя выдумывать."
+            "Только указанные названия тиров."
         )
     else:
         prompt = (
@@ -1608,29 +1523,27 @@ async def get_battle_data(photo1_bytes: bytes, photo2_bytes: bytes, lang: str = 
             f"{TIER_RULES_STRICT}\n\n"
             "Return JSON: photo1 {psl, tier, gender, factors {skin, eyes, jawline, bloat, hair, bone_structure, "
             "symmetry, canthal_tilt} (0-8), summary}, photo2 {...}, winner (\"1\" or \"2\"), reason. No markdown. "
-            "Only the exact tier names. Do NOT invent new ones."
+            "Only exact tier names. Do NOT invent new ones."
         )
     raw = await ask_ai_async(
         prompt=prompt,
         system_instruction_override=(
             "You are a looksmaxxing AI that outputs only JSON. STRICT tier names only: "
             f"male = {TIER_RULES_M}; female = {TIER_RULES_F}. "
-            "Never use 'High Normie', 'Low Tier Normie', 'Subhuman', 'Animal', 'Sub-5 (Canine)', etc."
+            "Never use 'High Normie', 'Low Tier Normie', 'Subhuman', 'Animal', etc."
         ),
-        image_bytes_list=[photo1_bytes, photo2_bytes],
-        image_mime_list=["image/jpeg", "image/jpeg"],
+        image_bytes_list=[p1, p2], image_mime_list=["image/jpeg", "image/jpeg"],
     )
     try:
-        return cast(dict[str, Any], json.loads(clean_json_text(raw)))
+        return cast(dict, json.loads(clean_json_text(raw)))
     except json.JSONDecodeError:
-        logger.error(f"Battle JSON decode failed: {raw[:200]}")
+        logger.error(f"Battle JSON decode: {raw[:200]}")
         return {"error": "Could not parse AI response as JSON."}
 
 # ============================================================
-# КНОПКИ С ЦВЕТОМ (Bot API 10.3)
+# STYLED BUTTON
 # ============================================================
 class StyledButton(InlineKeyboardButton):
-    """InlineKeyboardButton с поддержкой поля style (Bot API 10.3)."""
     def __init__(self, text: str, style: str | None = None, **kwargs):
         super().__init__(text, **kwargs)
         self.style = style
@@ -1645,7 +1558,7 @@ def btn(text: str, style: str | None = None, **kwargs) -> StyledButton:
     return StyledButton(text, style=style, **kwargs)
 
 # ============================================================
-# КОНФИГ: ТЕКСТ И КЛАВИАТУРЫ
+# CONFIG TEXT / KEYBOARDS
 # ============================================================
 def _localize(lang: str, ru: str, en: str) -> str:
     return ru if lang == "ru" else en
@@ -1660,11 +1573,11 @@ def _config_text(platform: str, chat_id: int, user_id: int) -> str:
     theme_label = _localize(lang, "Тема", "Theme")
     model_label = _localize(lang, "Модель", "Model")
     temp_label = _localize(lang, "Температура", "Temperature")
-    sep_label = _localize(lang, "Разбивка на сообщения", "Message split")
-    stream_label = _localize(lang, "Стриминг ответов", "Streaming")
+    sep_label = _localize(lang, "Разбивка", "Split")
+    stream_label = _localize(lang, "Стриминг", "Streaming")
     stickers_label = _localize(lang, "Стикеры/гифки", "Stickers/GIFs")
     autoreply_label = _localize(lang, "Автоответ", "Auto-reply")
-    random_label = _localize(lang, "Случайные сообщения", "Random messages")
+    random_label = _localize(lang, "Случайные", "Random")
     prompt_label = _localize(lang, "Кастомный промпт", "Custom prompt")
     credits_label = _localize(lang, "Кредиты", "Credits")
     on = "✅"; off = "❌"
@@ -1692,15 +1605,13 @@ def build_main_config_keyboard(platform: str, chat_id: int, user_id: int) -> Inl
     lang = cfg.get("language", "ru")
     kb = InlineKeyboardMarkup()
     kb.row(
-        btn(_localize(lang, "🌐 Язык", "🌐 Language"),
-            style=None, callback_data="cfg:lang"),
-        btn(_localize(lang, "🌓 Тема", "🌓 Theme"),
-            style=None, callback_data="cfg:theme"),
+        btn(_localize(lang, "🌐 Язык", "🌐 Language"), style=None, callback_data="cfg:lang"),
+        btn(_localize(lang, "🌓 Тема", "🌓 Theme"), style=None, callback_data="cfg:theme"),
     )
     kb.row(
         btn(f"🧠 {_localize(lang,'Модель','Model')}: {model_display_name(cfg.get('model'))}",
             style="primary", callback_data="cfg:model"),
-        btn(f"🎛 {_localize(lang,'Температура','Temperature')}: {cfg.get('temperature',0.9)}",
+        btn(f"🎛 {_localize(lang,'Темп.','Temp')}: {cfg.get('temperature',0.9)}",
             style=None, callback_data="cfg:temp"),
     )
     kb.row(
@@ -1712,7 +1623,7 @@ def build_main_config_keyboard(platform: str, chat_id: int, user_id: int) -> Inl
     kb.row(
         btn(f"🎨 {_localize(lang,'Стикеры','Stickers')}: {'✅' if cfg.get('stickers_enabled',True) else '❌'}",
             style=None, callback_data="cfg:stickers"),
-        btn(f"🗣 {_localize(lang,'Автоответ','Auto-reply')}: {'✅' if cfg.get('random_reply_enabled') else '❌'}",
+        btn(f"🗣 {_localize(lang,'Автоотв.','Auto-reply')}: {'✅' if cfg.get('random_reply_enabled') else '❌'}",
             style=None, callback_data="cfg:autoreply"),
     )
     kb.row(
@@ -1737,19 +1648,16 @@ def build_model_keyboard(platform: str, chat_id: int, user_id: int) -> InlineKey
     cur = cfg.get("model")
     kb = InlineKeyboardMarkup()
     auto_mark = "🔘" if not cur else "▫️"
-    kb.row(btn(f"{auto_mark} 🎲 {_localize(lang,'Авто','Auto')}",
-               style=None, callback_data="cfg:model_set:auto"))
+    kb.row(btn(f"{auto_mark} 🎲 {_localize(lang,'Авто','Auto')}", style=None, callback_data="cfg:model_set:auto"))
     row: list[StyledButton] = []
     for idx, model in enumerate(MODEL_LIST):
         mark = "🔘" if cur == model else "▫️"
-        row.append(btn(f"{mark} {MODEL_DISPLAY.get(model, model)}",
-                       style=None, callback_data=f"cfg:model_set:{idx}"))
+        row.append(btn(f"{mark} {MODEL_DISPLAY.get(model, model)}", style=None, callback_data=f"cfg:model_set:{idx}"))
         if len(row) == 2:
             kb.row(*row); row = []
     if row:
         kb.row(*row)
-    kb.row(btn("🔙 " + _localize(lang, "Назад", "Back"),
-               style="primary", callback_data="cfg:model_back"))
+    kb.row(btn("🔙 " + _localize(lang, "Назад", "Back"), style="primary", callback_data="cfg:model_back"))
     return kb
 
 def build_lang_keyboard(platform: str, chat_id: int, user_id: int) -> InlineKeyboardMarkup:
@@ -1787,8 +1695,7 @@ def build_temp_keyboard(platform: str, chat_id: int, user_id: int) -> InlineKeyb
     for v in values:
         mark = "🔘" if abs(cur - v) < 0.01 else "▫️"
         row.append(btn(f"{mark} {v}", style=None, callback_data=f"cfg:temp_set:{v}"))
-    kb.row(*row[:4])
-    kb.row(*row[4:])
+    kb.row(*row[:4]); kb.row(*row[4:])
     kb.row(btn("🔙 Назад / Back", style="primary", callback_data="cfg:sub_back"))
     return kb
 
@@ -1800,11 +1707,11 @@ def _model_picker_text(platform: str, chat_id: int, user_id: int) -> str:
         f"🧠 <b>{_localize(lang,'Выбор модели','Model selection')}</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"{_localize(lang,'Текущая','Current')}: {model_display_name(cur)}\n\n"
-        f"🎲 <b>{_localize(lang,'Авто','Auto')}</b> — {_localize(lang,'бот сам перебирает все модели','bot tries all models')}"
+        f"🎲 <b>{_localize(lang,'Авто','Auto')}</b> — {_localize(lang,'перебор всех моделей','bot tries all models')}"
     )
 
 # ============================================================
-# CALLBACK HANDLERS
+# CALLBACK HANDLER
 # ============================================================
 async def _edit_or_send(call: telebot.types.CallbackQuery, text: str, kb: InlineKeyboardMarkup):
     try:
@@ -1817,7 +1724,6 @@ async def _edit_or_send(call: telebot.types.CallbackQuery, text: str, kb: Inline
 
 @tg_bot.callback_query_handler(func=lambda call: call.data.startswith("cfg:"))
 async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
-    # Проверка владельца
     owner = config_msg_owners.get(call.message.message_id)
     if owner is not None and owner != call.from_user.id:
         await tg_bot.answer_callback_query(call.id, "это не твои настройки 🤚", show_alert=False)
@@ -1827,7 +1733,6 @@ async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
     user_id = call.from_user.id
     cfg = get_user_config("tg", chat_id, user_id)
     lang = cfg.get("language", "ru")
-
     parts = call.data.split(":")
     action = parts[1] if len(parts) > 1 else ""
     toast = _localize(lang, "Обновлено", "Updated")
@@ -1856,15 +1761,14 @@ async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
         await tg_bot.answer_callback_query(call.id)
         return
 
-    if action == "model_back" or action == "sub_back":
+    if action in ("model_back", "sub_back"):
         await _edit_or_send(call, _config_text("tg", chat_id, user_id),
                             build_main_config_keyboard("tg", chat_id, user_id))
         await tg_bot.answer_callback_query(call.id)
         return
 
     if action == "lang":
-        await _edit_or_send(call, "🌐 <b>Язык / Language</b>",
-                            build_lang_keyboard("tg", chat_id, user_id))
+        await _edit_or_send(call, "🌐 <b>Язык / Language</b>", build_lang_keyboard("tg", chat_id, user_id))
         await tg_bot.answer_callback_query(call.id)
         return
 
@@ -1879,8 +1783,7 @@ async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
         return
 
     if action == "theme":
-        await _edit_or_send(call, "🌓 <b>Тема / Theme</b>",
-                            build_theme_keyboard("tg", chat_id, user_id))
+        await _edit_or_send(call, "🌓 <b>Тема / Theme</b>", build_theme_keyboard("tg", chat_id, user_id))
         await tg_bot.answer_callback_query(call.id)
         return
 
@@ -1895,15 +1798,13 @@ async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
         return
 
     if action == "temp":
-        await _edit_or_send(call, "🎛 <b>Температура / Temperature</b>",
-                            build_temp_keyboard("tg", chat_id, user_id))
+        await _edit_or_send(call, "🎛 <b>Температура / Temperature</b>", build_temp_keyboard("tg", chat_id, user_id))
         await tg_bot.answer_callback_query(call.id)
         return
 
     if action == "temp_set":
         try:
-            val = float(parts[2])
-            val = max(0.0, min(2.0, val))
+            val = max(0.0, min(2.0, float(parts[2])))
             cfg["temperature"] = val
             toast = f"🌡 {val}"
         except (ValueError, IndexError):
@@ -1929,7 +1830,6 @@ async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
         await tg_bot.answer_callback_query(call.id, _localize(lang, "Готово ✅", "Done ✅"))
         return
 
-    # toggles
     if action == "separate":
         cfg["separate_enabled"] = not cfg.get("separate_enabled", True)
     elif action == "streaming":
@@ -1962,43 +1862,42 @@ async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
     await tg_bot.answer_callback_query(call.id, toast)
 
 # ============================================================
-# TELEGRAM: КОМАНДЫ И ОБРАБОТЧИКИ
+# TELEGRAM: HELP/START/DONATE
 # ============================================================
 HELP_TEXT = (
     "🍷🗿 <b>Команды Кульша:</b>\n\n"
     "<b>Общие:</b>\n"
     "/start — приветствие\n"
     "/help — эта справка\n"
-    "/donate — поддержать проект\n\n"
+    "/donate — поддержать проект\n"
+    "/credits — баланс кредитов\n\n"
     "<b>Настройки:</b>\n"
-    "<code>кульш конфиг</code> или <code>кульш настройки</code> — настройки (инлайн-кнопки)\n\n"
+    "<code>кульш конфиг</code> / <code>кульш настройки</code> — настройки (инлайн)\n\n"
     "<b>Утилиты:</b>\n"
     "<code>кульш аватарка</code> — описать аватарку\n"
-    "<code>кульш вспомни медиа [N]</code> — вспомнить последние N медиа\n"
-    "<code>кульш логи</code> — логи (для админов)\n\n"
+    "<code>кульш вспомни медиа [N]</code> — вспомнить N медиа\n"
+    "<code>кульш логи</code> — логи (админам)\n\n"
     "<b>Развлечения:</b>\n"
-    "<code>кульш psl</code> — looksmaxxing анализ фото\n"
-    "<code>кульш psl совет</code> — анализ + рекомендации\n"
-    "<code>кульш battle</code> — баттл двух фото (альбомом)\n"
+    "<code>кульш psl</code> — looksmaxxing\n"
+    "<code>кульш psl совет</code> — + рекомендации\n"
+    "<code>кульш battle</code> — баттл (альбом)\n"
     "<code>кульш донаты</code> — топ донатеров\n\n"
     "<b>Инструменты (ЛС):</b>\n"
-    "Отправьте боту архив или текстовый файл и попросите отредактировать — бот распакует, изменит, соберёт и вернёт.\n"
-    "<code>/credits</code> — посмотреть баланс кредитов"
+    "Отправь архив/текстовый файл — бот распакует, изменит, соберёт и вернёт."
 )
 
 @tg_bot.message_handler(commands=['start'])
 async def handle_start(message: telebot.types.Message) -> None:
-    args = telebot.util.extract_arguments(message.text)
+    args = telebot.util.extract_arguments(message.text or "")
     if not args:
-        await reply_tg_html(message, "🍷🗿 Кульш на связи. Напиши 'кульш' или обратись ко мне, и я отвечу. /help — список команд.")
+        await reply_tg_html(message, "🍷🗿 Кульш на связи. Напиши 'кульш' или обратись ко мне. /help — команды.")
         return
     if args.startswith('donate_stars_'):
         try:
             stars = int(args.split('_')[-1])
-            if stars <= 0:
-                raise ValueError
+            if stars <= 0: raise ValueError
         except (ValueError, IndexError):
-            await reply_tg_html(message, "❌ Неверное количество звёзд в ссылке.")
+            await reply_tg_html(message, "❌ Неверное количество звёзд.")
             return
         pending_donations[message.chat.id] = stars
         prices = [telebot.types.LabeledPrice(label="Поддержать Кульша", amount=stars)]
@@ -2008,8 +1907,6 @@ async def handle_start(message: telebot.types.Message) -> None:
             invoice_payload=f"donate_{stars}_stars", provider_token="",
             currency="XTR", prices=prices, start_parameter="donate",
         )
-
-pending_donations: dict[int, int] = {}
 
 @tg_bot.message_handler(commands=['help'])
 async def handle_help(message: telebot.types.Message) -> None:
@@ -2026,8 +1923,8 @@ async def handle_donate(message: telebot.types.Message) -> None:
 
 @tg_bot.message_handler(commands=['credits'])
 async def handle_credits(message: telebot.types.Message) -> None:
-    user_id = message.from_user.id
-    creds = get_user_credits("tg", user_id)
+    if message.from_user is None: return
+    creds = get_user_credits("tg", message.from_user.id)
     await reply_tg_html(message, f"💎 Кредиты: {creds}/{DAILY_CREDITS}")
 
 @tg_bot.message_handler(commands=['togglepremiumfunctionsadmin'])
@@ -2038,7 +1935,7 @@ async def handle_toggle_premium(message: telebot.types.Message) -> None:
         return
     premium_functions_enabled = not premium_functions_enabled
     state = "включены ✅" if premium_functions_enabled else "выключены ❌"
-    await reply_tg_html(message, f"Расширенные функции (Rich Messages, стриминг): {state}")
+    await reply_tg_html(message, f"Расширенные функции: {state}")
 
 @tg_bot.pre_checkout_query_handler(func=lambda query: True)
 async def handle_pre_checkout(pre_checkout: telebot.types.PreCheckoutQuery) -> None:
@@ -2046,6 +1943,7 @@ async def handle_pre_checkout(pre_checkout: telebot.types.PreCheckoutQuery) -> N
 
 @tg_bot.message_handler(content_types=['successful_payment'])
 async def handle_successful_payment(message: telebot.types.Message) -> None:
+    if message.successful_payment is None or message.from_user is None: return
     payment = message.successful_payment
     user_id = message.chat.id
     try:
@@ -2053,20 +1951,20 @@ async def handle_successful_payment(message: telebot.types.Message) -> None:
     except Exception:
         stars = 0
     name = message.from_user.full_name or message.from_user.username or str(user_id)
-    logger.info(f"Пользователь {user_id} задонатил {stars} звёзд")
+    logger.info(f"{user_id} задонатил {stars} звёзд")
     add_donation('tg', user_id, stars, name)
     await send_donation_alert('tg', name, stars)
     await reply_tg_html(message, f"🍷🗿 Спасибо за {stars} звёзд, кент!")
 
-# ---- Конфиг-команда в TG ----
+# ============================================================
+# TG CONFIG/AVATAR/RECALL
+# ============================================================
 async def tg_handle_config(message: telebot.types.Message) -> None:
-    if message.from_user is None:
-        return
+    if message.from_user is None: return
     chat_id = message.chat.id
     user_id = message.from_user.id
     chat_key = get_chat_key("tg", chat_id)
     config_trigger_msgs[chat_key] = message.message_id
-
     try:
         sent = await tg_bot.send_message(
             chat_id,
@@ -2078,13 +1976,15 @@ async def tg_handle_config(message: telebot.types.Message) -> None:
         config_msg_owners[sent.message_id] = user_id
     except Exception as e:
         logger.warning(f"Config send failed: {e}")
-        await tg_bot.send_message(
-            chat_id,
-            re.sub(r'<[^>]+>', '', _config_text("tg", chat_id, user_id)),
-            reply_markup=build_main_config_keyboard("tg", chat_id, user_id),
-        )
+        try:
+            await tg_bot.send_message(
+                chat_id,
+                re.sub(r'<[^>]+>', '', _config_text("tg", chat_id, user_id)),
+                reply_markup=build_main_config_keyboard("tg", chat_id, user_id),
+            )
+        except Exception as e2:
+            logger.error(f"Config fallback fail: {e2}")
 
-# ---- Аватар ----
 async def tg_handle_avatar(message: telebot.types.Message, chat_id: int, user_id: int) -> None:
     raw = await get_avatar_description_tg(message, chat_id, user_id)
     if not raw:
@@ -2100,7 +2000,6 @@ async def tg_handle_avatar(message: telebot.types.Message, chat_id: int, user_id
         else:
             await send_tg_html(message.chat.id, seg)
 
-# ---- Recall media ----
 async def tg_handle_recall_media(message: telebot.types.Message, chat_id: int, user_id: int, parts: list[str]) -> None:
     n = 3
     for p in parts:
@@ -2120,41 +2019,56 @@ async def tg_handle_recall_media(message: telebot.types.Message, chat_id: int, u
         else:
             await send_tg_html(message.chat.id, seg)
 
-# ---- Утилиты ----
+# ============================================================
+# UTILITY EXECUTION
+# ============================================================
 async def execute_utility_tg(message: telebot.types.Message, marker: str, chat_id: int, user_id: int) -> None:
     cfg = get_user_config("tg", chat_id, user_id)
     if marker in ("sticker", "gif"):
         if not cfg.get("stickers_enabled", True):
             return
         try:
-            sticker = random.choice(STICKER_POOL)
-            await tg_bot.send_sticker(message.chat.id, sticker)
+            await tg_bot.send_sticker(message.chat.id, random.choice(STICKER_POOL))
         except Exception as e:
             logger.error(f"sticker error: {e}")
 
-# ---- Отправка ответа ИИ (TG) ----
-async def _send_streaming_response(message: telebot.types.Message, chat_id: int, user_id: int, full_text: str) -> bool:
-    """Отправка через sendMessageDraft с плавным появлением."""
+async def execute_utility_ds(message: discord.Message, marker: str, chat_id: int, user_id: int) -> None:
+    cfg = get_user_config("ds", chat_id, user_id)
+    if marker in ("sticker", "gif"):
+        if not cfg.get("stickers_enabled", True):
+            return
+        try:
+            gif_url = random.choice(GIF_POOL)
+            embed = discord.Embed().set_image(url=gif_url)
+            await message.reply(embed=embed)
+        except Exception as e:
+            logger.error(f"gif error: {e}")
+
+# ============================================================
+# STREAMING HELPERS
+# ============================================================
+async def _stream_text_via_drafts(chat_id: int, text: str) -> bool:
+    """Плавный стриминг через sendMessageDraft (Bot API 9.5+)."""
     if not premium_functions_enabled:
         return False
-    draft_id = int(time.time() * 1000) % (2**31)
-    text = full_text
-    # Разбиваем по словам для плавного появления
+    draft_id = random.randint(1, 2**30)
     words = text.split()
-    steps: list[str] = []
+    if not words:
+        return False
     acc = ""
+    chunk_size = max(1, len(words) // 15)
     for i, w in enumerate(words):
         acc = (acc + " " + w).strip()
-        if i % max(1, len(words) // 20) == 0:
-            steps.append(acc)
-    if not steps or steps[-1] != text:
-        steps.append(text)
-    for step in steps:
-        await stream_draft(message.chat.id, draft_id, step)
-        await asyncio.sleep(0.05)
-    # Финальная отправка настоящим сообщением
-    return False  # Handled by caller via send_tg_html
+        if i % chunk_size == 0 or i == len(words) - 1:
+            ok = await stream_draft(chat_id, draft_id, acc)
+            if not ok:
+                return False
+            await asyncio.sleep(0.06)
+    return True
 
+# ============================================================
+# SEND TG AI RESPONSE
+# ============================================================
 async def send_tg_ai_response(message: telebot.types.Message, chat_id: int, user_id: int, answer_raw: str) -> None:
     cfg = get_user_config("tg", chat_id, user_id)
     separate_enabled = cfg.get("separate_enabled", True)
@@ -2187,7 +2101,7 @@ async def send_tg_ai_response(message: telebot.types.Message, chat_id: int, user
             try:
                 await execute_utility_tg(message, m, chat_id, user_id)
             except Exception as e:
-                logger.warning(f"utility {m} failed: {e}")
+                logger.warning(f"utility {m}: {e}")
         return
 
     for i, seg in enumerate(all_segments):
@@ -2196,28 +2110,49 @@ async def send_tg_ai_response(message: telebot.types.Message, chat_id: int, user
         except Exception:
             pass
 
-        # Стриминг для первого длинного сегмента
-        if streaming and i == 0 and len(seg) > 120:
+        sent_ok = False
+
+        # 1) Стриминг для первого длинного сегмента
+        if streaming and i == 0 and len(seg) > 60:
             try:
-                sent = await send_rich_message(message.chat.id, seg, reply_to=message.message_id)
-                if not sent:
+                streamed = await _stream_text_via_drafts(message.chat.id, seg)
+                if streamed:
+                    sent_ok = True
+            except Exception as e:
+                logger.debug(f"stream fail: {e}")
+
+        # 2) Rich message для markdown-текста
+        if not sent_ok:
+            try:
+                sent_ok = await send_rich_message(
+                    message.chat.id, seg,
+                    reply_to=message.message_id if i == 0 else None
+                )
+            except Exception as e:
+                logger.debug(f"rich fail: {e}")
+
+        # 3) Обычный HTML-fallback
+        if not sent_ok:
+            try:
+                if i == 0:
                     await send_tg_html(message.chat.id, seg, reply_to=message.message_id)
-            except Exception:
-                await send_tg_html(message.chat.id, seg, reply_to=message.message_id)
-        else:
-            if i == 0:
-                await send_tg_html(message.chat.id, seg, reply_to=message.message_id)
-            else:
-                await send_tg_html(message.chat.id, seg)
+                else:
+                    await send_tg_html(message.chat.id, seg)
+            except Exception as e:
+                logger.error(f"send_tg_html fail: {e}")
 
         add_bot_memory(f"tg_{message.chat.id}", seg)
 
     for m in markers:
-        try:
-            await execute_utility_tg(message, m, chat_id, user_id)
-        except Exception as e:
-            logger.warning(f"utility {m} failed: {e}")
+        if m in ("sticker", "gif"):
+            try:
+                await execute_utility_tg(message, m, chat_id, user_id)
+            except Exception as e:
+                logger.warning(f"utility {m}: {e}")
 
+# ============================================================
+# OLD MESSAGE REPLY (TG)
+# ============================================================
 async def maybe_reply_to_old_message_tg(message: telebot.types.Message, chat_id: int, user_id: int) -> None:
     chat_key = f"tg_{chat_id}"
     now = time.time()
@@ -2232,11 +2167,10 @@ async def maybe_reply_to_old_message_tg(message: telebot.types.Message, chat_id:
     old = random.choice(candidates)
     try:
         comment = await ask_ai_async(
-            prompt=(f"Ты видишь в истории чата старое сообщение от {old.get('display','?')} "
-                    f"({old.get('time','')}): \"{old.get('text','')}\". Хочешь коротко прокомментировать, пошутить "
-                    f"или поддержать беседу? Если да — напиши ОДНО короткое сообщение в стиле Кульша. "
-                    f"Если не хочешь — ответь ровно 'НЕТ'."),
-            system_instruction_override="Ты Кульш. Отвечай одним коротким сообщением или 'НЕТ'. Без markdown.",
+            prompt=(f"Ты видишь старое сообщение от {old.get('display','?')}: \"{old.get('text','')}\". "
+                    f"Хочешь коротко прокомментировать? Если да — одно короткое сообщение в стиле Кульша. "
+                    f"Если нет — ответь ровно 'НЕТ'."),
+            system_instruction_override="Ты Кульш. Одним коротким сообщением или 'НЕТ'. Без markdown.",
             chat_id=chat_id, user_id=user_id,
         )
         if comment and comment.strip() and comment.strip().upper() != "НЕТ":
@@ -2261,7 +2195,7 @@ async def maybe_reply_to_old_message_tg(message: telebot.types.Message, chat_id:
                     except Exception:
                         pass
     except Exception as e:
-        logger.warning(f"old reply tg fail: {e}")
+        logger.warning(f"old reply tg: {e}")
 
 async def should_random_reply(platform: str, chat_id: int, user_id: int) -> bool:
     cfg = get_user_config(platform, chat_id, user_id)
@@ -2276,9 +2210,425 @@ async def should_random_reply(platform: str, chat_id: int, user_id: int) -> bool
     return True
 
 # ============================================================
-# TELEGRAM: ОСНОВНОЙ ТЕКСТОВЫЙ ОБРАБОТЧИК
+# TOOLS (архивы/файлы/консоль)
 # ============================================================
-@tg_bot.message_handler(func=lambda m: m.text, content_types=['text'])
+TEXT_EXTS = {
+    "txt", "py", "json", "html", "htm", "js", "css", "cs", "cpp", "c", "h", "hpp",
+    "java", "php", "rb", "go", "rs", "ts", "tsx", "jsx", "xml", "yml", "yaml",
+    "toml", "ini", "cfg", "conf", "sh", "bash", "bat", "ps1", "sql", "md",
+    "log", "env", "gitignore", "dockerfile", "makefile", "vue", "svelte",
+    "scss", "sass", "less", "kt", "swift", "dart", "lua", "pl", "r", "m", "mm",
+}
+
+SAFE_COMMANDS = {"ls", "cat", "head", "tail", "wc", "grep", "find", "file", "stat", "du", "tree", "pwd"}
+
+def _safe_join(base: str, rel: str) -> str | None:
+    if not rel:
+        return base
+    target = os.path.realpath(os.path.join(base, rel))
+    base_real = os.path.realpath(base)
+    if not target.startswith(base_real + os.sep) and target != base_real:
+        return None
+    return target
+
+def _list_files(base: str) -> list[str]:
+    out: list[str] = []
+    for root, dirs, files in os.walk(base):
+        for f in files:
+            full = os.path.join(root, f)
+            rel = os.path.relpath(full, base)
+            out.append(rel)
+    return out
+
+def _is_text_file(path: str) -> bool:
+    try:
+        with open(path, 'rb') as f:
+            chunk = f.read(1024)
+        if b'\x00' in chunk:
+            return False
+        chunk.decode('utf-8', errors='strict')
+        return True
+    except Exception:
+        return False
+
+async def extract_archive(zip_path: str, dest_dir: str) -> list[str]:
+    def _do():
+        with zipfile.ZipFile(zip_path, 'r') as zf:
+            total = 0; count = 0
+            for info in zf.infolist():
+                if info.is_dir():
+                    continue
+                count += 1
+                if count > MAX_FILES:
+                    raise Exception("Слишком много файлов в архиве")
+                total += info.file_size
+                if total > MAX_TOTAL_UNPACKED:
+                    raise Exception("Распакованный архив слишком большой")
+                target = _safe_join(dest_dir, info.filename)
+                if target is None:
+                    raise Exception(f"Небезопасный путь: {info.filename}")
+                os.makedirs(os.path.dirname(target), exist_ok=True)
+                with zf.open(info) as src, open(target, 'wb') as dst:
+                    shutil.copyfileobj(src, dst)
+        return _list_files(dest_dir)
+    return await asyncio.to_thread(_do)
+
+async def create_archive(source_dir: str, out_zip: str) -> None:
+    def _do():
+        with zipfile.ZipFile(out_zip, 'w', zipfile.ZIP_DEFLATED) as zf:
+            for root, dirs, files in os.walk(source_dir):
+                for f in files:
+                    full = os.path.join(root, f)
+                    rel = os.path.relpath(full, source_dir)
+                    zf.write(full, rel)
+    await asyncio.to_thread(_do)
+
+async def run_safe_command(base_dir: str, cmd: str) -> tuple[int, str]:
+    parts = cmd.strip().split()
+    if not parts:
+        return 1, "пустая команда"
+    prog = parts[0].lower()
+    if prog not in SAFE_COMMANDS:
+        return 1, f"команда '{prog}' не разрешена"
+    for p in parts:
+        if any(ch in p for ch in (';', '&', '|', '`', '$', '<', '>', '\n')):
+            return 1, "метасимволы запрещены"
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *parts, cwd=base_dir,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15)
+        out = (stdout or b'').decode('utf-8', errors='replace')[:8000]
+        err = (stderr or b'').decode('utf-8', errors='replace')[:2000]
+        if err:
+            out += "\n[stderr]\n" + err
+        return proc.returncode or 0, out
+    except asyncio.TimeoutError:
+        return 1, "команда не завершилась за 15 сек"
+    except Exception as e:
+        return 1, f"ошибка: {e}"
+
+async def tool_edit_archive(message: telebot.types.Message, user_request: str,
+                            archive_bytes: bytes, filename: str) -> None:
+    user_id = message.from_user.id
+    chat_id = message.chat.id
+    status = await tg_bot.send_message(chat_id, "📦 Распаковываю архив...")
+    work_dir = tempfile.mkdtemp(prefix="kulsh_tools_")
+    tools_sessions[chat_id] = {"dir": work_dir, "user_id": user_id}
+    try:
+        arch_path = os.path.join(work_dir, "input.zip")
+        with open(arch_path, 'wb') as f:
+            f.write(archive_bytes)
+        files = await extract_archive(arch_path, work_dir)
+        files_display = ", ".join(files[:30])
+        if len(files) > 30:
+            files_display += f" ... (+{len(files)-30})"
+        await tg_bot.edit_message_text(f"📦 Распаковал.\n\n📄 {files_display}",
+                                       chat_id, status.message_id)
+
+        contents: dict[str, str] = {}
+        for rel in files[:50]:
+            full = _safe_join(work_dir, rel)
+            if full and os.path.exists(full) and os.path.getsize(full) < MAX_FILE_SIZE:
+                if _is_text_file(full):
+                    try:
+                        with open(full, 'r', encoding='utf-8', errors='replace') as f:
+                            contents[rel] = f.read()
+                    except Exception:
+                        pass
+        files_context = "\n\n".join(f"=== {fn} ===\n{c[:6000]}" for fn, c in contents.items())
+        if len(files_context) > 60000:
+            files_context = files_context[:60000] + "\n...[обрезано]"
+
+        await tg_bot.edit_message_text(f"🧠 Анализирую {len(contents)} файл(ов)...",
+                                       chat_id, status.message_id)
+
+        prompt = (
+            f"Пользователь отправил архив '{filename}' и попросил:\n\n{user_request}\n\n"
+            f"Содержимое:\n{files_context}\n\n"
+            "Верни JSON-объект строго:\n"
+            '{"summary": "краткое описание (на русском, дружелюбно, в стиле Кульша)", '
+            '"files": {"путь": "полное новое содержимое файла", ...}}\n\n'
+            "Включай в 'files' только изменённые/новые файлы. Только JSON, без markdown."
+        )
+        raw = await ask_ai_async(
+            prompt=prompt,
+            system_instruction_override=(
+                "Ты инструмент редактирования кода. Отвечай ТОЛЬКО валидным JSON с полями 'summary' и 'files'. "
+                "Никаких пояснений, markdown или текста."
+            ),
+            chat_id=chat_id, user_id=user_id, platform="tg",
+        )
+        try:
+            data = json.loads(clean_json_text(raw))
+        except Exception as e:
+            await tg_bot.edit_message_text(f"❌ Не смог распарсить ответ ИИ: {e}",
+                                           chat_id, status.message_id)
+            return
+
+        summary = data.get("summary", "готово")
+        new_files = data.get("files", {})
+        if not isinstance(new_files, dict) or not new_files:
+            await tg_bot.edit_message_text(f"🤔 ИИ не предложил изменений. {summary}",
+                                           chat_id, status.message_id)
+            return
+
+        await tg_bot.edit_message_text(f"✏️ Редактирую {len(new_files)} файл(ов)...",
+                                       chat_id, status.message_id)
+        for rel, new_content in new_files.items():
+            full = _safe_join(work_dir, rel)
+            if full is None:
+                continue
+            os.makedirs(os.path.dirname(full) or work_dir, exist_ok=True)
+            with open(full, 'w', encoding='utf-8') as f:
+                f.write(new_content)
+
+        await tg_bot.edit_message_text("🗜 Собираю архив обратно...",
+                                       chat_id, status.message_id)
+        out_zip = os.path.join(work_dir, f"edited_{filename or 'archive.zip'}")
+        await create_archive(work_dir, out_zip)
+
+        await tg_bot.edit_message_text("📤 Отправляю готовый архив...",
+                                       chat_id, status.message_id)
+        with open(out_zip, 'rb') as f:
+            await tg_bot.send_document(
+                chat_id, InputFile(f, file_name=os.path.basename(out_zip)),
+                caption=f"🍷🗿 {summary}"
+            )
+        await tg_bot.edit_message_text("✅ Готово", chat_id, status.message_id)
+    except Exception as e:
+        logger.error(f"tool_edit_archive: {e}")
+        try:
+            await tg_bot.edit_message_text(f"❌ Ошибка: {e}", chat_id, status.message_id)
+        except Exception:
+            pass
+    finally:
+        try:
+            if work_dir and os.path.exists(work_dir):
+                shutil.rmtree(work_dir, ignore_errors=True)
+        except Exception:
+            pass
+        tools_sessions.pop(chat_id, None)
+
+async def tool_review_file(message: telebot.types.Message, user_request: str,
+                           file_bytes: bytes, filename: str) -> None:
+    user_id = message.from_user.id
+    chat_id = message.chat.id
+    try:
+        text = file_bytes.decode('utf-8', errors='replace')
+    except Exception:
+        await reply_tg_html(message, "не могу прочитать файл как текст")
+        return
+    if len(text) > MAX_FILE_SIZE:
+        text = text[:MAX_FILE_SIZE] + "\n...[обрезано]"
+    prompt = (
+        f"Пользователь отправил файл '{filename}' и просит:\n\n{user_request}\n\n"
+        f"Содержимое файла:\n```\n{text}\n```\n\n"
+        "Ответь в стиле Кульша: коротко разбери, ответь на вопрос. Не редактируй файл."
+    )
+    answer = await ask_ai_async(prompt=prompt, chat_id=chat_id, user_id=user_id, platform="tg")
+    await send_tg_ai_response(message, chat_id, user_id, answer)
+
+# ============================================================
+# TG MEDIA HANDLER
+# ============================================================
+@tg_bot.message_handler(content_types=['photo', 'video', 'animation', 'document', 'sticker'])
+async def handle_tg_media(message: telebot.types.Message) -> None:
+    if message.from_user is None:
+        return
+    chat_id = message.chat.id
+    user_id = message.from_user.id
+    is_dm = message.chat.type == 'private'
+    caption = message.caption or ""
+    cl = caption.lower()
+    chat_key = f"tg_{chat_id}"
+
+    display_name = message.from_user.full_name or "Unknown"
+    username = message.from_user.username or ""
+
+    media_tag = None; file_id = None; media_type = None; file_name = None
+    if message.photo:
+        file_id = message.photo[-1].file_id; media_type = "photo"; media_tag = "[фото]"
+    elif message.video:
+        file_id = message.video.file_id; media_type = "video"; media_tag = "[видео]"
+    elif message.animation:
+        file_id = message.animation.file_id; media_type = "animation"; media_tag = "[гифка]"
+    elif message.document:
+        file_id = message.document.file_id; media_type = "document"
+        file_name = message.document.file_name or "file"
+        media_tag = f"[док: {file_name}]"
+    elif message.sticker:
+        file_id = message.sticker.file_id; media_type = "sticker"; media_tag = "[стикер]"
+
+    if file_id and media_tag:
+        add_media_history(chat_key, None, media_type, display_name, file_id=file_id, caption=caption)
+
+    # BATTLE
+    if is_battle_command(caption) and message.photo:
+        if message.media_group_id:
+            mgid = message.media_group_id
+            if mgid not in battle_photos:
+                battle_photos[mgid] = []
+                battle_media_groups[mgid] = asyncio.create_task(
+                    process_battle_media_group(mgid, chat_id, user_id)
+                )
+            img_bytes = await get_tg_file_bytes(tg_bot, message.photo[-1].file_id)
+            battle_photos[mgid].append(img_bytes)
+        else:
+            await reply_tg_html(message, "Для баттла нужно два фото. Отправьте их одним альбомом.")
+        return
+
+    if message.media_group_id and message.media_group_id in battle_photos and message.photo:
+        img_bytes = await get_tg_file_bytes(tg_bot, message.photo[-1].file_id)
+        battle_photos[message.media_group_id].append(img_bytes)
+        return
+
+    # LOOKSMAXXING
+    is_looksmaxxing = (
+        is_looksmaxxing_command(caption) or
+        (message.reply_to_message and message.reply_to_message.from_user
+         and message.reply_to_message.from_user.id == (tg_bot.user.id if tg_bot.user else 0)
+         and message.reply_to_message.text
+         and is_looksmaxxing_command(message.reply_to_message.text)) or
+        user_looksmaxxing_state.get(chat_id, False)
+    )
+    if is_looksmaxxing and message.photo:
+        user_looksmaxxing_state[chat_id] = False
+        status = await tg_bot.send_message(chat_id, "⏳ Анализирую внешность...")
+        try:
+            img_bytes = await get_tg_file_bytes(tg_bot, message.photo[-1].file_id)
+            include_advice = ("совет" in cl or "advice" in cl or
+                              (message.reply_to_message and message.reply_to_message.text and
+                               ("совет" in message.reply_to_message.text.lower()
+                                or "advice" in message.reply_to_message.text.lower())))
+            cfg = get_user_config("tg", chat_id, user_id)
+            lang = cfg.get("language", "ru"); theme = cfg.get("theme", "dark")
+            ai_data = await get_looksmaxxing_data(img_bytes, include_advice, lang=lang)
+            if "error" in ai_data:
+                await tg_bot.edit_message_text(f"❌ {ai_data['error']}", chat_id, status.message_id)
+                return
+            infographic = await create_infographic(img_bytes, ai_data, theme=theme, lang=lang)
+            report_text = (
+                f"📊 <b>РЕЗУЛЬТАТЫ LOOKSMAXXING</b>\n\n"
+                f"🧬 <b>Пол:</b> {ai_data.get('gender','?')}\n"
+                f"📈 <b>PSL:</b> <code>{ai_data.get('psl','?')}/8.0</code>\n"
+                f"👑 <b>Tier:</b> <code>{ai_data.get('tier','?')}</code>\n"
+            )
+            if ai_data.get("potential"):
+                report_text += f"🔮 <b>Потенциал:</b> <code>{ai_data['potential']}</code>\n"
+            report_text += f"\n📝 <b>Анализ:</b>\n{html.escape(ai_data.get('summary',''))}"
+            if include_advice and ai_data.get("advice"):
+                report_text += f"\n\n⚡ <b>Рекомендации:</b>\n{html.escape(ai_data['advice'])}"
+            try:
+                await tg_bot.send_photo(chat_id, InputFile(infographic),
+                                        caption="📊 Результаты looksmaxxing")
+            except Exception as e:
+                logger.error(f"infographic send: {e}")
+            for chunk in [report_text[i:i+3900] for i in range(0, len(report_text), 3900)]:
+                try:
+                    await tg_bot.send_message(chat_id, chunk, parse_mode='HTML')
+                except Exception:
+                    await tg_bot.send_message(chat_id, re.sub(r'<[^>]+>', '', chunk))
+            await tg_bot.delete_message(chat_id, status.message_id)
+            add_user_memory(chat_key, "TG", display_name, username, user_id,
+                            f"[looksmaxxing] {caption}", ["photo"], message_id=message.message_id)
+            add_bot_memory(chat_key, "[looksmaxxing отчёт]")
+        except Exception as e:
+            logger.error(f"looksmaxxing: {e}")
+            await reply_tg_html(message, f"🌋 Ошибка: {e}")
+        return
+
+    # TOOLS (только ЛС)
+    if is_dm and message.document:
+        mime = message.document.mime_type or ""
+        doc_name = message.document.file_name or ""
+        ext = doc_name.lower().rsplit('.', 1)[-1] if '.' in doc_name else ""
+
+        if ext == "zip":
+            credits = get_user_credits("tg", user_id)
+            if credits < COST_ARCHIVE_EDIT:
+                await reply_tg_html(
+                    message,
+                    f"💎 Недостаточно кредитов для редактирования архива.\n"
+                    f"Нужно {COST_ARCHIVE_EDIT}, у тебя {credits}/{DAILY_CREDITS}."
+                )
+                return
+            spend_credits("tg", user_id, COST_ARCHIVE_EDIT)
+            try:
+                file_bytes = await get_tg_file_bytes(tg_bot, message.document.file_id)
+            except Exception as e:
+                await reply_tg_html(message, f"не смог скачать файл: {e}")
+                return
+            await tool_edit_archive(message, caption.strip() or "отредактируй что-нибудь полезное",
+                                    file_bytes, doc_name or "archive.zip")
+            return
+
+        if ext in TEXT_EXTS or mime.startswith("text/"):
+            try:
+                file_bytes = await get_tg_file_bytes(tg_bot, message.document.file_id)
+            except Exception as e:
+                await reply_tg_html(message, f"не смог скачать файл: {e}")
+                return
+            await tool_review_file(message, caption.strip() or "что тут?", file_bytes, doc_name or "file")
+            return
+
+        # Не текстовый и не архив — падаем в общий обработчик ниже
+
+    # ОБЫЧНОЕ МЕДИА
+    is_reply_to_bot = (message.reply_to_message and message.reply_to_message.from_user
+                       and message.reply_to_message.from_user.id == (tg_bot.user.id if tg_bot.user else 0))
+    addressed = bool(is_reply_to_bot or re.search(r'(?i)\bкульш\b', caption) or is_dm)
+
+    if not addressed:
+        add_user_memory(chat_key, "TG", display_name, username, user_id, caption or "",
+                        [media_tag or "медиа"], message_id=message.message_id)
+        if await should_random_reply("tg", chat_id, user_id):
+            answer = await ask_ai_async(
+                context_type="observer",
+                messages=memory_to_messages(get_chat_memory(chat_key)),
+                chat_id=chat_id, user_id=user_id, platform="tg",
+            )
+            if answer and answer.strip() and answer.strip().upper() != "НЕТ":
+                last_random_reply[chat_key] = time.time()
+                await send_tg_ai_response(message, chat_id, user_id, answer)
+        return
+
+    await tg_bot.send_chat_action(chat_id, 'typing')
+    image_bytes = None; image_mime = "image/jpeg"
+    try:
+        if message.photo:
+            image_bytes = await get_tg_file_bytes(tg_bot, message.photo[-1].file_id)
+        elif message.animation:
+            vid = await get_tg_file_bytes(tg_bot, message.animation.file_id)
+            frame = await extract_video_frame(vid, ".mp4")
+            if frame: image_bytes = frame
+        elif message.video:
+            vid = await get_tg_file_bytes(tg_bot, message.video.file_id)
+            frame = await extract_video_frame(vid, ".mp4")
+            if frame: image_bytes = frame
+        elif message.document and message.document.mime_type and message.document.mime_type.startswith("image/"):
+            image_bytes = await get_tg_file_bytes(tg_bot, message.document.file_id)
+            image_mime = message.document.mime_type
+    except Exception as e:
+        logger.warning(f"download media: {e}")
+
+    prompt = caption.strip() or "че на этом?"
+    add_user_memory(chat_key, "TG", display_name, username, user_id,
+                    f"{prompt} [с медиа: {media_tag}]", [media_tag or "медиа"],
+                    message_id=message.message_id)
+    messages = memory_to_messages(get_chat_memory(chat_key))
+    answer = await ask_ai_async(messages=messages, image_bytes=image_bytes,
+                                image_mime=image_mime, chat_id=chat_id,
+                                user_id=user_id, platform="tg")
+    await send_tg_ai_response(message, chat_id, user_id, answer)
+    asyncio.create_task(extract_memory(chat_key, f"{display_name}: [медиа] {caption}", answer))
+
+# ============================================================
+# TG TEXT HANDLER
+# ============================================================
+@tg_bot.message_handler(func=lambda m: m.text is not None, content_types=['text'])
 async def handle_tg_text(message: telebot.types.Message) -> None:
     if message.from_user is None:
         return
@@ -2287,7 +2637,6 @@ async def handle_tg_text(message: telebot.types.Message) -> None:
     is_dm = message.chat.type == 'private'
     text = cast(str, message.text or "")
     tl = text.lower()
-
     display_name = message.from_user.full_name or "Unknown"
     username = message.from_user.username or ""
     chat_key = f"tg_{chat_id}"
@@ -2344,7 +2693,8 @@ async def handle_tg_text(message: telebot.types.Message) -> None:
             if extra_text:
                 for chunk in chunk_text(extra_text, 3900):
                     try:
-                        await tg_bot.send_message(chat_id, f"<pre>{html.escape(chunk)}</pre>", parse_mode='HTML')
+                        await tg_bot.send_message(chat_id, f"<pre>{html.escape(chunk)}</pre>",
+                                                  parse_mode='HTML')
                     except Exception:
                         await tg_bot.send_message(chat_id, chunk)
         except Exception as e:
@@ -2354,22 +2704,23 @@ async def handle_tg_text(message: telebot.types.Message) -> None:
     if is_looksmaxxing_command(text):
         user_looksmaxxing_state[chat_id] = True
         add_user_memory(chat_key, "TG", display_name, username, user_id, text, message_id=message.message_id)
-        await reply_tg_html(message, "📸 Жду фото для анализа. Отправь его с пометкой 'looksmaxxing' или просто подпиши.")
+        await reply_tg_html(message, "📸 Жду фото для анализа. Отправь его с пометкой 'looksmaxxing'.")
         return
 
     if is_battle_command(text):
         add_user_memory(chat_key, "TG", display_name, username, user_id, text, message_id=message.message_id)
-        await reply_tg_html(message, "Для баттла пришлите два фото в одном сообщении (альбомом) с командой 'кульш баттл'.")
+        await reply_tg_html(message, "Для баттла пришлите два фото одним альбомом с командой 'кульш баттл'.")
         return
-
-    # Инструменты в ЛС — обрабатываются в media handler
 
     is_reply_to_bot = (message.reply_to_message and message.reply_to_message.from_user
                        and message.reply_to_message.from_user.id == (tg_bot.user.id if tg_bot.user else 0))
     addressed = bool(is_reply_to_bot or re.search(r'(?i)\bкульш\b', text) or is_dm)
 
     if addressed:
-        await tg_bot.send_chat_action(chat_id, 'typing')
+        try:
+            await tg_bot.send_chat_action(chat_id, 'typing')
+        except Exception:
+            pass
         add_user_memory(chat_key, "TG", display_name, username, user_id, text, message_id=message.message_id)
         messages = memory_to_messages(get_chat_memory(chat_key))
         answer = await ask_ai_async(messages=messages, chat_id=chat_id, user_id=user_id, platform="tg")
@@ -2391,508 +2742,11 @@ async def handle_tg_text(message: telebot.types.Message) -> None:
                 last_random_reply[chat_key] = time.time()
                 await send_tg_ai_response(message, chat_id, user_id, answer)
         except Exception as e:
-            logger.warning(f"Random reply fail: {e}")
+            logger.warning(f"Random reply: {e}")
 
 # ============================================================
-# TOOLS: РАСШИРЕННЫЕ ИНСТРУМЕНТЫ (только ЛС)
+# BATTLE MEDIA GROUP
 # ============================================================
-SAFE_COMMANDS = {"ls", "cat", "head", "tail", "wc", "grep", "find", "file", "stat", "du", "tree"}
-MAX_FILE_SIZE = 500 * 1024  # 500 KB
-MAX_TOTAL_UNPACKED = 5 * 1024 * 1024  # 5 MB
-MAX_FILES = 100
-
-def _safe_join(base: str, rel: str) -> str | None:
-    """Безопасный join с проверкой выхода за base."""
-    if not rel:
-        return base
-    target = os.path.realpath(os.path.join(base, rel))
-    if not target.startswith(os.path.realpath(base)):
-        return None
-    return target
-
-def _list_files(base: str) -> list[str]:
-    out: list[str] = []
-    for root, dirs, files in os.walk(base):
-        for f in files:
-            full = os.path.join(root, f)
-            rel = os.path.relpath(full, base)
-            out.append(rel)
-    return out
-
-def _is_text_file(path: str) -> bool:
-    try:
-        with open(path, 'rb') as f:
-            chunk = f.read(1024)
-        if b'\x00' in chunk:
-            return False
-        chunk.decode('utf-8', errors='strict')
-        return True
-    except Exception:
-        return False
-
-async def extract_archive(zip_path: str, dest_dir: str) -> list[str]:
-    def _do():
-        with zipfile.ZipFile(zip_path, 'r') as zf:
-            total = 0
-            count = 0
-            for info in zf.infolist():
-                if info.is_dir():
-                    continue
-                count += 1
-                if count > MAX_FILES:
-                    raise Exception("Слишком много файлов в архиве")
-                total += info.file_size
-                if total > MAX_TOTAL_UNPACKED:
-                    raise Exception("Распакованный архив слишком большой")
-                # Проверка на path traversal
-                target = _safe_join(dest_dir, info.filename)
-                if target is None:
-                    raise Exception(f"Небезопасный путь: {info.filename}")
-                os.makedirs(os.path.dirname(target), exist_ok=True)
-                with zf.open(info) as src, open(target, 'wb') as dst:
-                    shutil.copyfileobj(src, dst)
-        return _list_files(dest_dir)
-    return await asyncio.to_thread(_do)
-
-async def create_archive(source_dir: str, out_zip: str) -> None:
-    def _do():
-        with zipfile.ZipFile(out_zip, 'w', zipfile.ZIP_DEFLATED) as zf:
-            for root, dirs, files in os.walk(source_dir):
-                for f in files:
-                    full = os.path.join(root, f)
-                    rel = os.path.relpath(full, source_dir)
-                    zf.write(full, rel)
-    await asyncio.to_thread(_do)
-
-async def run_safe_command(base_dir: str, cmd: str) -> tuple[int, str]:
-    """Запускает whitelisted команду без shell."""
-    parts = cmd.strip().split()
-    if not parts:
-        return 1, "пустая команда"
-    prog = parts[0].lower()
-    if prog not in SAFE_COMMANDS:
-        return 1, f"команда '{prog}' не разрешена"
-    # никаких shell-метасимволов
-    for p in parts:
-        if any(ch in p for ch in (';', '&', '|', '`', '$', '<', '>', '\n')):
-            return 1, "метасимволы запрещены"
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            *parts,
-            cwd=base_dir,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15)
-        out = (stdout or b'').decode('utf-8', errors='replace')[:8000]
-        err = (stderr or b'').decode('utf-8', errors='replace')[:2000]
-        if err:
-            out += "\n[stderr]\n" + err
-        return proc.returncode or 0, out
-    except asyncio.TimeoutError:
-        return 1, "команда не завершилась за 15 сек"
-    except Exception as e:
-        return 1, f"ошибка: {e}"
-
-async def tool_edit_archive(message: telebot.types.Message, user_request: str,
-                            archive_bytes: bytes, filename: str) -> None:
-    """Полный цикл редактирования архива."""
-    user_id = message.from_user.id
-    chat_id = message.chat.id
-
-    status = await tg_bot.send_message(chat_id, "📦 Распаковываю архив...")
-
-    work_dir = tempfile.mkdtemp(prefix="kulsh_tools_")
-    tools_sessions[chat_id] = {"dir": work_dir, "user_id": user_id}
-
-    try:
-        # Скачиваем архив
-        arch_path = os.path.join(work_dir, "input.zip")
-        with open(arch_path, 'wb') as f:
-            f.write(archive_bytes)
-
-        # Распаковка
-        files = await extract_archive(arch_path, work_dir)
-        files_display = ", ".join(files[:30])
-        if len(files) > 30:
-            files_display += f" ... (+{len(files)-30})"
-
-        await tg_bot.edit_message_text(
-            f"📦 Распаковал архив\n\n📄 Файлы: {files_display}",
-            chat_id, status.message_id
-        )
-
-        # Читаем текстовые файлы
-        contents: dict[str, str] = {}
-        for rel in files[:50]:  # не больше 50 файлов
-            full = _safe_join(work_dir, rel)
-            if full and os.path.exists(full) and os.path.getsize(full) < MAX_FILE_SIZE:
-                if _is_text_file(full):
-                    try:
-                        with open(full, 'r', encoding='utf-8', errors='replace') as f:
-                            contents[rel] = f.read()
-                    except Exception:
-                        pass
-
-        files_context = "\n\n".join(
-            f"=== {fn} ===\n{content[:6000]}" for fn, content in contents.items()
-        )
-        if len(files_context) > 60000:
-            files_context = files_context[:60000] + "\n...[обрезано]"
-
-        await tg_bot.edit_message_text(
-            f"🧠 Анализирую {len(contents)} файлов...",
-            chat_id, status.message_id
-        )
-
-        # Запрос к AI
-        prompt = (
-            f"Пользователь отправил архив '{filename}' и попросил:\n\n{user_request}\n\n"
-            f"Содержимое архива:\n{files_context}\n\n"
-            "Верни JSON-объект строго такой структуры:\n"
-            '{"summary": "краткое описание того, что ты сделал (на русском, дружелюбно, в стиле Кульша)", '
-            '"files": {"путь_файла": "полное новое содержимое файла", ...}}\n\n'
-            "Включай в 'files' только изменённые/новые файлы. Не изменённые не включай. "
-            "Только JSON, без markdown, без пояснений."
-        )
-        raw = await ask_ai_async(
-            prompt=prompt,
-            system_instruction_override=(
-                "Ты — инструмент редактирования кода. Отвечай ТОЛЬКО валидным JSON с полями 'summary' и 'files'. "
-                "Никаких пояснений, markdown или текста до/после JSON."
-            ),
-            chat_id=chat_id, user_id=user_id, platform="tg"
-        )
-
-        try:
-            data = json.loads(clean_json_text(raw))
-        except Exception as e:
-            await tg_bot.edit_message_text(
-                f"❌ Не смог распарсить ответ ИИ: {e}",
-                chat_id, status.message_id
-            )
-            return
-
-        summary = data.get("summary", "готово")
-        new_files = data.get("files", {})
-
-        if not isinstance(new_files, dict) or not new_files:
-            await tg_bot.edit_message_text(
-                f"🤔 ИИ не предложил изменений. {summary}",
-                chat_id, status.message_id
-            )
-            return
-
-        await tg_bot.edit_message_text(
-            f"✏️ Редактирую {len(new_files)} файл(ов)...",
-            chat_id, status.message_id
-        )
-
-        # Применяем изменения
-        for rel, new_content in new_files.items():
-            full = _safe_join(work_dir, rel)
-            if full is None:
-                continue
-            os.makedirs(os.path.dirname(full), exist_ok=True)
-            with open(full, 'w', encoding='utf-8') as f:
-                f.write(new_content)
-
-        await tg_bot.edit_message_text(
-            "🗜 Собираю архив обратно...",
-            chat_id, status.message_id
-        )
-
-        out_zip = os.path.join(work_dir, f"edited_{filename or 'archive.zip'}")
-        await create_archive(work_dir, out_zip)
-        # Удаляем исходник и всё лишнее из архива
-        archive_basename = os.path.basename(out_zip)
-
-        await tg_bot.edit_message_text(
-            "📤 Отправляю готовый архив...",
-            chat_id, status.message_id
-        )
-
-        with open(out_zip, 'rb') as f:
-            await tg_bot.send_document(
-                chat_id,
-                InputFile(f, file_name=archive_basename),
-                caption=f"🍷🗿 {summary}"
-            )
-
-        await tg_bot.edit_message_text("✅ Готово", chat_id, status.message_id)
-
-    except Exception as e:
-        logger.error(f"tool_edit_archive error: {e}")
-        try:
-            await tg_bot.edit_message_text(f"❌ Ошибка: {e}", chat_id, status.message_id)
-        except Exception:
-            pass
-    finally:
-        # Очистка
-        try:
-            if work_dir and os.path.exists(work_dir):
-                shutil.rmtree(work_dir, ignore_errors=True)
-        except Exception:
-            pass
-        tools_sessions.pop(chat_id, None)
-
-async def tool_review_file(message: telebot.types.Message, user_request: str,
-                           file_bytes: bytes, filename: str) -> None:
-    """Просмотр/комментарий к текстовому файлу — бесплатно."""
-    user_id = message.from_user.id
-    chat_id = message.chat.id
-
-    try:
-        text = file_bytes.decode('utf-8', errors='replace')
-    except Exception:
-        await reply_tg_html(message, "не могу прочитать файл как текст")
-        return
-
-    if len(text) > MAX_FILE_SIZE:
-        text = text[:MAX_FILE_SIZE] + "\n...[обрезано]"
-
-    prompt = (
-        f"Пользователь отправил файл '{filename}' и просит:\n\n{user_request}\n\n"
-        f"Содержимое файла:\n```\n{text}\n```\n\n"
-        "Ответь в стиле Кульша: коротко разбери, что видишь, ответь на вопрос. "
-        "Если нужно предложить правки — предложи их в тексте, но файл не редактируй."
-    )
-    answer = await ask_ai_async(
-        prompt=prompt,
-        chat_id=chat_id, user_id=user_id, platform="tg"
-    )
-    await send_tg_ai_response(message, chat_id, user_id, answer)
-
-async def tool_console_command(message: telebot.types.Message, user_request: str,
-                               cmd: str) -> None:
-    """Выполнить разрешённую консольную команду в сессии инструментов."""
-    user_id = message.from_user.id
-    chat_id = message.chat.id
-    session = tools_sessions.get(chat_id)
-    if not session:
-        await reply_tg_html(message, "сначала загрузи архив, чтобы я мог работать в нём")
-        return
-    work_dir = session["dir"]
-    if not os.path.exists(work_dir):
-        await reply_tg_html(message, "рабочая папка потерялась, загрузи архив заново")
-        return
-
-    status = await tg_bot.send_message(chat_id, f"⚙️ Выполняю: {cmd}")
-
-    rc, out = await run_safe_command(work_dir, cmd)
-    result_str = f"Код: {rc}\n{out}" if out else f"Код: {rc} (пусто)"
-
-    prompt = (
-        f"Пользователь попросил: {user_request}\n"
-        f"Выполнена команда: `{cmd}`\n"
-        f"Результат:\n```\n{result_str[:4000]}\n```\n\n"
-        "Коротко прокомментируй результат в стиле Кульша. Не редактируй файлы."
-    )
-    answer = await ask_ai_async(
-        prompt=prompt,
-        chat_id=chat_id, user_id=user_id, platform="tg"
-    )
-    await tg_bot.edit_message_text(f"✅ {cmd}\n{out[:500]}", chat_id, status.message_id)
-    await send_tg_ai_response(message, chat_id, user_id, answer)
-
-# ============================================================
-# TG: МЕДИА/ДОКУМЕНТЫ ОБРАБОТЧИК
-# ============================================================
-@tg_bot.message_handler(content_types=['photo', 'video', 'animation', 'document', 'sticker'])
-async def handle_tg_media(message: telebot.types.Message) -> None:
-    if message.from_user is None:
-        return
-    chat_id = message.chat.id
-    user_id = message.from_user.id
-    is_dm = message.chat.type == 'private'
-    caption = message.caption or ""
-    cl = caption.lower()
-    chat_key = f"tg_{chat_id}"
-
-    display_name = message.from_user.full_name or "Unknown"
-    username = message.from_user.username or ""
-
-    media_tag = None
-    file_id = None
-    media_type = None
-    file_name = None
-
-    if message.photo:
-        file_id = message.photo[-1].file_id; media_type = "photo"; media_tag = "[фото]"
-    elif message.video:
-        file_id = message.video.file_id; media_type = "video"; media_tag = "[видео]"
-    elif message.animation:
-        file_id = message.animation.file_id; media_type = "animation"; media_tag = "[гифка]"
-    elif message.document:
-        file_id = message.document.file_id
-        media_type = "document"
-        file_name = message.document.file_name or "file"
-        media_tag = f"[док: {file_name}]"
-    elif message.sticker:
-        file_id = message.sticker.file_id; media_type = "sticker"; media_tag = "[стикер]"
-
-    if file_id and media_tag:
-        add_media_history(chat_key, None, media_type, display_name, file_id=file_id, caption=caption)
-
-    # --- BATTLE ---
-    if is_battle_command(caption) and message.photo:
-        if message.media_group_id:
-            mgid = message.media_group_id
-            if mgid not in battle_photos:
-                battle_photos[mgid] = []
-                battle_media_groups[mgid] = asyncio.create_task(
-                    process_battle_media_group(mgid, chat_id, user_id)
-                )
-            img_bytes = await get_tg_file_bytes(tg_bot, message.photo[-1].file_id)
-            battle_photos[mgid].append(img_bytes)
-        else:
-            await reply_tg_html(message, "Для баттла нужно два фото. Отправьте их одним альбомом.")
-        return
-
-    if message.media_group_id and message.media_group_id in battle_photos and message.photo:
-        img_bytes = await get_tg_file_bytes(tg_bot, message.photo[-1].file_id)
-        battle_photos[message.media_group_id].append(img_bytes)
-        return
-
-    # --- LOOKSMAXXING ---
-    is_looksmaxxing = (
-        is_looksmaxxing_command(caption) or
-        (message.reply_to_message and message.reply_to_message.from_user
-         and message.reply_to_message.from_user.id == (tg_bot.user.id if tg_bot.user else 0)
-         and message.reply_to_message.text
-         and is_looksmaxxing_command(message.reply_to_message.text)) or
-        user_looksmaxxing_state.get(chat_id, False)
-    )
-
-    if is_looksmaxxing and message.photo:
-        user_looksmaxxing_state[chat_id] = False
-        status = await tg_bot.send_message(chat_id, "⏳ Анализирую внешность...")
-        try:
-            img_bytes = await get_tg_file_bytes(tg_bot, message.photo[-1].file_id)
-            include_advice = ("совет" in cl or "advice" in cl or
-                              (message.reply_to_message and message.reply_to_message.text
-                               and ("совет" in message.reply_to_message.text.lower()
-                                    or "advice" in message.reply_to_message.text.lower())))
-            cfg = get_user_config("tg", chat_id, user_id)
-            lang = cfg.get("language", "ru")
-            theme = cfg.get("theme", "dark")
-            ai_data = await get_looksmaxxing_data(img_bytes, include_advice, lang=lang)
-            if "error" in ai_data:
-                await tg_bot.edit_message_text(f"❌ {ai_data['error']}", chat_id, status.message_id)
-                return
-            infographic = await create_infographic(img_bytes, ai_data, theme=theme, lang=lang)
-            report_text = (
-                f"📊 <b>РЕЗУЛЬТАТЫ LOOKSMAXXING</b>\n\n"
-                f"🧬 <b>Пол:</b> {ai_data.get('gender','?')}\n"
-                f"📈 <b>PSL:</b> <code>{ai_data.get('psl','?')}/8.0</code>\n"
-                f"👑 <b>Tier:</b> <code>{ai_data.get('tier','?')}</code>\n"
-            )
-            if ai_data.get("potential"):
-                report_text += f"🔮 <b>Потенциал:</b> <code>{ai_data['potential']}</code>\n"
-            report_text += f"\n📝 <b>Анализ:</b>\n{html.escape(ai_data.get('summary',''))}"
-            if include_advice and ai_data.get("advice"):
-                report_text += f"\n\n⚡ <b>Рекомендации:</b>\n{html.escape(ai_data['advice'])}"
-            try:
-                await tg_bot.send_photo(chat_id, InputFile(infographic), caption="📊 Результаты looksmaxxing")
-            except Exception as e:
-                logger.error(f"Ошибка отправки инфографики: {e}")
-            for chunk in [report_text[i:i+3900] for i in range(0, len(report_text), 3900)]:
-                try:
-                    await tg_bot.send_message(chat_id, chunk, parse_mode='HTML')
-                except Exception:
-                    await tg_bot.send_message(chat_id, re.sub(r'<[^>]+>', '', chunk))
-            await tg_bot.delete_message(chat_id, status.message_id)
-            add_user_memory(chat_key, "TG", display_name, username, user_id,
-                            f"[looksmaxxing] {caption}", ["photo"], message_id=message.message_id)
-            add_bot_memory(chat_key, "[looksmaxxing отчёт]")
-        except Exception as e:
-            logger.error(f"Ошибка в looksmaxxing: {e}")
-            await reply_tg_html(message, f"🌋 Ошибка: {e}")
-        return
-
-    # --- TOOLS (только ЛС) ---
-    if is_dm and message.document:
-        # Архив или текстовый файл
-        doc_name = (message.document.file_name or "").lower()
-        is_archive = doc_name.endswith(".zip")
-
-        # Проверяем, есть ли запрос
-        user_request = caption.strip() or "отредактируй что-нибудь полезное"
-        credits = get_user_credits("tg", user_id)
-
-        try:
-            file_bytes = await get_tg_file_bytes(tg_bot, message.document.file_id)
-        except Exception as e:
-            await reply_tg_html(message, f"не смог скачать файл: {e}")
-            return
-
-        if is_archive:
-            if credits < COST_ARCHIVE_EDIT:
-                await reply_tg_html(
-                    message,
-                    f"💎 Недостаточно кредитов для редактирования архива.\n"
-                    f"Нужно {COST_ARCHIVE_EDIT}, у тебя {credits}/{DAILY_CREDITS}. Приходи завтра 🍷🗿"
-                )
-                return
-            spend_credits("tg", user_id, COST_ARCHIVE_EDIT)
-            await tool_edit_archive(message, user_request, file_bytes, message.document.file_name or "archive.zip")
-            return
-        else:
-            # Текстовый файл — бесплатно
-            await tool_review_file(message, user_request, file_bytes, message.document.file_name or "file")
-            return
-
-    # --- ПРОСТОЕ МЕДИА С ТЕКСТОМ ---
-    is_reply_to_bot = (message.reply_to_message and message.reply_to_message.from_user
-                       and message.reply_to_message.from_user.id == (tg_bot.user.id if tg_bot.user else 0))
-    addressed = bool(is_reply_to_bot or re.search(r'(?i)\bкульш\b', caption) or is_dm)
-
-    if not addressed:
-        add_user_memory(chat_key, "TG", display_name, username, user_id, caption or "",
-                        [media_tag or "медиа"], message_id=message.message_id)
-        if await should_random_reply("tg", chat_id, user_id):
-            answer = await ask_ai_async(
-                context_type="observer",
-                messages=memory_to_messages(get_chat_memory(chat_key)),
-                chat_id=chat_id, user_id=user_id, platform="tg",
-            )
-            if answer and answer.strip() and answer.strip().upper() != "НЕТ":
-                last_random_reply[chat_key] = time.time()
-                await send_tg_ai_response(message, chat_id, user_id, answer)
-        return
-
-    await tg_bot.send_chat_action(chat_id, 'typing')
-    image_bytes = None
-    image_mime = "image/jpeg"
-    try:
-        if message.photo:
-            image_bytes = await get_tg_file_bytes(tg_bot, message.photo[-1].file_id)
-        elif message.animation:
-            vid = await get_tg_file_bytes(tg_bot, message.animation.file_id)
-            frame = await extract_video_frame(vid, ".mp4")
-            if frame: image_bytes = frame
-        elif message.video:
-            vid = await get_tg_file_bytes(tg_bot, message.video.file_id)
-            frame = await extract_video_frame(vid, ".mp4")
-            if frame: image_bytes = frame
-        elif message.document and message.document.mime_type and message.document.mime_type.startswith("image/"):
-            image_bytes = await get_tg_file_bytes(tg_bot, message.document.file_id)
-            image_mime = message.document.mime_type
-    except Exception as e:
-        logger.warning(f"Не смог скачать медиа: {e}")
-
-    prompt = caption.strip() or "че на этом?"
-    add_user_memory(chat_key, "TG", display_name, username, user_id,
-                    f"{prompt} [с медиа: {media_tag}]", [media_tag or "медиа"],
-                    message_id=message.message_id)
-    messages = memory_to_messages(get_chat_memory(chat_key))
-    answer = await ask_ai_async(messages=messages, image_bytes=image_bytes,
-                                image_mime=image_mime, chat_id=chat_id,
-                                user_id=user_id, platform="tg")
-    await send_tg_ai_response(message, chat_id, user_id, answer)
-    asyncio.create_task(extract_memory(chat_key, f"{display_name}: [медиа] {caption}", answer))
-
-# ---- Battle media group processing ----
 async def process_battle_media_group(media_group_id: str, tg_chat_id: int, user_id: int):
     for _ in range(10):
         if media_group_id in battle_photos and len(battle_photos[media_group_id]) >= 2:
@@ -2906,12 +2760,12 @@ async def process_battle_media_group(media_group_id: str, tg_chat_id: int, user_
     photos = battle_photos.pop(media_group_id)
     battle_media_groups.pop(media_group_id, None)
     photo1_bytes, photo2_bytes = photos[:2]
-
     cfg = get_user_config("tg", tg_chat_id, user_id)
-    lang = cfg.get("language", "ru")
-    theme = cfg.get("theme", "dark")
-
-    await tg_bot.send_chat_action(tg_chat_id, 'typing')
+    lang = cfg.get("language", "ru"); theme = cfg.get("theme", "dark")
+    try:
+        await tg_bot.send_chat_action(tg_chat_id, 'typing')
+    except Exception:
+        pass
     status = await tg_bot.send_message(tg_chat_id, "⚔️ Сравниваю лица...")
     ai_data = await get_battle_data(photo1_bytes, photo2_bytes, lang=lang)
     if "error" in ai_data:
@@ -2933,7 +2787,7 @@ async def process_battle_media_group(media_group_id: str, tg_chat_id: int, user_
     try:
         await tg_bot.send_photo(tg_chat_id, InputFile(battle_img), caption="⚔️ Результат баттла")
     except Exception as e:
-        logger.error(f"Battle infra error: {e}")
+        logger.error(f"battle infra: {e}")
     try:
         await tg_bot.send_message(tg_chat_id, report_text, parse_mode='HTML')
     except Exception:
@@ -2941,12 +2795,64 @@ async def process_battle_media_group(media_group_id: str, tg_chat_id: int, user_
     await tg_bot.delete_message(tg_chat_id, status.message_id)
 
 # ============================================================
-# DISCORD
+# DISCORD HANDLERS
 # ============================================================
-intents = discord.Intents.default()
-intents.message_content = True
-ds_bot = discord.Client(intents=intents)
-AUTHORIZED_UPDATERS = [735217033867821098, 1193627300797878362]
+async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: int, answer_raw: str) -> None:
+    cfg = get_user_config("ds", chat_id, user_id)
+    separate_enabled = cfg.get("separate_enabled", True)
+    clean_segments, markers = process_ai_response(answer_raw, separate_enabled=separate_enabled)
+
+    # avatar/recall
+    extra_segments: list[str] = []
+    if "avatar" in markers:
+        markers.remove("avatar")
+        try:
+            ar = await get_avatar_description_ds(message, chat_id, user_id)
+            if ar:
+                extra_segments.extend(clean_extra_text(ar))
+        except Exception as e:
+            logger.warning(f"DS avatar: {e}")
+    if "recall_media" in markers:
+        markers.remove("recall_media")
+        # Упрощённая обработка — просто выведем список
+        history = list(chat_media_history.get(f"ds_{chat_id}", []))
+        if history:
+            last = history[-3:]
+            lines = [f"- {it.get('type','media')} от {it.get('sender','?')}: {(it.get('caption') or '')[:100]}"
+                     for it in last]
+            extra_segments.append("Недавние медиа:\n" + "\n".join(lines))
+
+    all_segments = clean_segments + extra_segments
+    if not all_segments:
+        # Только стикеры/гифки
+        for m in markers:
+            if m in ("sticker", "gif"):
+                try:
+                    await execute_utility_ds(message, m, chat_id, user_id)
+                except Exception as e:
+                    logger.warning(f"ds utility: {e}")
+        return
+
+    for i, seg in enumerate(all_segments):
+        try:
+            await typing_with_delay_ds(message.channel, seg)
+        except Exception:
+            pass
+        if i == 0:
+            try:
+                await message.reply(seg)
+            except Exception:
+                await message.channel.send(seg)
+        else:
+            await message.channel.send(seg)
+        add_bot_memory(f"ds_{chat_id}", seg)
+
+    for m in markers:
+        if m in ("sticker", "gif"):
+            try:
+                await execute_utility_ds(message, m, chat_id, user_id)
+            except Exception as e:
+                logger.warning(f"ds utility {m}: {e}")
 
 async def ds_handle_config(message: discord.Message, user_id: int) -> None:
     chat_id = message.channel.id
@@ -2954,7 +2860,6 @@ async def ds_handle_config(message: discord.Message, user_id: int) -> None:
         await message.reply("только админы могут менять конфиг")
         return
     cfg = get_user_config("ds", chat_id, user_id)
-    lang = cfg.get("language", "ru")
     series = "✅" if cfg["series_reminder_enabled"] else "❌"
     stickers = "✅" if cfg["stickers_enabled"] else "❌"
     sep = "✅" if cfg.get("separate_enabled", True) else "❌"
@@ -2970,7 +2875,7 @@ async def ds_handle_config(message: discord.Message, user_id: int) -> None:
     embed.add_field(name="🎛 Температура", value=str(cfg.get("temperature", 0.9)), inline=True)
     embed.add_field(name="📝 Промпт", value=prompt[:1000], inline=False)
     embed.add_field(
-        name="Что можно менять",
+        name="Что менять",
         value=(
             "`кульш конфиг серия вкл|выкл`\n"
             "`кульш конфиг стикеры вкл|выкл`\n"
@@ -2980,8 +2885,7 @@ async def ds_handle_config(message: discord.Message, user_id: int) -> None:
             "`кульш конфиг промпт <текст | сброс>`\n"
             "`кульш конфиг модель` — список\n"
             "`кульш конфиг модель <номер | авто>`"
-        ),
-        inline=False,
+        ), inline=False,
     )
     await message.reply(embed=embed)
 
@@ -2992,10 +2896,9 @@ async def ds_handle_config_param(message: discord.Message, user_id: int, parts: 
         await ds_handle_config(message, user_id); return
     param = parts[2].lower()
     val = parts[3].lower() if len(parts) >= 4 else ""
-
     if param == "серия":
         cfg["series_reminder_enabled"] = val in ("вкл", "on", "1")
-        await message.reply("🎬 Авто-серия: " + ("вкл" if cfg["series_reminder_enabled"] else "выкл"))
+        await message.reply("🎬 Серия: " + ("вкл" if cfg["series_reminder_enabled"] else "выкл"))
     elif param == "стикеры":
         cfg["stickers_enabled"] = val in ("вкл", "on", "1")
         await message.reply("🎨 Стикеры: " + ("вкл" if cfg["stickers_enabled"] else "выкл"))
@@ -3025,8 +2928,7 @@ async def ds_handle_config_param(message: discord.Message, user_id: int, parts: 
     elif param == "модель":
         if not val:
             lines = [f"`{i}` — {MODEL_DISPLAY.get(m, m)}" for i, m in enumerate(MODEL_LIST)]
-            cur = model_display_name(cfg.get("model"))
-            await message.reply(f"🧠 Текущая: {cur}\n\n" + "\n".join(lines))
+            await message.reply(f"🧠 Текущая: {model_display_name(cfg.get('model'))}\n\n" + "\n".join(lines))
         elif val in ("авто", "auto"):
             cfg["model"] = None
             await message.reply("🧠 Модель: авто")
@@ -3041,40 +2943,6 @@ async def ds_handle_config_param(message: discord.Message, user_id: int, parts: 
             except ValueError:
                 await message.reply("❌ Введите номер или 'авто'.")
 
-async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: int, answer_raw: str) -> None:
-    cfg = get_user_config("ds", chat_id, user_id)
-    separate_enabled = cfg.get("separate_enabled", True)
-    clean_segments, markers = process_ai_response(answer_raw, separate_enabled=separate_enabled)
-    extra_segments: list[str] = []
-    if "sticker" in markers or "gif" in markers:
-        markers = [m for m in markers if m not in ("sticker", "gif")]
-    all_segments = clean_segments + extra_segments
-
-    if not all_segments:
-        return
-    for i, seg in enumerate(all_segments):
-        try:
-            await typing_with_delay_ds(message.channel, seg)
-        except Exception:
-            pass
-        if i == 0:
-            try:
-                await message.reply(seg)
-            except Exception:
-                await message.channel.send(seg)
-        else:
-            await message.channel.send(seg)
-        add_bot_memory(f"ds_{chat_id}", seg)
-
-    for m in markers:
-        if m in ("sticker", "gif"):
-            try:
-                gif_url = random.choice(GIF_POOL)
-                embed = discord.Embed().set_image(url=gif_url)
-                await message.reply(embed=embed)
-            except Exception as e:
-                logger.error(f"gif error: {e}")
-
 @ds_bot.event
 async def on_message(message: discord.Message) -> None:
     if message.author == ds_bot.user or message.author.bot:
@@ -3083,7 +2951,6 @@ async def on_message(message: discord.Message) -> None:
     chat_id = message.author.id if is_dm else message.guild.id
     user_id = message.author.id
     content_lower = message.content.lower()
-
     display_name = getattr(message.author, "display_name", message.author.name)
     username = message.author.name
 
@@ -3116,7 +2983,7 @@ async def on_message(message: discord.Message) -> None:
     if content_lower.startswith("кульш донаты"):
         top = get_top_donators()
         if not top:
-            await message.reply("Пока никто не донатил. Будь первым 🍷🗿\nhttps://kulsh-ai.web.app/donate.html"); return
+            await message.reply("Пока никто не донатил 🍷🗿\nhttps://kulsh-ai.web.app/donate.html"); return
         embed = discord.Embed(title="🏆 Топ донатеров", color=0x10b981)
         for i, (name, total) in enumerate(top, 1):
             embed.add_field(name=f"{i}. {name}", value=f"{total} очков", inline=False)
@@ -3128,20 +2995,7 @@ async def on_message(message: discord.Message) -> None:
             await message.reply("не смог получить аватарку"); return
         for seg in clean_extra_text(raw):
             try: await message.channel.send(seg)
-            except Exception as e: logger.warning(f"DS avatar segments: {e}")
-        return
-
-    if content_lower.startswith("кульш вспомни медиа") or "!recall_media" in content_lower:
-        n = 3
-        for p in message.content.split():
-            if p.isdigit(): n = min(int(p), 10); break
-        # Простой recall для Discord
-        history = list(chat_media_history.get(f"ds_{chat_id}", []))
-        if not history:
-            await message.reply("не нашёл ничего в памяти"); return
-        last = history[-n:]
-        lines = [f"- {it.get('type','media')} от {it.get('sender','?')}: {(it.get('caption') or '')[:100]}" for it in last]
-        await message.channel.send("Недавние медиа:\n" + "\n".join(lines))
+            except Exception as e: logger.warning(f"DS avatar: {e}")
         return
 
     if not is_dm and "кульш логи" in content_lower:
@@ -3185,7 +3039,7 @@ async def on_message(message: discord.Message) -> None:
                 vc.listen(sink)
                 setattr(vc, "_recognition_sink", sink)
         except Exception as e:
-            logger.error(f"Ошибка войса: {e}")
+            logger.error(f"voice: {e}")
             await message.reply("не могу зайти.")
         return
 
@@ -3210,7 +3064,7 @@ async def on_message(message: discord.Message) -> None:
     if is_battle_command(message.content) and len(message.attachments) == 0:
         add_user_memory(f"ds_{chat_id}", "DS", display_name, username, user_id,
                         message.content, message_id=message.id)
-        await message.reply("Для баттла пришлите два фото в одном сообщении.")
+        await message.reply("Для баттла пришлите два фото.")
         return
 
     image_attachments = [a for a in message.attachments if a.content_type and a.content_type.startswith('image/')]
@@ -3224,8 +3078,7 @@ async def on_message(message: discord.Message) -> None:
                 p1 = await download_image_bytes(image_attachments[0].url)
                 p2 = await download_image_bytes(image_attachments[1].url)
                 cfg = get_user_config("ds", chat_id, user_id)
-                lang = cfg.get("language", "ru")
-                theme = cfg.get("theme", "dark")
+                lang = cfg.get("language", "ru"); theme = cfg.get("theme", "dark")
                 ai_data = await get_battle_data(p1, p2, lang=lang)
                 if "error" in ai_data:
                     await status.edit(content=f"❌ {ai_data['error']}"); return
@@ -3248,7 +3101,7 @@ async def on_message(message: discord.Message) -> None:
                                 "[battle]", message_id=message.id)
                 add_bot_memory(f"ds_{chat_id}", "[battle результат]")
             except Exception as e:
-                logger.error(f"DS battle error: {e}")
+                logger.error(f"DS battle: {e}")
                 await status.edit(content=f"Ошибка: {e}")
         return
 
@@ -3259,8 +3112,7 @@ async def on_message(message: discord.Message) -> None:
                 img_bytes = await download_image_bytes(image_attachments[0].url)
                 include_advice = "совет" in content_lower or "advice" in content_lower
                 cfg = get_user_config("ds", chat_id, user_id)
-                lang = cfg.get("language", "ru")
-                theme = cfg.get("theme", "dark")
+                lang = cfg.get("language", "ru"); theme = cfg.get("theme", "dark")
                 ai_data = await get_looksmaxxing_data(img_bytes, include_advice, lang=lang)
                 if "error" in ai_data:
                     await message.reply(f"❌ {ai_data['error']}"); return
@@ -3281,7 +3133,7 @@ async def on_message(message: discord.Message) -> None:
                 if len(report) > 1900:
                     await message.channel.send(report[1900:])
             except Exception as e:
-                logger.error(f"DS looksmaxxing error: {e}")
+                logger.error(f"DS looksmaxxing: {e}")
                 await message.reply(f"Ошибка: {e}")
         return
 
@@ -3319,7 +3171,7 @@ async def on_message(message: discord.Message) -> None:
                 await send_ds_ai_response(message, chat_id, user_id, answer)
                 asyncio.create_task(extract_memory(f"ds_{chat_id}", f"{display_name}: [медиа]", answer))
             except Exception as e:
-                logger.info(f"DS media error: {e}")
+                logger.info(f"DS media: {e}")
                 await message.reply("не могу глянуть, сломалась")
         return
 
@@ -3347,7 +3199,7 @@ async def on_message(message: discord.Message) -> None:
                 last_random_reply[f"ds_{chat_id}"] = time.time()
                 await send_ds_ai_response(message, chat_id, user_id, answer)
         except Exception as e:
-            logger.warning(f"DS random reply fail: {e}")
+            logger.warning(f"DS random reply: {e}")
 
 # ============================================================
 # DONATION ALERTS
@@ -3373,21 +3225,21 @@ async def send_donation_alert(platform: str, name: str, amount: int, message_tex
 
 async def donation_alerts_listener() -> None:
     if not DONATIONALERTS_TOKEN:
-        logger.info("🔕 DonationAlerts токен не задан, слушатель не запущен.")
+        logger.info("🔕 DonationAlerts токен не задан.")
         return
     await ds_bot.wait_until_ready()
     sio = socketio.AsyncClient(query={'token': DONATIONALERTS_TOKEN})
 
     @sio.event
     async def connect() -> None:
-        logger.info("🔌 Подключились к DonationAlerts Socket.IO")
+        logger.info("🔌 DonationAlerts подключён")
 
     @sio.event
     async def disconnect() -> None:
-        logger.warning("🔌 Отключились от DonationAlerts")
+        logger.warning("🔌 DonationAlerts отключён")
 
     @sio.on('donation')
-    async def on_donation(data: dict[str, Any]) -> None:
+    async def on_donation(data: dict) -> None:
         try:
             amount = float(data.get('amount', 0))
             currency = data.get('currency', 'RUB')
@@ -3396,21 +3248,21 @@ async def donation_alerts_listener() -> None:
             points = int(amount)
             username = data.get('username', 'Аноним')
             message = data.get('message', '')
-            logger.info(f"💰 DonationAlerts: {username} → {points}")
+            logger.info(f"💰 {username} → {points}")
             add_donation('ds', 0, points, name=username)
             await send_donation_alert('ds', username, points, message)
         except Exception as e:
-            logger.error(f"DonationAlerts error: {e}")
+            logger.error(f"DA error: {e}")
 
     try:
         await sio.connect('https://socket.donationalerts.ru:443',
                           transports=['websocket'], ssl_verify=False)
         await sio.wait()
     except Exception as e:
-        logger.error(f"Не подключились к DonationAlerts: {e}")
+        logger.error(f"DA connect fail: {e}")
 
 # ============================================================
-# VOICE
+# VOICE SINK
 # ============================================================
 if VOICE_RECOGNITION_ENABLED and VOICE_RECV_AVAILABLE:
     class RecognitionSink(voice_recv.AudioSink):
@@ -3447,7 +3299,7 @@ if VOICE_RECOGNITION_ENABLED and VOICE_RECV_AVAILABLE:
             except sr.UnknownValueError:
                 return None
             except Exception as e:
-                logger.error(f"Ошибка распознавания: {e}")
+                logger.error(f"recognize: {e}")
                 return None
 
         async def wait_and_process(self, user_id, user_name):
@@ -3470,11 +3322,6 @@ else:
         pass
 
 # ============================================================
-# ИНИЦИАЛИЗАЦИЯ БОТОВ
-# ============================================================
-tg_bot = AsyncTeleBot(TG_TOKEN)
-
-# ============================================================
 # TTS
 # ============================================================
 async def say_in_voice(voice_client, text):
@@ -3488,22 +3335,21 @@ async def say_in_voice(voice_client, text):
             voice_client.stop()
         voice_client.play(discord.FFmpegPCMAudio(filename))
     except Exception as e:
-        logger.error(f"Ошибка TTS: {e}")
+        logger.error(f"TTS: {e}")
 
 # ============================================================
-# ЦИКЛИЧЕСКИЕ ЗАДАЧИ
+# LOOPS
 # ============================================================
 async def random_post_loop() -> None:
     while True:
         await asyncio.sleep(random.randint(3600, 14400))
         chat_key = f"tg_{TG_TARGET_CHAT}"
-        # Ищем любого пользователя с включёнными random_messages (по умолчанию)
         memory = get_chat_memory(chat_key)
         try:
             if memory:
                 answer = await ask_ai_async(
-                    prompt=("Посмотри на историю чата. Если хочешь что-то добавить или пошутить, напиши одно короткое "
-                            "сообщение. Если нет — ответь ровно 'НЕТ'."),
+                    prompt=("Посмотри на историю чата. Если хочешь что-то добавить или пошутить, напиши одно "
+                            "короткое сообщение. Если нет — ответь ровно 'НЕТ'."),
                     context_type="observer",
                     messages=memory_to_messages(memory),
                     chat_id=TG_TARGET_CHAT, user_id=0, platform="tg",
@@ -3514,16 +3360,15 @@ async def random_post_loop() -> None:
             if not answer or not answer.strip() or answer.strip().upper() == "НЕТ":
                 continue
             segments, markers = process_ai_response(answer, separate_enabled=True)
-            markers = [m for m in markers if m in ("sticker", "gif")]
             for seg in segments:
                 await send_tg_html(TG_TARGET_CHAT, seg)
                 add_bot_memory(chat_key, seg)
             for m in markers:
-                try:
-                    if m == "sticker":
+                if m == "sticker":
+                    try:
                         await tg_bot.send_sticker(TG_TARGET_CHAT, random.choice(STICKER_POOL))
-                except Exception as e:
-                    logger.warning(f"random_post utility: {e}")
+                    except Exception as e:
+                        logger.warning(f"random_post sticker: {e}")
         except Exception as e:
             logger.info(f"random_post_loop: {e}")
 
@@ -3531,7 +3376,7 @@ async def series_reminder_loop() -> None:
     await ds_bot.wait_until_ready()
     channel = cast(discord.TextChannel, ds_bot.get_channel(DS_SERIES_CHANNEL_ID))
     if not channel:
-        logger.error("Канал для напоминаний о серии не найден")
+        logger.error("Канал серии не найден")
         return
     while True:
         try:
@@ -3539,21 +3384,13 @@ async def series_reminder_loop() -> None:
                       "Одно короткое сообщение в стиле Кульша.")
             answer = await ask_ai_async(prompt=prompt, context_type="default",
                                         chat_id=DS_SERIES_CHANNEL_ID, user_id=0, platform="ds")
-            segments, markers = process_ai_response(answer, separate_enabled=True)
-            markers = [m for m in markers if m in ("sticker", "gif")]
+            segments, _ = process_ai_response(answer, separate_enabled=True)
             if segments:
                 await channel.send(f"<@{DS_SERIES_TARGET_USER_ID}> {segments[0]}")
                 for seg in segments[1:]:
                     await channel.send(seg)
-            for m in markers:
-                try:
-                    gif_url = random.choice(GIF_POOL)
-                    embed = discord.Embed().set_image(url=gif_url)
-                    await channel.send(embed=embed)
-                except Exception as e:
-                    logger.warning(f"series utility: {e}")
         except Exception as e:
-            logger.error(f"Ошибка серии: {e}")
+            logger.error(f"series_reminder_loop: {e}")
         await asyncio.sleep(86400)
 
 # ============================================================
@@ -3564,7 +3401,7 @@ async def main() -> None:
 
     @ds_bot.event
     async def on_ready() -> None:
-        logger.info(f'Discord бот {ds_bot.user} запущен, discord.py {discord.__version__}')
+        logger.info(f'Discord {ds_bot.user} запущен, discord.py {discord.__version__}')
         if not VOICE_RECOGNITION_ENABLED:
             logger.info("ℹ️ Распознавание голоса отключено")
         asyncio.create_task(series_reminder_loop())
