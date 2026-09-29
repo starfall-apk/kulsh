@@ -1,5 +1,8 @@
 # Kulsh GPT | v2.30.1 (fixed init, streaming, tools, per-user config, corrected tiers)
-# by starfall-apk, pomidorka1515
+# by (main author):
+#     starfall-apk
+# coauthor & bot hosting:
+#     pomidorka1515
 
 import asyncio
 import aiohttp
