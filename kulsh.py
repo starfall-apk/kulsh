@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.30.1 (fixed init, streaming, tools, per-user config, corrected tiers)
+# Kulsh GPT | v2.31.0 (mutual-exclusion streaming/split, safe git rollback, streaming persistence, colored buttons verified, rich messages verified)
 # by (main author):
 #     starfall-apk
 # coauthor & bot hosting:
@@ -24,6 +24,7 @@ import time
 import zipfile
 import shutil
 import io
+import sys
 from datetime import timezone, timedelta
 from logging.handlers import RotatingFileHandler
 from typing import Any, cast
@@ -293,6 +294,9 @@ def get_user_config(platform: str, chat_id: int, user_id: int) -> dict:
         for k, v in DEFAULT_USER_CONFIG.items():
             if k not in cfg:
                 cfg[k] = v
+    # Инвариант взаимного исключения: стриминг и разбивка не могут быть одновременно включены
+    if cfg.get("separate_enabled", True) and cfg.get("streaming_enabled", False):
+        cfg["streaming_enabled"] = False
     return cfg
 
 def get_chat_key(platform: str, chat_id: int) -> str:
@@ -503,7 +507,7 @@ async def typing_with_delay_ds(channel, text: str, delay: float | None = None) -
         elapsed += step
 
 # ============================================================
-# RICH MESSAGE (Bot API 10.1)
+# RICH MESSAGE (Bot API 10.1+)
 # ============================================================
 def _md_inline(text: str) -> str:
     t = html.escape(text, quote=False)
@@ -654,6 +658,7 @@ async def send_rich_message(chat_id: int, text: str, reply_to: int | None = None
         return False
 
 async def stream_draft(chat_id: int, draft_id: int, text: str) -> bool:
+    """Стриминг черновика через sendMessageDraft (только ЛС)."""
     if not premium_functions_enabled:
         return False
     payload = {"chat_id": chat_id, "draft_id": draft_id, "text": text}
@@ -955,6 +960,9 @@ def process_ai_response(raw: str, separate_enabled: bool = True) -> tuple[list[s
     if separate_enabled:
         segments = split_by_separator(raw_clean)
     else:
+        # Отключено — вырезаем маркеры !separate, но НЕ разбиваем текст
+        raw_clean = SEPARATOR_PATTERN.sub(' ', raw_clean)
+        raw_clean = re.sub(r'[ \t]{2,}', ' ', raw_clean).strip()
         segments = [raw_clean]
     clean_segments = [s.strip() for s in segments if s and s.strip()]
     return clean_segments, markers
@@ -963,7 +971,10 @@ def clean_extra_text(raw: str) -> list[str]:
     if not raw:
         return []
     cleaned, _ = extract_utility_markers(raw)
-    return [s.strip() for s in split_by_separator(cleaned) if s and s.strip()]
+    # Вырезаем маркеры разделителя, чтобы они не попали в текст
+    cleaned = SEPARATOR_PATTERN.sub(' ', cleaned)
+    cleaned = re.sub(r'[ \t]{2,}', ' ', cleaned).strip()
+    return [s.strip() for s in cleaned.split('\n\n') if s and s.strip()]
 
 # ============================================================
 # STICKERS/GIFS
@@ -1544,9 +1555,13 @@ async def get_battle_data(p1: bytes, p2: bytes, lang: str = "en") -> dict[str, A
         return {"error": "Could not parse AI response as JSON."}
 
 # ============================================================
-# STYLED BUTTON
+# STYLED BUTTON (Bot API 10.3 — цвета кнопок: primary/success/danger)
 # ============================================================
 class StyledButton(InlineKeyboardButton):
+    """
+    Кнопка с поддержкой Bot API 10.3+ параметра style ("danger" / "success" / "primary").
+    В сериализации pyTelegramBotAPI переопределённый to_dict() добавляет поле 'style'.
+    """
     def __init__(self, text: str, style: str | None = None, **kwargs):
         super().__init__(text, **kwargs)
         self.style = style
@@ -1725,6 +1740,9 @@ async def _edit_or_send(call: telebot.types.CallbackQuery, text: str, kb: Inline
     except Exception as e:
         logger.warning(f"edit_message_text fail: {e}")
 
+MUTEX_SEP_STREAM_RU = "«Разбивка» и «Стриминг» взаимно исключаемы. Сначала отключи вторую настройку."
+MUTEX_SEP_STREAM_EN = "«Split» and «Streaming» are mutually exclusive. Disable the other first."
+
 @tg_bot.callback_query_handler(func=lambda call: call.data.startswith("cfg:"))
 async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
     owner = config_msg_owners.get(call.message.message_id)
@@ -1833,13 +1851,25 @@ async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
         await tg_bot.answer_callback_query(call.id, _localize(lang, "Готово ✅", "Done ✅"))
         return
 
+    # ---- Взаимоисключающие: разбивка <-> стриминг ----
     if action == "separate":
-        cfg["separate_enabled"] = not cfg.get("separate_enabled", True)
+        new_val = not cfg.get("separate_enabled", True)
+        if new_val and cfg.get("streaming_enabled", False):
+            # Показываем короткое всплывающее уведомление сверху, БЕЗ отдельного сообщения
+            mutex_text = MUTEX_SEP_STREAM_RU if lang == "ru" else MUTEX_SEP_STREAM_EN
+            await tg_bot.answer_callback_query(call.id, mutex_text, show_alert=False)
+            return
+        cfg["separate_enabled"] = new_val
     elif action == "streaming":
         if not premium_functions_enabled:
-            await tg_bot.answer_callback_query(call.id, "расширенные функции отключены", show_alert=True)
+            await tg_bot.answer_callback_query(call.id, "расширенные функции отключены", show_alert=False)
             return
-        cfg["streaming_enabled"] = not cfg.get("streaming_enabled", False)
+        new_val = not cfg.get("streaming_enabled", False)
+        if new_val and cfg.get("separate_enabled", True):
+            mutex_text = MUTEX_SEP_STREAM_RU if lang == "ru" else MUTEX_SEP_STREAM_EN
+            await tg_bot.answer_callback_query(call.id, mutex_text, show_alert=False)
+            return
+        cfg["streaming_enabled"] = new_val
     elif action == "stickers":
         cfg["stickers_enabled"] = not cfg.get("stickers_enabled", True)
     elif action == "autoreply":
@@ -2050,9 +2080,16 @@ async def execute_utility_ds(message: discord.Message, marker: str, chat_id: int
 # ============================================================
 # STREAMING HELPERS
 # ============================================================
-async def _stream_text_via_drafts(chat_id: int, text: str) -> bool:
-    """Плавный стриминг через sendMessageDraft (Bot API 9.5+)."""
+async def _stream_text_via_drafts(chat_id: int, text: str, is_private: bool = True) -> bool:
+    """
+    Плавный стриминг через sendMessageDraft (Bot API 9.5+).
+    Допустим ТОЛЬКО в приватных чатах — стриминг НЕ финализирует сообщение,
+    поэтому после него всё равно нужно отправить финальный текст через
+    send_rich_message / send_tg_html.
+    """
     if not premium_functions_enabled:
+        return False
+    if not is_private:
         return False
     draft_id = random.randint(1, 2**30)
     words = text.split()
@@ -2076,6 +2113,10 @@ async def send_tg_ai_response(message: telebot.types.Message, chat_id: int, user
     cfg = get_user_config("tg", chat_id, user_id)
     separate_enabled = cfg.get("separate_enabled", True)
     streaming = cfg.get("streaming_enabled", False) and premium_functions_enabled
+
+    # Инвариант: стриминг работает только без разбивки
+    if streaming and separate_enabled:
+        streaming = False
 
     clean_segments, markers = process_ai_response(answer_raw, separate_enabled=separate_enabled)
 
@@ -2107,34 +2148,34 @@ async def send_tg_ai_response(message: telebot.types.Message, chat_id: int, user
                 logger.warning(f"utility {m}: {e}")
         return
 
+    is_private_chat = (message.chat.type == 'private')
+
     for i, seg in enumerate(all_segments):
         try:
             await typing_with_delay_tg(message.chat.id, seg)
         except Exception:
             pass
 
-        sent_ok = False
-
-        # 1) Стриминг для первого длинного сегмента
-        if streaming and i == 0 and len(seg) > 60:
+        # 1) Визуальный стриминг черновика — только ЛС, только первый сегмент
+        # ВАЖНО: sendMessageDraft НЕ финализирует сообщение, поэтому сразу после
+        # него всё равно отправляем настоящий текст (rich/html).
+        if streaming and i == 0 and len(seg) > 60 and is_private_chat:
             try:
-                streamed = await _stream_text_via_drafts(message.chat.id, seg)
-                if streamed:
-                    sent_ok = True
+                await _stream_text_via_drafts(message.chat.id, seg, is_private=True)
             except Exception as e:
                 logger.debug(f"stream fail: {e}")
 
-        # 2) Rich message для markdown-текста
-        if not sent_ok:
-            try:
-                sent_ok = await send_rich_message(
-                    message.chat.id, seg,
-                    reply_to=message.message_id if i == 0 else None
-                )
-            except Exception as e:
-                logger.debug(f"rich fail: {e}")
+        # 2) Финальное сообщение: сначала пробуем Rich (Bot API 10.1+)
+        sent_ok = False
+        try:
+            sent_ok = await send_rich_message(
+                message.chat.id, seg,
+                reply_to=message.message_id if i == 0 else None
+            )
+        except Exception as e:
+            logger.debug(f"rich fail: {e}")
 
-        # 3) Обычный HTML-fallback
+        # 3) HTML-fallback
         if not sent_ok:
             try:
                 if i == 0:
@@ -2577,8 +2618,6 @@ async def handle_tg_media(message: telebot.types.Message) -> None:
             await tool_review_file(message, caption.strip() or "что тут?", file_bytes, doc_name or "file")
             return
 
-        # Не текстовый и не архив — падаем в общий обработчик ниже
-
     # ОБЫЧНОЕ МЕДИА
     is_reply_to_bot = (message.reply_to_message and message.reply_to_message.from_user
                        and message.reply_to_message.from_user.id == (tg_bot.user.id if tg_bot.user else 0))
@@ -2798,6 +2837,166 @@ async def process_battle_media_group(media_group_id: str, tg_chat_id: int, user_
     await tg_bot.delete_message(tg_chat_id, status.message_id)
 
 # ============================================================
+# SAFE GIT UPDATE (с откатом при ошибке)
+# ============================================================
+def _run_git(args: list[str], cwd: str, timeout: int = 60) -> tuple[int, str, str]:
+    try:
+        r = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, timeout=timeout)
+        return r.returncode, r.stdout or "", r.stderr or ""
+    except subprocess.TimeoutExpired:
+        return 124, "", "timeout"
+    except FileNotFoundError:
+        return 127, "", "git not found"
+    except Exception as e:
+        return 1, "", str(e)
+
+def _check_python_syntax(fpath: str) -> str | None:
+    """Проверяет синтаксис .py-файла. Возвращает None если ок, иначе строку с ошибкой."""
+    try:
+        with open(fpath, 'r', encoding='utf-8') as fp:
+            src = fp.read()
+    except Exception as e:
+        return f"read error: {type(e).__name__}: {e}"
+    try:
+        compile(src, fpath, 'exec')
+    except SyntaxError as se:
+        return f"SyntaxError: {se.msg} (line {se.lineno})"
+    except Exception as e:
+        return f"{type(e).__name__}: {e}"
+    return None
+
+def _safe_check_import(fpath: str, timeout: int = 45) -> str | None:
+    """
+    Пытается импортировать файл в отдельном процессе. Возвращает None если ок,
+    иначе текст ошибки. Учитывает `if __name__ == "__main__"` — main не выполнится.
+    """
+    if not os.path.isfile(fpath):
+        return None
+    script = (
+        "import importlib.util, sys, os\n"
+        f"p = {fpath!r}\n"
+        "spec = importlib.util.spec_from_file_location('_kulsh_check_mod', p)\n"
+        "mod = importlib.util.module_from_spec(spec)\n"
+        "try:\n"
+        "    spec.loader.exec_module(mod)\n"
+        "except SystemExit:\n"
+        "    pass\n"
+        "except BaseException as e:\n"
+        "    sys.stderr.write(f'{type(e).__name__}: {e}')\n"
+        "    sys.exit(2)\n"
+    )
+    try:
+        r = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True, text=True, timeout=timeout,
+            cwd=os.path.dirname(os.path.abspath(fpath)) or os.getcwd(),
+        )
+        if r.returncode != 0:
+            err = (r.stderr or r.stdout or "unknown").strip()
+            return err[:800]
+    except subprocess.TimeoutExpired:
+        return "timeout при проверке импорта"
+    except Exception as e:
+        return f"{type(e).__name__}: {e}"
+    return None
+
+def _find_entry_file(repo_path: str) -> str | None:
+    """Ищет основной .py-файл бота в репо: сначала текущий __file__, потом main.py/app.py/bot.py."""
+    try:
+        cur = os.path.abspath(__file__)
+        if os.path.exists(cur) and cur.startswith(os.path.abspath(repo_path)):
+            return cur
+    except Exception:
+        pass
+    for cand in ("main.py", "app.py", "bot.py"):
+        p = os.path.join(repo_path, cand)
+        if os.path.isfile(p):
+            return p
+    # fallback: любой .py в корне
+    try:
+        for f in os.listdir(repo_path):
+            if f.endswith(".py") and not f.startswith("_"):
+                return os.path.join(repo_path, f)
+    except Exception:
+        pass
+    return None
+
+async def perform_safe_git_update(repo_path: str) -> tuple[str, str]:
+    """
+    Безопасное обновление через git pull с автооткатом при ошибке.
+    Возвращает (status, info), где status:
+      - 'up_to_date' — нечего обновлять
+      - 'ok'         — обновились, можно перезапускаться
+      - 'rolled_back' — откатились к предыдущему коммиту
+      - 'error'      — что-то сломалось, откат невозможен/не нужен
+    """
+    # 1) Запоминаем текущий коммит
+    rc, out, err = _run_git(["rev-parse", "HEAD"], cwd=repo_path, timeout=10)
+    if rc != 0 or not out.strip():
+        return "error", f"git rev-parse: {err or out or 'unknown error'}"
+    prev_hash = out.strip()
+
+    # 2) Пробуем получить изменения
+    rc, out, err = _run_git(["fetch", "origin", "main"], cwd=repo_path, timeout=60)
+    if rc != 0:
+        return "error", f"git fetch: {err or out or 'unknown error'}"
+
+    rc, out, err = _run_git(["pull", "origin", "main", "--ff-only"], cwd=repo_path, timeout=60)
+    pull_out = (out or "") + (err or "")
+    if rc != 0:
+        # Пробуем обычный pull без --ff-only на всякий случай
+        rc2, out2, err2 = _run_git(["pull", "origin", "main"], cwd=repo_path, timeout=60)
+        pull_out += "\n" + (out2 or "") + (err2 or "")
+        if rc2 != 0:
+            return "error", f"git pull fail:\n{pull_out[:1500]}"
+
+    if "Already up to date" in pull_out or "Already up-to-date" in pull_out:
+        return "up_to_date", pull_out
+
+    # 3) Проверка синтаксиса всех .py в репо
+    syntax_errors: list[str] = []
+    try:
+        for root, dirs, files in os.walk(repo_path):
+            if '.git' in root.split(os.sep):
+                continue
+            for fname in files:
+                if not fname.endswith('.py'):
+                    continue
+                fpath = os.path.join(root, fname)
+                err_s = _check_python_syntax(fpath)
+                if err_s:
+                    rel = os.path.relpath(fpath, repo_path)
+                    syntax_errors.append(f"{rel}: {err_s}")
+    except Exception as e:
+        syntax_errors.append(f"walk error: {type(e).__name__}: {e}")
+
+    if syntax_errors:
+        # 4) Откат
+        rc_reset, out_r, err_r = _run_git(["reset", "--hard", prev_hash], cwd=repo_path, timeout=30)
+        if rc_reset != 0:
+            return "error", (
+                "ошибки в новом коде, но git reset --hard не удался:\n"
+                + (err_r or out_r or "unknown")
+                + "\n\nОшибки:\n" + "\n".join(syntax_errors[:10])
+            )
+        return "rolled_back", "\n".join(syntax_errors[:10])
+
+    # 5) Проверка импорта основного файла (ловит ошибки уровня импортов)
+    entry = _find_entry_file(repo_path)
+    if entry:
+        import_err = await asyncio.to_thread(_safe_check_import, entry)
+        if import_err:
+            rc_reset, out_r, err_r = _run_git(["reset", "--hard", prev_hash], cwd=repo_path, timeout=30)
+            if rc_reset != 0:
+                return "error", (
+                    f"ошибка импорта: {import_err}\n"
+                    f"git reset --hard не удался: {err_r or out_r or 'unknown'}"
+                )
+            return "rolled_back", f"import error:\n{import_err[:800]}"
+
+    return "ok", pull_out
+
+# ============================================================
 # DISCORD HANDLERS
 # ============================================================
 async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: int, answer_raw: str) -> None:
@@ -2805,7 +3004,6 @@ async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: i
     separate_enabled = cfg.get("separate_enabled", True)
     clean_segments, markers = process_ai_response(answer_raw, separate_enabled=separate_enabled)
 
-    # avatar/recall
     extra_segments: list[str] = []
     if "avatar" in markers:
         markers.remove("avatar")
@@ -2817,7 +3015,6 @@ async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: i
             logger.warning(f"DS avatar: {e}")
     if "recall_media" in markers:
         markers.remove("recall_media")
-        # Упрощённая обработка — просто выведем список
         history = list(chat_media_history.get(f"ds_{chat_id}", []))
         if history:
             last = history[-3:]
@@ -2827,7 +3024,6 @@ async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: i
 
     all_segments = clean_segments + extra_segments
     if not all_segments:
-        # Только стикеры/гифки
         for m in markers:
             if m in ("sticker", "gif"):
                 try:
@@ -2906,10 +3102,18 @@ async def ds_handle_config_param(message: discord.Message, user_id: int, parts: 
         cfg["stickers_enabled"] = val in ("вкл", "on", "1")
         await message.reply("🎨 Стикеры: " + ("вкл" if cfg["stickers_enabled"] else "выкл"))
     elif param == "разбивка":
-        cfg["separate_enabled"] = val in ("вкл", "on", "1")
+        new_val = val in ("вкл", "on", "1")
+        if new_val and cfg.get("streaming_enabled", False):
+            await message.reply("⚠️ Разбивка и стриминг взаимно исключаемы. Сначала отключи стриминг.")
+            return
+        cfg["separate_enabled"] = new_val
         await message.reply("💬 Разбивка: " + ("вкл" if cfg["separate_enabled"] else "выкл"))
     elif param == "стриминг":
-        cfg["streaming_enabled"] = val in ("вкл", "on", "1")
+        new_val = val in ("вкл", "on", "1")
+        if new_val and cfg.get("separate_enabled", True):
+            await message.reply("⚠️ Стриминг и разбивка взаимно исключаемы. Сначала отключи разбивку.")
+            return
+        cfg["streaming_enabled"] = new_val
         await message.reply("📡 Стриминг: " + ("вкл" if cfg["streaming_enabled"] else "выкл"))
     elif param == "температура":
         try:
@@ -2960,18 +3164,26 @@ async def on_message(message: discord.Message) -> None:
     if not is_dm and content_lower.startswith("кульш обновись"):
         if message.author.id not in AUTHORIZED_UPDATERS:
             await message.reply("ты кто бля, обновлять меня будешь?"); return
-        await message.reply("ща попробую обновиться...")
+        await message.reply("ща попробую обновиться (с автооткатом при ошибке)...")
         try:
             repo_path = os.getenv('REPO_PATH', os.getcwd())
-            result = subprocess.run(["git", "pull", "origin", "main"], cwd=repo_path,
-                                    capture_output=True, text=True, timeout=30)
-            output = result.stdout + result.stderr
-            if "Already up to date" in result.stdout:
-                await message.reply(f"я и так свежий:\n```\n{output}\n```")
+            status, info = await perform_safe_git_update(repo_path)
+            if status == "up_to_date":
+                await message.reply(f"я и так свежий:\n```\n{info[:1500]}\n```")
+            elif status == "ok":
+                await message.reply(f"изменения подтянуты, перезапускаюсь:\n```\n{info[:1500]}\n```")
+                await asyncio.sleep(2)
+                os._exit(0)
+            elif status == "rolled_back":
+                await message.reply(
+                    "⚠️ новый коммит содержит ошибки — я откатился к предыдущей версии. "
+                    "Бот продолжает работать.\n"
+                    f"```\n{info[:1500]}\n```"
+                )
             else:
-                await message.reply(f"изменения подтянуты, перезапускаюсь:\n```\n{output}\n```")
-                await asyncio.sleep(2); os._exit(0)
+                await message.reply(f"ошибка обновления:\n```\n{info[:1500]}\n```")
         except Exception as e:
+            logger.exception("update error")
             await message.reply(f"ошибка обновления:\n```\n{e}\n```")
         return
 
