@@ -1,4 +1,6 @@
-# Kulsh GPT | v2.31.0 (mutual-exclusion streaming/split, safe git rollback, streaming persistence, colored buttons verified, rich messages verified)
+# Kulsh GPT | v2.32.0 (menu/start rich messages with GIFs, KULSH colored table,
+# Telegram Mini App button, apply animation, restyled help/donate, safe git rollback,
+# mutual-exclusion streaming/split, streaming persistence, colored buttons, rich messages)
 # by (main author):
 #     starfall-apk
 # coauthor & bot hosting:
@@ -96,6 +98,12 @@ ds_bot = discord.Client(intents=intents)
 DS_SERIES_GUILD_ID = 1403828466075304036
 DS_SERIES_CHANNEL_ID = 1403828467014832270
 DS_SERIES_TARGET_USER_ID = 1364588699589021890
+
+MINI_APP_URL = "https://kulsh.vercel.app"
+MENU_GIF_PATH = "menu.gif"
+KULSH_GIF_PATH = "kulsh.gif"
+DONATE_URL = "https://kulsh-ai.web.app/donate.html"
+GITHUB_URL = "https://github.com/starfall-apk/kulsh"
 
 MODEL_LIST = [
     "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
@@ -294,7 +302,6 @@ def get_user_config(platform: str, chat_id: int, user_id: int) -> dict:
         for k, v in DEFAULT_USER_CONFIG.items():
             if k not in cfg:
                 cfg[k] = v
-    # Инвариант взаимного исключения: стриминг и разбивка не могут быть одновременно включены
     if cfg.get("separate_enabled", True) and cfg.get("streaming_enabled", False):
         cfg["streaming_enabled"] = False
     return cfg
@@ -521,6 +528,17 @@ def _md_inline(text: str) -> str:
     t = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', r'<a href="\2">\1</a>', t)
     return t
 
+def _cell_html(cell_text: str, tag: str) -> str:
+    """
+    Ячейка таблицы. Если содержимое целиком в *одинарных* звёздочках,
+    считаем её «ячейкой с залитым фоном» (см. формат |K|*U*|L|*S*|H|).
+    """
+    s = (cell_text or "").strip()
+    if len(s) >= 2 and s.startswith('*') and s.endswith('*') and '*' not in s[1:-1]:
+        inner = s[1:-1]
+        return f'<{tag} bgcolor="#10B981" color="#0E0E12">{_md_inline(inner)}</{tag}>'
+    return f'<{tag}>{_md_inline(s)}</{tag}>'
+
 def build_rich_message(text: str) -> dict[str, Any] | None:
     if not text:
         return None
@@ -556,10 +574,8 @@ def build_rich_message(text: str) -> dict[str, Any] | None:
         if table_rows:
             rows_html = []
             for ri, row in enumerate(table_rows):
-                if ri == 0:
-                    cells = ''.join(f'<th>{_md_inline(c)}</th>' for c in row)
-                else:
-                    cells = ''.join(f'<td>{_md_inline(c)}</td>' for c in row)
+                tag = "th" if ri == 0 else "td"
+                cells = ''.join(_cell_html(c, tag) for c in row)
                 rows_html.append(f'<tr>{cells}</tr>')
             html_parts.append('<table bordered striped>' + ''.join(rows_html) + '</table>')
         table_rows = []
@@ -636,7 +652,12 @@ def build_rich_message(text: str) -> dict[str, Any] | None:
         return None
     return {"html": '\n'.join(html_parts), "is_rtl": False, "skip_entity_detection": False}
 
-async def send_rich_message(chat_id: int, text: str, reply_to: int | None = None) -> bool:
+async def send_rich_message(
+    chat_id: int,
+    text: str,
+    reply_to: int | None = None,
+    reply_markup: InlineKeyboardMarkup | None = None,
+) -> bool:
     if not premium_functions_enabled:
         return False
     rich = build_rich_message(text)
@@ -645,6 +666,11 @@ async def send_rich_message(chat_id: int, text: str, reply_to: int | None = None
     payload: dict[str, Any] = {"chat_id": chat_id, "rich_message": rich}
     if reply_to:
         payload["reply_parameters"] = {"message_id": reply_to}
+    if reply_markup is not None:
+        try:
+            payload["reply_markup"] = reply_markup.to_dict()
+        except AttributeError:
+            payload["reply_markup"] = reply_markup
     try:
         async with aiohttp.ClientSession() as session:
             url = f"https://api.telegram.org/bot{TG_TOKEN}/sendRichMessage"
@@ -656,6 +682,31 @@ async def send_rich_message(chat_id: int, text: str, reply_to: int | None = None
     except Exception as e:
         logger.warning(f"sendRichMessage error: {e}")
         return False
+
+async def send_formatted(
+    chat_id: int,
+    text: str,
+    reply_to: int | None = None,
+    reply_markup: InlineKeyboardMarkup | None = None,
+) -> None:
+    """Пытается отправить Rich Message, иначе HTML-фоллбэк."""
+    sent_ok = await send_rich_message(chat_id, text, reply_to=reply_to, reply_markup=reply_markup)
+    if sent_ok:
+        return
+    html_text = markdown_like_to_telegram_html(text)
+    try:
+        await tg_bot.send_message(
+            chat_id, html_text, parse_mode='HTML',
+            reply_to_message_id=reply_to, reply_markup=reply_markup,
+        )
+    except Exception:
+        plain = re.sub(r'<[^>]+>', '', html_text)
+        try:
+            await tg_bot.send_message(
+                chat_id, plain, reply_to_message_id=reply_to, reply_markup=reply_markup,
+            )
+        except Exception as e:
+            logger.error(f"send_formatted fallback fail: {e}")
 
 async def stream_draft(chat_id: int, draft_id: int, text: str) -> bool:
     """Стриминг черновика через sendMessageDraft (только ЛС)."""
@@ -669,6 +720,34 @@ async def stream_draft(chat_id: int, draft_id: int, text: str) -> bool:
                 return resp.status == 200
     except Exception:
         return False
+
+# ============================================================
+# АНИМАЦИЯ ПРИМЕНЕНИЯ НАСТРОЕК
+# ============================================================
+APPLY_ANIMATION_FRAMES = [
+    "🗿",
+    "🗿💭",
+    "🗿 •",
+    "🗿 • •",
+    "🗿 • • •",
+    "🍷🗿",
+]
+
+async def play_apply_animation(chat_id: int, message_id: int, step_delay: float = 0.35) -> None:
+    """Проигрывает пошаговую анимацию в одном редактируемом сообщении, затем удаляет его."""
+    try:
+        for frame in APPLY_ANIMATION_FRAMES:
+            try:
+                await tg_bot.edit_message_text(frame, chat_id, message_id)
+            except Exception:
+                pass
+            await asyncio.sleep(step_delay)
+        try:
+            await tg_bot.delete_message(chat_id, message_id)
+        except Exception:
+            pass
+    except Exception as e:
+        logger.debug(f"play_apply_animation: {e}")
 
 # ============================================================
 # SYSTEM PROMPT
@@ -686,6 +765,8 @@ def build_system_prompt(platform: str, chat_id: int, user_id: int) -> str:
             "чек-листы (- [ ] и - [x]), сворачиваемые блоки (<details><summary>Заголовок</summary>содержимое</details>), "
             "LaTeX-формулы ($$E = mc^2$$), жирный (**текст**), курсив (*текст*), подчёркивание (__текст__), "
             "зачёркивание (~~текст~~), цитаты (> текст), блоки кода (```lang ... ```), моноширинный (`код`). "
+            "В таблицах ячейка, содержимое которой целиком обёрнуто в *одинарные звёздочки*, отображается с залитым "
+            "фоном — например, строка |K|*U*|L|*S*|H| даст чередующийся узор. "
             "Используй форматирование ТОЛЬКО когда оно уместно: для структурированных ответов, инструкций, "
             "сравнений, кода, формул. Не форматируй каждый ответ — в обычном чате пиши простым текстом.\n\n"
         )
@@ -960,7 +1041,6 @@ def process_ai_response(raw: str, separate_enabled: bool = True) -> tuple[list[s
     if separate_enabled:
         segments = split_by_separator(raw_clean)
     else:
-        # Отключено — вырезаем маркеры !separate, но НЕ разбиваем текст
         raw_clean = SEPARATOR_PATTERN.sub(' ', raw_clean)
         raw_clean = re.sub(r'[ \t]{2,}', ' ', raw_clean).strip()
         segments = [raw_clean]
@@ -971,7 +1051,6 @@ def clean_extra_text(raw: str) -> list[str]:
     if not raw:
         return []
     cleaned, _ = extract_utility_markers(raw)
-    # Вырезаем маркеры разделителя, чтобы они не попали в текст
     cleaned = SEPARATOR_PATTERN.sub(' ', cleaned)
     cleaned = re.sub(r'[ \t]{2,}', ' ', cleaned).strip()
     return [s.strip() for s in cleaned.split('\n\n') if s and s.strip()]
@@ -1729,7 +1808,114 @@ def _model_picker_text(platform: str, chat_id: int, user_id: int) -> str:
     )
 
 # ============================================================
-# CALLBACK HANDLER
+# МЕНЮ / START / HELP / DONATE — форматированные тексты
+# ============================================================
+def _build_menu_text(platform: str, chat_id: int, user_id: int) -> str:
+    cfg = get_user_config(platform, chat_id, user_id)
+    lang = cfg.get("language", "ru")
+    if lang == "ru":
+        return (
+            "|K|*U*|L|*S*|H|\n\n"
+            "# Добро пожаловать в Кульш AI!\n\n"
+            "Твой карманный ИИ-собутыльник 🍷🗿. Здесь собрано всё, что нужно для комфортного "
+            "общения, настройки и развлечений — открывай Mini App для продвинутого чата, "
+            "подкручивай бота под себя и заглядывай в команды.\n\n"
+            "**Что можно сделать:**\n"
+            "- 🚀 **Mini App** — продвинутый чат с ИИ прямо в Telegram\n"
+            "- ⚙️ **Настройки** — язык, тема, модель, промпт, автоответы\n"
+            "- 📖 **Команды** — полный список возможностей Кульша\n"
+            "- 💎 **Донат** — поддержать разработку\n"
+            "- 🔗 **GitHub** — исходники проекта\n"
+        )
+    return (
+        "|K|*U*|L|*S*|H|\n\n"
+        "# Welcome to Kulsh AI!\n\n"
+        "Your pocket AI drinking buddy 🍷🗿. Everything you need for chilling, tuning the "
+        "bot and having fun — open the Mini App for advanced chat, tweak the bot your way, "
+        "and check out the commands.\n\n"
+        "**What you can do:**\n"
+        "- 🚀 **Mini App** — advanced AI chat inside Telegram\n"
+        "- ⚙️ **Settings** — language, theme, model, prompt, auto-replies\n"
+        "- 📖 **Commands** — full list of Kulsh features\n"
+        "- 💎 **Donate** — support development\n"
+        "- 🔗 **GitHub** — project sources\n"
+    )
+
+def _build_start_text(platform: str, chat_id: int, user_id: int) -> str:
+    cfg = get_user_config(platform, chat_id, user_id)
+    lang = cfg.get("language", "ru")
+    if lang == "ru":
+        return (
+            "# 🍷🗿 Кульш на связи\n\n"
+            "Здарова, кент! Я — **Кульш**, твой ИИ-собутыльник из опенсорса. Умею болтать по-человечески, "
+            "писать код, оценивать внешность и держать контекст чата.\n\n"
+            "**С чего начать:**\n"
+            "- 🚀 Жми **Mini App** — там продвинутый чат\n"
+            "- 📖 Загляни в **Меню** — там все кнопки и настройки\n"
+            "- 🧠 Напиши `кульш конфиг` — тонкая настройка под тебя\n\n"
+            "Погнали! 🍷"
+        )
+    return (
+        "# 🍷🗿 Kulsh is online\n\n"
+        "Yo, mate! I'm **Kulsh**, your open-source AI drinking buddy. I chat like a human, write code, "
+        "rate looks and keep the chat context.\n\n"
+        "**Where to start:**\n"
+        "- 🚀 Hit **Mini App** — advanced chat there\n"
+        "- 📖 Open the **Menu** — all buttons & settings\n"
+        "- 🧠 Type `kulsh config` — tune me to your taste\n\n"
+        "Let's go! 🍷"
+    )
+
+def build_menu_keyboard(platform: str, chat_id: int, user_id: int) -> InlineKeyboardMarkup:
+    cfg = get_user_config(platform, chat_id, user_id)
+    lang = cfg.get("language", "ru")
+    kb = InlineKeyboardMarkup()
+    kb.row(
+        btn("🚀 " + _localize(lang, "Открыть Mini App", "Open Mini App"),
+            style="primary", web_app=telebot.types.WebAppInfo(url=MINI_APP_URL))
+    )
+    kb.row(
+        btn("⚙️ " + _localize(lang, "Настройки", "Settings"),
+            style="success", callback_data="menu:settings"),
+        btn("📖 " + _localize(lang, "Команды", "Commands"),
+            style=None, callback_data="menu:help"),
+    )
+    kb.row(
+        btn("💎 " + _localize(lang, "Донат", "Donate"),
+            style=None, url=DONATE_URL),
+        btn("🔗 " + _localize(lang, "GitHub", "GitHub"),
+            style=None, url=GITHUB_URL),
+    )
+    kb.row(
+        btn("❌ " + _localize(lang, "Закрыть", "Close"),
+            style="danger", callback_data="menu:close")
+    )
+    return kb
+
+def build_start_keyboard(platform: str, chat_id: int, user_id: int) -> InlineKeyboardMarkup:
+    cfg = get_user_config(platform, chat_id, user_id)
+    lang = cfg.get("language", "ru")
+    kb = InlineKeyboardMarkup()
+    kb.row(
+        btn("🚀 " + _localize(lang, "Открыть Mini App", "Open Mini App"),
+            style="primary", web_app=telebot.types.WebAppInfo(url=MINI_APP_URL))
+    )
+    kb.row(
+        btn("📖 " + _localize(lang, "Меню", "Menu"),
+            style="success", callback_data="menu:open"),
+        btn("⚙️ " + _localize(lang, "Настройки", "Settings"),
+            style=None, callback_data="menu:settings"),
+    )
+    kb.row(
+        btn("💎 " + _localize(lang, "Донат", "Donate"),
+            style=None, url=DONATE_URL),
+        btn("🔗 " + _localize(lang, "GitHub", "GitHub"),
+            style=None, url=GITHUB_URL),
+    )
+    return kb
+
+# ============================================================
+# CALLBACK HANDLER (cfg:)
 # ============================================================
 async def _edit_or_send(call: telebot.types.CallbackQuery, text: str, kb: InlineKeyboardMarkup):
     try:
@@ -1836,10 +2022,6 @@ async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
         return
 
     if action == "apply":
-        try:
-            await tg_bot.delete_message(call.message.chat.id, call.message.message_id)
-        except Exception:
-            pass
         config_msg_owners.pop(call.message.message_id, None)
         chat_key = get_chat_key("tg", chat_id)
         trig_id = config_trigger_msgs.pop(chat_key, None)
@@ -1849,13 +2031,14 @@ async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
             except Exception:
                 pass
         await tg_bot.answer_callback_query(call.id, _localize(lang, "Готово ✅", "Done ✅"))
+        # Запускаем пошаговую анимацию, она сама удалит сообщение в конце
+        asyncio.create_task(play_apply_animation(chat_id, call.message.message_id))
         return
 
     # ---- Взаимоисключающие: разбивка <-> стриминг ----
     if action == "separate":
         new_val = not cfg.get("separate_enabled", True)
         if new_val and cfg.get("streaming_enabled", False):
-            # Показываем короткое всплывающее уведомление сверху, БЕЗ отдельного сообщения
             mutex_text = MUTEX_SEP_STREAM_RU if lang == "ru" else MUTEX_SEP_STREAM_EN
             await tg_bot.answer_callback_query(call.id, mutex_text, show_alert=False)
             return
@@ -1895,64 +2078,196 @@ async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
     await tg_bot.answer_callback_query(call.id, toast)
 
 # ============================================================
-# TELEGRAM: HELP/START/DONATE
+# CALLBACK HANDLER (menu:)
+# ============================================================
+@tg_bot.callback_query_handler(func=lambda call: call.data.startswith("menu:"))
+async def handle_menu_callback(call: telebot.types.CallbackQuery) -> None:
+    action = call.data.split(":", 1)[1] if ":" in call.data else ""
+    chat_id = call.message.chat.id
+    user_id = call.from_user.id
+    cfg = get_user_config("tg", chat_id, user_id)
+    lang = cfg.get("language", "ru")
+
+    if action == "close":
+        try:
+            await tg_bot.delete_message(chat_id, call.message.message_id)
+        except Exception:
+            pass
+        await tg_bot.answer_callback_query(call.id, "🗿")
+        return
+
+    if action == "settings":
+        cfg_text = _config_text("tg", chat_id, user_id)
+        kb = build_main_config_keyboard("tg", chat_id, user_id)
+        try:
+            await tg_bot.edit_message_text(
+                cfg_text, chat_id, call.message.message_id,
+                parse_mode='HTML', reply_markup=kb,
+            )
+            config_msg_owners[call.message.message_id] = user_id
+        except Exception as e:
+            logger.warning(f"menu:settings edit: {e}")
+        await tg_bot.answer_callback_query(call.id)
+        return
+
+    if action == "help":
+        await tg_bot.answer_callback_query(call.id)
+        try:
+            await tg_bot.send_message(chat_id, HELP_TEXT, parse_mode='HTML',
+                                      reply_to_message_id=call.message.message_id)
+        except Exception:
+            await tg_bot.send_message(chat_id, re.sub(r'<[^>]+>', '', HELP_TEXT))
+        return
+
+    if action == "open":
+        # Открываем меню заново (например, из /start)
+        await tg_bot.answer_callback_query(call.id)
+        menu_text = _build_menu_text("tg", chat_id, user_id)
+        kb = build_menu_keyboard("tg", chat_id, user_id)
+        # Сначала пробуем отредактировать текущее сообщение в меню
+        try:
+            await tg_bot.edit_message_text(
+                markdown_like_to_telegram_html(menu_text), chat_id, call.message.message_id,
+                parse_mode='HTML', reply_markup=kb,
+            )
+        except Exception:
+            await send_formatted(chat_id, menu_text, reply_to=call.message.message_id, reply_markup=kb)
+        return
+
+# ============================================================
+# TELEGRAM: HELP/START/DONATE/MENU
 # ============================================================
 HELP_TEXT = (
-    "🍷🗿 <b>Команды Кульша:</b>\n\n"
-    "<b>Общие:</b>\n"
-    "/start — приветствие\n"
-    "/help — эта справка\n"
-    "/donate — поддержать проект\n"
-    "/credits — баланс кредитов\n\n"
-    "<b>Настройки:</b>\n"
-    "<code>кульш конфиг</code> / <code>кульш настройки</code> — настройки (инлайн)\n\n"
-    "<b>Утилиты:</b>\n"
-    "<code>кульш аватарка</code> — описать аватарку\n"
-    "<code>кульш вспомни медиа [N]</code> — вспомнить N медиа\n"
-    "<code>кульш логи</code> — логи (админам)\n\n"
-    "<b>Развлечения:</b>\n"
-    "<code>кульш psl</code> — looksmaxxing\n"
-    "<code>кульш psl совет</code> — + рекомендации\n"
-    "<code>кульш battle</code> — баттл (альбом)\n"
-    "<code>кульш донаты</code> — топ донатеров\n\n"
-    "<b>Инструменты (ЛС):</b>\n"
-    "Отправь архив/текстовый файл — бот распакует, изменит, соберёт и вернёт."
+    "# 🍷🗿 Команды Кульша\n\n"
+    "**Общие:**\n"
+    "- `/start` — приветствие\n"
+    "- `/menu` — интерактивное меню\n"
+    "- `/help` — эта справка\n"
+    "- `/donate` — поддержать проект\n"
+    "- `/credits` — баланс кредитов\n\n"
+    "**Настройки:**\n"
+    "- `кульш конфиг` / `кульш настройки` — настройки (инлайн)\n\n"
+    "**Утилиты:**\n"
+    "- `кульш аватарка` — описать аватарку\n"
+    "- `кульш вспомни медиа [N]` — вспомнить N медиа\n"
+    "- `кульш логи` — логи (админам)\n\n"
+    "**Развлечения:**\n"
+    "- `кульш psl` — looksmaxxing\n"
+    "- `кульш psl совет` — + рекомендации\n"
+    "- `кульш battle` — баттл (альбом)\n"
+    "- `кульш донаты` — топ донатеров\n\n"
+    "**Инструменты (ЛС):**\n"
+    "Отправь архив/текстовый файл — бот распакует, изменит, соберёт и вернёт.\n\n"
+    f"🔗 Mini App: {MINI_APP_URL}\n"
+    f"🔗 GitHub: {GITHUB_URL}"
 )
+
+async def _send_menu_gif(chat_id: int, reply_to: int | None, path: str, fallback_url: str) -> int | None:
+    """Отправляет GIF (файл или URL). Возвращает message_id или None."""
+    try:
+        if os.path.exists(path):
+            with open(path, 'rb') as gif:
+                sent = await tg_bot.send_animation(
+                    chat_id, InputFile(gif),
+                    reply_to_message_id=reply_to,
+                )
+        else:
+            sent = await tg_bot.send_animation(
+                chat_id, fallback_url,
+                reply_to_message_id=reply_to,
+            )
+        return sent.message_id
+    except Exception as e:
+        logger.warning(f"send menu gif failed ({path}): {e}")
+        return None
 
 @tg_bot.message_handler(commands=['start'])
 async def handle_start(message: telebot.types.Message) -> None:
     args = telebot.util.extract_arguments(message.text or "")
-    if not args:
-        await reply_tg_html(message, "🍷🗿 Кульш на связи. Напиши 'кульш' или обратись ко мне. /help — команды.")
-        return
-    if args.startswith('donate_stars_'):
-        try:
-            stars = int(args.split('_')[-1])
-            if stars <= 0: raise ValueError
-        except (ValueError, IndexError):
-            await reply_tg_html(message, "❌ Неверное количество звёзд.")
+    if args:
+        if args.startswith('donate_stars_'):
+            try:
+                stars = int(args.split('_')[-1])
+                if stars <= 0: raise ValueError
+            except (ValueError, IndexError):
+                await reply_tg_html(message, "❌ Неверное количество звёзд.")
+                return
+            pending_donations[message.chat.id] = stars
+            prices = [telebot.types.LabeledPrice(label="Поддержать Кульша", amount=stars)]
+            await tg_bot.send_invoice(
+                chat_id=message.chat.id, title="Донат Кульшу",
+                description=f"Поддержка разработки на {stars} ⭐️",
+                invoice_payload=f"donate_{stars}_stars", provider_token="",
+                currency="XTR", prices=prices, start_parameter="donate",
+            )
             return
-        pending_donations[message.chat.id] = stars
-        prices = [telebot.types.LabeledPrice(label="Поддержать Кульша", amount=stars)]
-        await tg_bot.send_invoice(
-            chat_id=message.chat.id, title="Донат Кульшу",
-            description=f"Поддержка разработки на {stars} ⭐️",
-            invoice_payload=f"donate_{stars}_stars", provider_token="",
-            currency="XTR", prices=prices, start_parameter="donate",
-        )
+
+    if message.from_user is None:
+        return
+    chat_id = message.chat.id
+    user_id = message.from_user.id
+
+    # 1) GIF (kulsh.gif)
+    gif_msg_id = await _send_menu_gif(
+        chat_id, message.message_id,
+        path=KULSH_GIF_PATH,
+        fallback_url=random.choice(GIF_POOL),
+    )
+
+    # 2) Rich-message с текстом и кнопками
+    start_text = _build_start_text("tg", chat_id, user_id)
+    kb = build_start_keyboard("tg", chat_id, user_id)
+    reply_to = gif_msg_id if gif_msg_id else message.message_id
+    await send_formatted(chat_id, start_text, reply_to=reply_to, reply_markup=kb)
+
+@tg_bot.message_handler(commands=['menu'])
+async def handle_menu(message: telebot.types.Message) -> None:
+    if message.from_user is None:
+        return
+    chat_id = message.chat.id
+    user_id = message.from_user.id
+
+    # 1) GIF (menu.gif)
+    gif_msg_id = await _send_menu_gif(
+        chat_id, message.message_id,
+        path=MENU_GIF_PATH,
+        fallback_url=random.choice(GIF_POOL),
+    )
+
+    # 2) Rich-message меню с кнопками
+    menu_text = _build_menu_text("tg", chat_id, user_id)
+    kb = build_menu_keyboard("tg", chat_id, user_id)
+    reply_to = gif_msg_id if gif_msg_id else message.message_id
+    await send_formatted(chat_id, menu_text, reply_to=reply_to, reply_markup=kb)
 
 @tg_bot.message_handler(commands=['help'])
 async def handle_help(message: telebot.types.Message) -> None:
     try:
-        await tg_bot.send_message(message.chat.id, HELP_TEXT, parse_mode='HTML',
-                                  reply_to_message_id=message.message_id)
+        await send_formatted(
+            message.chat.id, HELP_TEXT,
+            reply_to=message.message_id,
+        )
     except Exception:
-        await tg_bot.send_message(message.chat.id, re.sub(r'<[^>]+>', '', HELP_TEXT),
-                                  reply_to_message_id=message.message_id)
+        await tg_bot.send_message(
+            message.chat.id, re.sub(r'<[^>]+>', '', HELP_TEXT),
+            reply_to_message_id=message.message_id,
+        )
 
 @tg_bot.message_handler(commands=['donate'])
 async def handle_donate(message: telebot.types.Message) -> None:
-    await reply_tg_html(message, "Поддержать Кульша: https://kulsh-ai.web.app/donate.html 🍷🗿")
+    text = (
+        "# 💎 Поддержать Кульша\n\n"
+        "Спасибо, что хочешь поддержать проект! Любой донат идёт на серверы, домены "
+        "и дальнейшую разработку. 🍷🗿\n\n"
+        "**Способы:**\n"
+        f"- 💳 [Онлайн-донат]({DONATE_URL})\n"
+        "- ⭐️ Telegram Stars — напиши `/donate_stars` (если включено)\n\n"
+        f"🔗 GitHub: {GITHUB_URL}"
+    )
+    try:
+        await send_formatted(message.chat.id, text, reply_to=message.message_id)
+    except Exception:
+        await reply_tg_html(message, f"Поддержать Кульша: {DONATE_URL} 🍷🗿")
 
 @tg_bot.message_handler(commands=['credits'])
 async def handle_credits(message: telebot.types.Message) -> None:
@@ -2114,7 +2429,6 @@ async def send_tg_ai_response(message: telebot.types.Message, chat_id: int, user
     separate_enabled = cfg.get("separate_enabled", True)
     streaming = cfg.get("streaming_enabled", False) and premium_functions_enabled
 
-    # Инвариант: стриминг работает только без разбивки
     if streaming and separate_enabled:
         streaming = False
 
@@ -2156,16 +2470,12 @@ async def send_tg_ai_response(message: telebot.types.Message, chat_id: int, user
         except Exception:
             pass
 
-        # 1) Визуальный стриминг черновика — только ЛС, только первый сегмент
-        # ВАЖНО: sendMessageDraft НЕ финализирует сообщение, поэтому сразу после
-        # него всё равно отправляем настоящий текст (rich/html).
         if streaming and i == 0 and len(seg) > 60 and is_private_chat:
             try:
                 await _stream_text_via_drafts(message.chat.id, seg, is_private=True)
             except Exception as e:
                 logger.debug(f"stream fail: {e}")
 
-        # 2) Финальное сообщение: сначала пробуем Rich (Bot API 10.1+)
         sent_ok = False
         try:
             sent_ok = await send_rich_message(
@@ -2175,7 +2485,6 @@ async def send_tg_ai_response(message: telebot.types.Message, chat_id: int, user
         except Exception as e:
             logger.debug(f"rich fail: {e}")
 
-        # 3) HTML-fallback
         if not sent_ok:
             try:
                 if i == 0:
@@ -2509,7 +2818,6 @@ async def handle_tg_media(message: telebot.types.Message) -> None:
     if file_id and media_tag:
         add_media_history(chat_key, None, media_type, display_name, file_id=file_id, caption=caption)
 
-    # BATTLE
     if is_battle_command(caption) and message.photo:
         if message.media_group_id:
             mgid = message.media_group_id
@@ -2529,7 +2837,6 @@ async def handle_tg_media(message: telebot.types.Message) -> None:
         battle_photos[message.media_group_id].append(img_bytes)
         return
 
-    # LOOKSMAXXING
     is_looksmaxxing = (
         is_looksmaxxing_command(caption) or
         (message.reply_to_message and message.reply_to_message.from_user
@@ -2584,7 +2891,6 @@ async def handle_tg_media(message: telebot.types.Message) -> None:
             await reply_tg_html(message, f"🌋 Ошибка: {e}")
         return
 
-    # TOOLS (только ЛС)
     if is_dm and message.document:
         mime = message.document.mime_type or ""
         doc_name = message.document.file_name or ""
@@ -2618,7 +2924,6 @@ async def handle_tg_media(message: telebot.types.Message) -> None:
             await tool_review_file(message, caption.strip() or "что тут?", file_bytes, doc_name or "file")
             return
 
-    # ОБЫЧНОЕ МЕДИА
     is_reply_to_bot = (message.reply_to_message and message.reply_to_message.from_user
                        and message.reply_to_message.from_user.id == (tg_bot.user.id if tg_bot.user else 0))
     addressed = bool(is_reply_to_bot or re.search(r'(?i)\bкульш\b', caption) or is_dm)
@@ -2690,13 +2995,12 @@ async def handle_tg_text(message: telebot.types.Message) -> None:
     if tl.startswith("кульш донаты"):
         top = get_top_donators()
         if not top:
-            await reply_tg_html(message, "Пока никто не донатил. Будь первым, бро 🍷🗿\nhttps://kulsh-ai.web.app/donate.html")
+            await reply_tg_html(message, "Пока никто не донатил. Будь первым, бро 🍷🗿\n" + DONATE_URL)
             return
-        lines = ["🏆 <b>Топ донатеров:</b>"]
+        lines = ["# 🏆 Топ донатеров\n"]
         for i, (name, total) in enumerate(top, 1):
             lines.append(f"{i}. {html.escape(name)} — {total} очков")
-        await tg_bot.send_message(chat_id, "\n".join(lines), parse_mode='HTML',
-                                  reply_to_message_id=message.message_id)
+        await send_formatted(chat_id, "\n".join(lines), reply_to=message.message_id)
         return
 
     if tl.startswith("кульш аватарк") or tl.startswith("кульш аватар") or tl.strip() in ("!avatar", "! avatar"):
@@ -2851,7 +3155,6 @@ def _run_git(args: list[str], cwd: str, timeout: int = 60) -> tuple[int, str, st
         return 1, "", str(e)
 
 def _check_python_syntax(fpath: str) -> str | None:
-    """Проверяет синтаксис .py-файла. Возвращает None если ок, иначе строку с ошибкой."""
     try:
         with open(fpath, 'r', encoding='utf-8') as fp:
             src = fp.read()
@@ -2866,10 +3169,6 @@ def _check_python_syntax(fpath: str) -> str | None:
     return None
 
 def _safe_check_import(fpath: str, timeout: int = 45) -> str | None:
-    """
-    Пытается импортировать файл в отдельном процессе. Возвращает None если ок,
-    иначе текст ошибки. Учитывает `if __name__ == "__main__"` — main не выполнится.
-    """
     if not os.path.isfile(fpath):
         return None
     script = (
@@ -2901,7 +3200,6 @@ def _safe_check_import(fpath: str, timeout: int = 45) -> str | None:
     return None
 
 def _find_entry_file(repo_path: str) -> str | None:
-    """Ищет основной .py-файл бота в репо: сначала текущий __file__, потом main.py/app.py/bot.py."""
     try:
         cur = os.path.abspath(__file__)
         if os.path.exists(cur) and cur.startswith(os.path.abspath(repo_path)):
@@ -2912,7 +3210,6 @@ def _find_entry_file(repo_path: str) -> str | None:
         p = os.path.join(repo_path, cand)
         if os.path.isfile(p):
             return p
-    # fallback: любой .py в корне
     try:
         for f in os.listdir(repo_path):
             if f.endswith(".py") and not f.startswith("_"):
@@ -2922,21 +3219,11 @@ def _find_entry_file(repo_path: str) -> str | None:
     return None
 
 async def perform_safe_git_update(repo_path: str) -> tuple[str, str]:
-    """
-    Безопасное обновление через git pull с автооткатом при ошибке.
-    Возвращает (status, info), где status:
-      - 'up_to_date' — нечего обновлять
-      - 'ok'         — обновились, можно перезапускаться
-      - 'rolled_back' — откатились к предыдущему коммиту
-      - 'error'      — что-то сломалось, откат невозможен/не нужен
-    """
-    # 1) Запоминаем текущий коммит
     rc, out, err = _run_git(["rev-parse", "HEAD"], cwd=repo_path, timeout=10)
     if rc != 0 or not out.strip():
         return "error", f"git rev-parse: {err or out or 'unknown error'}"
     prev_hash = out.strip()
 
-    # 2) Пробуем получить изменения
     rc, out, err = _run_git(["fetch", "origin", "main"], cwd=repo_path, timeout=60)
     if rc != 0:
         return "error", f"git fetch: {err or out or 'unknown error'}"
@@ -2944,7 +3231,6 @@ async def perform_safe_git_update(repo_path: str) -> tuple[str, str]:
     rc, out, err = _run_git(["pull", "origin", "main", "--ff-only"], cwd=repo_path, timeout=60)
     pull_out = (out or "") + (err or "")
     if rc != 0:
-        # Пробуем обычный pull без --ff-only на всякий случай
         rc2, out2, err2 = _run_git(["pull", "origin", "main"], cwd=repo_path, timeout=60)
         pull_out += "\n" + (out2 or "") + (err2 or "")
         if rc2 != 0:
@@ -2953,7 +3239,6 @@ async def perform_safe_git_update(repo_path: str) -> tuple[str, str]:
     if "Already up to date" in pull_out or "Already up-to-date" in pull_out:
         return "up_to_date", pull_out
 
-    # 3) Проверка синтаксиса всех .py в репо
     syntax_errors: list[str] = []
     try:
         for root, dirs, files in os.walk(repo_path):
@@ -2971,7 +3256,6 @@ async def perform_safe_git_update(repo_path: str) -> tuple[str, str]:
         syntax_errors.append(f"walk error: {type(e).__name__}: {e}")
 
     if syntax_errors:
-        # 4) Откат
         rc_reset, out_r, err_r = _run_git(["reset", "--hard", prev_hash], cwd=repo_path, timeout=30)
         if rc_reset != 0:
             return "error", (
@@ -2981,7 +3265,6 @@ async def perform_safe_git_update(repo_path: str) -> tuple[str, str]:
             )
         return "rolled_back", "\n".join(syntax_errors[:10])
 
-    # 5) Проверка импорта основного файла (ловит ошибки уровня импортов)
     entry = _find_entry_file(repo_path)
     if entry:
         import_err = await asyncio.to_thread(_safe_check_import, entry)
@@ -3198,7 +3481,7 @@ async def on_message(message: discord.Message) -> None:
     if content_lower.startswith("кульш донаты"):
         top = get_top_donators()
         if not top:
-            await message.reply("Пока никто не донатил 🍷🗿\nhttps://kulsh-ai.web.app/donate.html"); return
+            await message.reply(f"Пока никто не донатил 🍷🗿\n{DONATE_URL}"); return
         embed = discord.Embed(title="🏆 Топ донатеров", color=0x10b981)
         for i, (name, total) in enumerate(top, 1):
             embed.add_field(name=f"{i}. {name}", value=f"{total} очков", inline=False)
