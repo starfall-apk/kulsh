@@ -1,6 +1,7 @@
-# Kulsh GPT | v2.32.0 (menu/start rich messages with GIFs, KULSH colored table,
-# Telegram Mini App button, apply animation, restyled help/donate, safe git rollback,
-# mutual-exclusion streaming/split, streaming persistence, colored buttons, rich messages)
+# Kulsh GPT | v2.33.0 (Discord slash commands + neutral texts + fixed rich table marks +
+# new apply animation + custom prompt editor + /donate_stars command +
+# Discord config parity + language-aware menu gif + safe git rollback +
+# rich messages + colored buttons)
 # by (main author):
 #     starfall-apk
 # coauthor & bot hosting:
@@ -10,6 +11,7 @@ import asyncio
 import aiohttp
 import telebot
 import discord
+from discord import app_commands
 import re
 import random
 import os
@@ -35,7 +37,10 @@ from dotenv import load_dotenv
 from io import BytesIO
 from collections import deque, defaultdict
 from telebot.async_telebot import AsyncTeleBot
-from telebot.types import InputFile, InlineKeyboardMarkup, InlineKeyboardButton
+from telebot.types import (
+    InputFile, InlineKeyboardMarkup, InlineKeyboardButton,
+    ForceReply, WebAppInfo,
+)
 
 # ============================================================
 # ЛОГГЕР
@@ -43,7 +48,7 @@ from telebot.types import InputFile, InlineKeyboardMarkup, InlineKeyboardButton
 logger = logging.getLogger('KulshBot')
 logger.setLevel(logging.DEBUG)
 log_formatter = logging.Formatter('%(asctime)s | %(levelname)s | %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
-file_handler = RotatingFileHandler('bot.log', maxBytes=5*1024*1024, backupCount=1, encoding='utf-8')
+file_handler = RotatingFileHandler('bot.log', maxBytes=5 * 1024 * 1024, backupCount=1, encoding='utf-8')
 file_handler.setFormatter(log_formatter)
 console_handler = logging.StreamHandler()
 console_handler.setFormatter(log_formatter)
@@ -54,12 +59,19 @@ logger.addHandler(console_handler)
 # ВРЕМЯ
 # ============================================================
 MSK = timezone(timedelta(hours=3))
+
+
 def msk_now() -> datetime.datetime:
     return datetime.datetime.now(MSK)
+
+
 def msk_time_str() -> str:
     return msk_now().strftime('%H:%M')
+
+
 def msk_datetime_str() -> str:
     return msk_now().strftime('%d.%m.%Y %H:%M:%S МСК')
+
 
 # ============================================================
 # КОНФИГ .env
@@ -80,17 +92,19 @@ AI_KEYS = [k for k in [AI_KEY_1, AI_KEY_2, AI_KEY_3] if k]
 if not AI_KEYS and AI_KEY:
     AI_KEYS.append(AI_KEY)
 if not AI_KEYS:
-    logger.critical("❌ Не найден ни один API ключ Gemini!")
+    logger.critical("Не найден ни один API ключ Gemini!")
     exit(1)
 
 # ============================================================
-# ИНИЦИАЛИЗАЦИЯ БОТОВ (ВАЖНО: ДО ДЕКОРАТОРОВ!)
+# ИНИЦИАЛИЗАЦИЯ БОТОВ
 # ============================================================
 tg_bot = AsyncTeleBot(TG_TOKEN)
 
 intents = discord.Intents.default()
 intents.message_content = True
+intents.guilds = True
 ds_bot = discord.Client(intents=intents)
+ds_tree = app_commands.CommandTree(ds_bot)
 
 # ============================================================
 # КОНСТАНТЫ
@@ -100,36 +114,40 @@ DS_SERIES_CHANNEL_ID = 1403828467014832270
 DS_SERIES_TARGET_USER_ID = 1364588699589021890
 
 MINI_APP_URL = "https://kulsh.vercel.app"
-MENU_GIF_PATH = "menu.gif"
+MENU_GIF_RU_PATH = "menu.gif"
+MENU_GIF_EN_PATH = "menu_en.gif"
 KULSH_GIF_PATH = "kulsh.gif"
-DONATE_URL = "https://kulsh-ai.web.app/donate.html"
+DONATE_URL = "https://kulsh.vercel.app/donate"
 GITHUB_URL = "https://github.com/starfall-apk/kulsh"
 
 MODEL_LIST = [
     "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
     "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-2.5-flash",
     "gemini-2.5-flash-lite", "gemini-flash-latest", "gemini-flash-lite-latest",
-    "gemini-3-flash-preview", "gemini-3.1-flash-lite-preview"
+    "gemini-3-flash-preview", "gemini-3.1-flash-lite-preview",
 ]
 MODEL_DISPLAY: dict[str, str] = {
-    "gemini-3.8-flash": "🚀 3.8 Flash",
-    "gemini-3.7-flash": "⚡ 3.7 Flash",
-    "gemini-3.6-flash": "🌠 3.6 Flash",
-    "gemini-3.5-flash": "💫 3.5 Flash",
-    "gemini-3.5-flash-lite": "✨ 3.5 Flash Lite",
-    "gemini-2.5-flash": "🌟 2.5 Flash",
-    "gemini-2.5-flash-lite": "💡 2.5 Flash Lite",
-    "gemini-flash-latest": "🔥 Flash Latest",
-    "gemini-flash-lite-latest": "🌱 Flash Lite Latest",
-    "gemini-3-flash-preview": "🧪 3 Flash Preview",
-    "gemini-3.1-flash-lite-preview": "🧬 3.1 Flash Lite Preview",
+    "gemini-3.8-flash": "3.8 Flash",
+    "gemini-3.7-flash": "3.7 Flash",
+    "gemini-3.6-flash": "3.6 Flash",
+    "gemini-3.5-flash": "3.5 Flash",
+    "gemini-3.5-flash-lite": "3.5 Flash Lite",
+    "gemini-2.5-flash": "2.5 Flash",
+    "gemini-2.5-flash-lite": "2.5 Flash Lite",
+    "gemini-flash-latest": "Flash Latest",
+    "gemini-flash-lite-latest": "Flash Lite Latest",
+    "gemini-3-flash-preview": "3 Flash Preview",
+    "gemini-3.1-flash-lite-preview": "3.1 Flash Lite Preview",
 }
+
+
 def model_display_name(model: str | None) -> str:
     if not model:
-        return "🎲 авто (все подряд)"
+        return "авто (перебор)"
     return MODEL_DISPLAY.get(model, model)
 
-LOG_INTRO = "🍷🗿 Вот логи сервера, босс:"
+
+LOG_INTRO = "Логи сервера:"
 PREMIUM_ADMIN_ID = 1420898868
 premium_functions_enabled: bool = True
 AUTHORIZED_UPDATERS = [735217033867821098, 1193627300797878362]
@@ -152,9 +170,9 @@ if VOICE_RECOGNITION_ENABLED:
         from pydub import AudioSegment
     except ImportError:
         VOICE_RECOGNITION_ENABLED = False
-        logger.info("⚠️ speech_recognition/pydub не найдены")
+        logger.info("speech_recognition/pydub не найдены")
 else:
-    logger.info(f"⚠️ discord.py {discord.__version__}, voice_recv недоступен")
+    logger.info(f"discord.py {discord.__version__}, voice_recv недоступен")
 
 try:
     import edge_tts
@@ -162,7 +180,7 @@ try:
     VOICE_ENABLED = True
 except ImportError:
     VOICE_ENABLED = False
-    logger.info("⚠️ edge_tts/FFmpeg не найдены")
+    logger.info("edge_tts/FFmpeg не найдены")
 
 # ============================================================
 # ГЛОБАЛЬНЫЕ СТРУКТУРЫ
@@ -173,6 +191,7 @@ donations_data: dict[str, Any] = {}
 user_configs: defaultdict[str, dict[str, Any]] = defaultdict(dict)
 config_msg_owners: dict[int, int] = {}
 config_trigger_msgs: dict[str, int] = {}
+prompt_waiting: dict[int, int] = {}     # user_id -> bot message_id (ForceReply), ждём промпт
 credits_data: dict[str, dict[str, Any]] = {}
 tools_sessions: dict[int, dict[str, Any]] = {}
 chat_media_history: dict[str, deque[dict[str, Any]]] = defaultdict(lambda: deque(maxlen=50))
@@ -205,6 +224,7 @@ def load_json_file(path: str) -> dict:
     except Exception:
         return {}
 
+
 def save_json_file(path: str, data: Any) -> None:
     try:
         with open(path, 'w', encoding='utf-8') as f:
@@ -212,18 +232,23 @@ def save_json_file(path: str, data: Any) -> None:
     except Exception as e:
         logger.error(f"save_json_file error: {e}")
 
+
 donations_data = load_json_file(DONATIONS_FILE)
 long_term_memory = load_json_file(MEMORY_FILE)
 credits_data = load_json_file(CREDITS_FILE)
 
+
 def save_donations() -> None:
     save_json_file(DONATIONS_FILE, donations_data)
+
 
 def save_long_term_memory(data: dict) -> None:
     save_json_file(MEMORY_FILE, data)
 
+
 def save_credits() -> None:
     save_json_file(CREDITS_FILE, credits_data)
+
 
 def add_donation(platform: str, user_id: int, amount: int, name: str = "Аноним") -> None:
     key = f"{platform}_{user_id}"
@@ -232,6 +257,7 @@ def add_donation(platform: str, user_id: int, amount: int, name: str = "Анон
         donations_data['names'] = {}
     donations_data['names'][key] = name
     save_donations()
+
 
 def get_top_donators(top_n: int = 10) -> list[tuple[str, int]]:
     totals: dict[str, int] = {}
@@ -249,6 +275,7 @@ def get_top_donators(top_n: int = 10) -> list[tuple[str, int]]:
 def _today_str() -> str:
     return msk_now().strftime('%Y-%m-%d')
 
+
 def get_user_credits(platform: str, user_id: int) -> int:
     key = f"{platform}_{user_id}"
     today = _today_str()
@@ -258,6 +285,7 @@ def get_user_credits(platform: str, user_id: int) -> int:
         credits_data[key] = entry
         save_credits()
     return int(entry["credits"])
+
 
 def spend_credits(platform: str, user_id: int, amount: int) -> bool:
     key = f"{platform}_{user_id}"
@@ -292,6 +320,7 @@ DEFAULT_USER_CONFIG = {
     "tools_enabled": False,
 }
 
+
 def get_user_config(platform: str, chat_id: int, user_id: int) -> dict:
     key = f"{platform}_{chat_id}_{user_id}"
     cfg = user_configs.get(key)
@@ -305,6 +334,7 @@ def get_user_config(platform: str, chat_id: int, user_id: int) -> dict:
     if cfg.get("separate_enabled", True) and cfg.get("streaming_enabled", False):
         cfg["streaming_enabled"] = False
     return cfg
+
 
 def get_chat_key(platform: str, chat_id: int) -> str:
     return f"{platform}_{chat_id}"
@@ -323,6 +353,7 @@ def read_log_tail(max_lines: int = 20) -> str:
         return "Файл bot.log не найден."
     except Exception as e:
         return f"Ошибка чтения логов: {e}"
+
 
 def chunk_text(text: str, size: int) -> list[str]:
     if not text:
@@ -353,6 +384,7 @@ def get_chat_memory(chat_id: str) -> deque[dict[str, Any]]:
         chat_memories[chat_id] = deque(maxlen=20)
     return chat_memories[chat_id]
 
+
 def add_user_memory(chat_id, platform, display_name, username, user_id, text,
                     media=None, message_id=None) -> None:
     mem = get_chat_memory(chat_id)
@@ -363,9 +395,11 @@ def add_user_memory(chat_id, platform, display_name, username, user_id, text,
         "media": media or [], "message_id": message_id,
     })
 
+
 def add_bot_memory(chat_id: str, text: str, message_id: int | None = None) -> None:
     mem = get_chat_memory(chat_id)
     mem.append({"type": "bot", "time": msk_time_str(), "text": text or "", "message_id": message_id})
+
 
 def memory_to_messages(mem_deque: deque[dict[str, Any]]) -> list[dict[str, Any]]:
     messages: list[dict[str, Any]] = []
@@ -381,6 +415,7 @@ def memory_to_messages(mem_deque: deque[dict[str, Any]]) -> list[dict[str, Any]]
                       f"{entry.get('display','?')} ({uname}, id:{entry.get('id','?')})")
             messages.append({"role": "user", "text": f"{prefix}{media_str}: {entry.get('text','')}"})
     return messages
+
 
 def add_media_history(chat_id, url, media_type, sender, file_id=None, caption=""):
     chat_media_history[chat_id].append({
@@ -405,9 +440,10 @@ def markdown_like_to_telegram_html(text: str) -> str:
     text = re.sub(r'~~(.+?)~~', r'<s>\1</s>', text, flags=re.DOTALL)
     return text
 
+
 async def send_tg_html(chat_id: int, text: str, reply_to: int | None = None) -> None:
     html_text = markdown_like_to_telegram_html(text)
-    chunks = [html_text[i:i+4000] for i in range(0, max(len(html_text), 1), 4000)]
+    chunks = [html_text[i:i + 4000] for i in range(0, max(len(html_text), 1), 4000)]
     for i, chunk in enumerate(chunks):
         try:
             if i == 0 and reply_to is not None:
@@ -426,8 +462,10 @@ async def send_tg_html(chat_id: int, text: str, reply_to: int | None = None) -> 
             except Exception as e2:
                 logger.error(f"plain fallback fail: {e2}")
 
+
 async def reply_tg_html(message: telebot.types.Message, text: str) -> None:
     await send_tg_html(message.chat.id, text, reply_to=message.message_id)
+
 
 async def download_image_bytes(url: str) -> bytes:
     async with aiohttp.ClientSession() as session:
@@ -436,26 +474,32 @@ async def download_image_bytes(url: str) -> bytes:
                 return await resp.read()
             raise Exception(f"Failed to download file: {resp.status}")
 
+
 async def get_tg_file_bytes(bot: AsyncTeleBot, file_id: str) -> bytes:
     file_info = await bot.get_file(file_id)
     file_path = file_info.file_path
     url = f"https://api.telegram.org/file/bot{TG_TOKEN}/{file_path}"
     return await download_image_bytes(url)
 
+
 def image_bytes_to_base64(image_bytes: bytes, mime_type: str = "image/jpeg") -> tuple[str, str]:
     encoded = base64.b64encode(image_bytes).decode('utf-8')
     return encoded, mime_type
 
+
 async def extract_video_frame(video_bytes: bytes, ext_hint: str = ".mp4") -> bytes | None:
-    path = None; out_path = None
+    path = None
+    out_path = None
     try:
         with tempfile.NamedTemporaryFile(suffix=ext_hint, delete=False) as f:
-            f.write(video_bytes); path = f.name
+            f.write(video_bytes)
+            path = f.name
         out_path = path + ".jpg"
         await asyncio.to_thread(
             subprocess.run,
-            ["ffmpeg", "-y", "-i", path, "-vf", "select=eq(n\\,0)", "-vframes", "1", "-q:v", "3", out_path],
-            capture_output=True, timeout=40
+            ["ffmpeg", "-y", "-i", path, "-vf", "select=eq(n\\,0)",
+             "-vframes", "1", "-q:v", "3", out_path],
+            capture_output=True, timeout=40,
         )
         if os.path.exists(out_path):
             with open(out_path, 'rb') as f:
@@ -468,8 +512,10 @@ async def extract_video_frame(video_bytes: bytes, ext_hint: str = ".mp4") -> byt
     finally:
         for p in (path, out_path):
             if p and os.path.exists(p):
-                try: os.unlink(p)
-                except Exception: pass
+                try:
+                    os.unlink(p)
+                except Exception:
+                    pass
 
 # ============================================================
 # TYPING
@@ -481,6 +527,7 @@ TYPING_MAX_DELAY = 5.0
 TYPING_JITTER_MIN = 0.85
 TYPING_JITTER_MAX = 1.25
 
+
 def calc_typing_delay(text: str) -> float:
     if not text:
         return TYPING_MIN_DELAY
@@ -490,20 +537,27 @@ def calc_typing_delay(text: str) -> float:
     delay *= random.uniform(TYPING_JITTER_MIN, TYPING_JITTER_MAX)
     return max(TYPING_MIN_DELAY, min(TYPING_MAX_DELAY, delay))
 
+
 async def typing_with_delay_tg(chat_id: int, text: str, delay: float | None = None) -> None:
     if delay is None:
         delay = calc_typing_delay(text)
-    elapsed = 0.0; chunk = 4.0
+    elapsed = 0.0
+    chunk = 4.0
     while elapsed < delay:
-        try: await tg_bot.send_chat_action(chat_id, 'typing')
-        except Exception as e: logger.debug(f"typing action: {e}")
+        try:
+            await tg_bot.send_chat_action(chat_id, 'typing')
+        except Exception as e:
+            logger.debug(f"typing action: {e}")
         step = min(chunk, delay - elapsed)
-        await asyncio.sleep(step); elapsed += step
+        await asyncio.sleep(step)
+        elapsed += step
+
 
 async def typing_with_delay_ds(channel, text: str, delay: float | None = None) -> None:
     if delay is None:
         delay = calc_typing_delay(text)
-    elapsed = 0.0; chunk = 7.0
+    elapsed = 0.0
+    chunk = 7.0
     while elapsed < delay:
         step = min(chunk, delay - elapsed)
         try:
@@ -528,16 +582,20 @@ def _md_inline(text: str) -> str:
     t = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', r'<a href="\2">\1</a>', t)
     return t
 
+
 def _cell_html(cell_text: str, tag: str) -> str:
     """
-    Ячейка таблицы. Если содержимое целиком в *одинарных* звёздочках,
-    считаем её «ячейкой с залитым фоном» (см. формат |K|*U*|L|*S*|H|).
+    Ячейка таблицы.
+    Если содержимое целиком обёрнуто в *одинарные* звёздочки (|*U*|),
+    считаем это «залитой» ячейкой и оборачиваем в <mark> (rich HTML 10.3
+    рендерит <mark> как подсвеченный/залитый текст).
     """
     s = (cell_text or "").strip()
     if len(s) >= 2 and s.startswith('*') and s.endswith('*') and '*' not in s[1:-1]:
         inner = s[1:-1]
-        return f'<{tag} bgcolor="#10B981" color="#0E0E12">{_md_inline(inner)}</{tag}>'
+        return f'<{tag}><mark>{_md_inline(inner)}</mark></{tag}>'
     return f'<{tag}>{_md_inline(s)}</{tag}>'
+
 
 def build_rich_message(text: str) -> dict[str, Any] | None:
     if not text:
@@ -558,7 +616,9 @@ def build_rich_message(text: str) -> dict[str, Any] | None:
     html_parts: list[str] = []
     lines = text.split('\n')
     i = 0
-    in_code = False; code_lang = ""; code_lines: list[str] = []
+    in_code = False
+    code_lang = ""
+    code_lines: list[str] = []
     table_rows: list[list[str]] = []
 
     def flush_code():
@@ -567,7 +627,9 @@ def build_rich_message(text: str) -> dict[str, Any] | None:
             lang_attr = f' class="language-{code_lang}"' if code_lang else ''
             body = html.escape('\n'.join(code_lines))
             html_parts.append(f'<pre><code{lang_attr}>{body}</code></pre>')
-        in_code = False; code_lang = ""; code_lines = []
+        in_code = False
+        code_lang = ""
+        code_lines = []
 
     def flush_table():
         nonlocal table_rows
@@ -584,24 +646,33 @@ def build_rich_message(text: str) -> dict[str, Any] | None:
         line = lines[i]
         if line.strip().startswith('```'):
             if not in_code:
-                in_code = True; code_lang = line.strip()[3:].strip(); code_lines = []
+                in_code = True
+                code_lang = line.strip()[3:].strip()
+                code_lines = []
             else:
                 flush_code()
-            i += 1; continue
+            i += 1
+            continue
         if in_code:
-            code_lines.append(line); i += 1; continue
+            code_lines.append(line)
+            i += 1
+            continue
         if '|' in line and line.strip().startswith('|') and line.strip().endswith('|'):
             cells = [c.strip() for c in line.strip().strip('|').split('|')]
             if all(re.match(r'^:?-+:?$', c) for c in cells):
-                i += 1; continue
-            table_rows.append(cells); i += 1; continue
+                i += 1
+                continue
+            table_rows.append(cells)
+            i += 1
+            continue
         else:
             flush_table()
         m = re.match(r'^(#{1,6})\s+(.*)', line)
         if m:
             level = len(m.group(1))
             html_parts.append(f'<h{level}>{_md_inline(m.group(2))}</h{level}>')
-            i += 1; continue
+            i += 1
+            continue
         if re.match(r'^-\s*\[[ x]\]', line):
             items = []
             while i < len(lines) and re.match(r'^-\s*\[[ x]\]', lines[i]):
@@ -637,20 +708,26 @@ def build_rich_message(text: str) -> dict[str, Any] | None:
             block_lines = [line]
             i += 1
             while i < len(lines) and '</details>' not in lines[i].lower():
-                block_lines.append(lines[i]); i += 1
+                block_lines.append(lines[i])
+                i += 1
             if i < len(lines):
-                block_lines.append(lines[i]); i += 1
+                block_lines.append(lines[i])
+                i += 1
             html_parts.append('\n'.join(block_lines))
             continue
         if re.match(r'^-{3,}$', line.strip()) or re.match(r'^\*{3,}$', line.strip()):
-            html_parts.append('<hr/>'); i += 1; continue
+            html_parts.append('<hr/>')
+            i += 1
+            continue
         if line.strip():
             html_parts.append(f'<p>{_md_inline(line)}</p>')
         i += 1
-    flush_code(); flush_table()
+    flush_code()
+    flush_table()
     if not html_parts:
         return None
     return {"html": '\n'.join(html_parts), "is_rtl": False, "skip_entity_detection": False}
+
 
 async def send_rich_message(
     chat_id: int,
@@ -683,6 +760,34 @@ async def send_rich_message(
         logger.warning(f"sendRichMessage error: {e}")
         return False
 
+
+async def edit_rich_message(
+    chat_id: int,
+    message_id: int,
+    text: str,
+    reply_markup: InlineKeyboardMarkup | None = None,
+) -> bool:
+    if not premium_functions_enabled:
+        return False
+    rich = build_rich_message(text)
+    if not rich:
+        return False
+    payload: dict[str, Any] = {"chat_id": chat_id, "message_id": message_id, "rich_message": rich}
+    if reply_markup is not None:
+        try:
+            payload["reply_markup"] = reply_markup.to_dict()
+        except AttributeError:
+            payload["reply_markup"] = reply_markup
+    try:
+        async with aiohttp.ClientSession() as session:
+            url = f"https://api.telegram.org/bot{TG_TOKEN}/editMessageText"
+            async with session.post(url, json=payload, timeout=30) as resp:
+                return resp.status == 200
+    except Exception as e:
+        logger.warning(f"edit_rich_message error: {e}")
+        return False
+
+
 async def send_formatted(
     chat_id: int,
     text: str,
@@ -708,8 +813,8 @@ async def send_formatted(
         except Exception as e:
             logger.error(f"send_formatted fallback fail: {e}")
 
+
 async def stream_draft(chat_id: int, draft_id: int, text: str) -> bool:
-    """Стриминг черновика через sendMessageDraft (только ЛС)."""
     if not premium_functions_enabled:
         return False
     payload = {"chat_id": chat_id, "draft_id": draft_id, "text": text}
@@ -727,14 +832,21 @@ async def stream_draft(chat_id: int, draft_id: int, text: str) -> bool:
 APPLY_ANIMATION_FRAMES = [
     "🗿",
     "🗿💭",
-    "🗿 •",
-    "🗿 • •",
-    "🗿 • • •",
+    "🗿◽▫️▫️",
+    "🗿▫️◽▫️",
+    "🗿▫️▫️◽",
+    "🗿◽▫️▫️",
+    "🗿▫️◽▫️",
+    "🗿▫️▫️◽",
+    "🗿▫️▫️▫️",
+    "🗿",
+    "🗿◽◽◽",
+    "🗿",
     "🍷🗿",
 ]
 
-async def play_apply_animation(chat_id: int, message_id: int, step_delay: float = 0.35) -> None:
-    """Проигрывает пошаговую анимацию в одном редактируемом сообщении, затем удаляет его."""
+
+async def play_apply_animation(chat_id: int, message_id: int, step_delay: float = 0.09) -> None:
     try:
         for frame in APPLY_ANIMATION_FRAMES:
             try:
@@ -758,7 +870,7 @@ def build_system_prompt(platform: str, chat_id: int, user_id: int) -> str:
     if cfg.get("custom_prompt"):
         parts.append(f"Твои обязательные инструкции: {cfg['custom_prompt']}\n\n")
 
-    if premium_functions_enabled:
+    if premium_functions_enabled and platform == "tg":
         parts.append(
             "ФОРМАТИРОВАНИЕ (Bot API 10.1 Rich Messages). Ты можешь использовать расширенный Markdown: "
             "заголовки (# H1 – ###### H6), таблицы GFM (| столбец | столбец |), маркированные и нумерованные списки, "
@@ -769,6 +881,11 @@ def build_system_prompt(platform: str, chat_id: int, user_id: int) -> str:
             "фоном — например, строка |K|*U*|L|*S*|H| даст чередующийся узор. "
             "Используй форматирование ТОЛЬКО когда оно уместно: для структурированных ответов, инструкций, "
             "сравнений, кода, формул. Не форматируй каждый ответ — в обычном чате пиши простым текстом.\n\n"
+        )
+    elif platform == "ds":
+        parts.append(
+            "ФОРМАТИРОВАНИЕ (Discord Markdown). Доступны: **жирный**, *курсив*, __подчёркивание__, ~~зачёркивание~~, "
+            "`код`, ```блок кода```, > цитата, ||спойлер||. Не используй Markdown из Telegram (нет таблиц и H1).\n\n"
         )
     else:
         parts.append("ФОРМАТИРОВАНИЕ: расширенные функции отключены. Пиши простым текстом.\n\n")
@@ -788,7 +905,7 @@ def build_system_prompt(platform: str, chat_id: int, user_id: int) -> str:
         "кто говорит — не догадывайся вслепую, спроси или обращайся нейтрально. Отвечай ТОЛЬКО последнему написавшему.\n\n"
     )
 
-    if cfg.get("separate_enabled", True):
+    if cfg.get("separate_enabled", True) and platform == "tg":
         parts.append(
             "РАЗБИВКА НА СООБЩЕНИЯ. Живые люди в чатах почти никогда не пишут длинные монологи одним сообщением. "
             "Ты можешь разбивать свой ответ на 2-4 отдельных коротких сообщения. Между частями ставь маркер "
@@ -797,7 +914,7 @@ def build_system_prompt(platform: str, chat_id: int, user_id: int) -> str:
             "• 'ахахаха!separateты чё реально это сделал?separateну ты даёшь'\n"
             "2-4 частей обычно достаточно.\n\n"
         )
-    else:
+    elif platform == "tg":
         parts.append(
             "РАЗБИВКА НА СООБЩЕНИЯ ОТКЛЮЧЕНА. НЕ используй маркер !separate. Пиши одним цельным сообщением.\n\n"
         )
@@ -921,7 +1038,7 @@ async def ask_ai_async(
         for api_key in AI_KEYS:
             total_attempt += 1
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
-            logger.info(f"🔄 {total_attempt}/{total_max}: {model_name}, ключ {api_key[:4]}...")
+            logger.info(f"AI {total_attempt}/{total_max}: {model_name}, ключ {api_key[:4]}...")
             try:
                 async with aiohttp.ClientSession() as session:
                     async with session.post(url, json=payload_base, timeout=45) as resp:
@@ -929,13 +1046,15 @@ async def ask_ai_async(
                         if status == 503:
                             break
                         if status == 429:
-                            await asyncio.sleep(backoff); continue
+                            await asyncio.sleep(backoff)
+                            continue
                         if status == 400:
                             text = await resp.text()
                             logger.error(f"400: {text[:300]}")
                             return "Ошибка запроса к API (400)."
                         if status >= 500:
-                            await asyncio.sleep(backoff); continue
+                            await asyncio.sleep(backoff)
+                            continue
                         if status != 200:
                             text = await resp.text()
                             logger.error(f"{status}: {text[:300]}")
@@ -949,12 +1068,14 @@ async def ask_ai_async(
                         else:
                             if 'promptFeedback' in data:
                                 br = data['promptFeedback'].get('blockReason', 'UNKNOWN')
-                                logger.error(f"❌ Заблокировано: {br}")
+                                logger.error(f"Заблокировано: {br}")
                                 return "Блокировка контента."
-                            await asyncio.sleep(backoff); continue
+                            await asyncio.sleep(backoff)
+                            continue
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 logger.warning(f"Сетевая ошибка: {e}")
-                await asyncio.sleep(backoff); continue
+                await asyncio.sleep(backoff)
+                continue
             except Exception as e:
                 logger.error(f"Непредвиденная ошибка: {e}")
                 return "Ошибка. Что-то пошло не так."
@@ -972,6 +1093,7 @@ def clean_json_text(text: str) -> str:
     if text.endswith("```"):
         text = text[:-3]
     return text.strip()
+
 
 async def extract_memory(chat_id: str, user_message: str, bot_answer: str):
     prompt = (
@@ -1009,11 +1131,13 @@ UTILITY_PATTERNS = {
 }
 SEPARATOR_PATTERN = re.compile(r'!\s*sep[ae]rate|(?<![A-Za-z])sep[ae]rate(?![A-Za-z])', re.IGNORECASE)
 
+
 def split_by_separator(text: str) -> list[str]:
     if not text:
         return []
     parts = SEPARATOR_PATTERN.split(text)
     return [p.strip() for p in parts if p and p.strip()]
+
 
 def extract_utility_markers(text: str) -> tuple[str, list[str]]:
     text = text or ""
@@ -1028,12 +1152,16 @@ def extract_utility_markers(text: str) -> tuple[str, list[str]]:
     text = re.sub(r'\n{3,}', '\n\n', text)
     return text.strip(), markers
 
+
 def dedupe_markers(markers: list[str]) -> list[str]:
-    seen: set[str] = set(); out: list[str] = []
+    seen: set[str] = set()
+    out: list[str] = []
     for m in markers:
         if m not in seen:
-            seen.add(m); out.append(m)
+            seen.add(m)
+            out.append(m)
     return out
+
 
 def process_ai_response(raw: str, separate_enabled: bool = True) -> tuple[list[str], list[str]]:
     raw_clean, markers = extract_utility_markers(raw or "")
@@ -1046,6 +1174,7 @@ def process_ai_response(raw: str, separate_enabled: bool = True) -> tuple[list[s
         segments = [raw_clean]
     clean_segments = [s.strip() for s in segments if s and s.strip()]
     return clean_segments, markers
+
 
 def clean_extra_text(raw: str) -> list[str]:
     if not raw:
@@ -1063,7 +1192,7 @@ STICKER_POOL = [
     "CAACAgEAAxkBAAEXkj9qd6YSbqnaV0Cy2lJdQZxWgfdYNAACCQIAAvGaoUbqHGwx5EW7xT0E",
     "CAACAgIAAxkBAAEXkkFqd6Yk_g5UWkBESTIlZCT9MM7lZwACBVMAAlXDoUv4ZxNfrA5v8D0E",
     "CAACAgIAAxkBAAEXkkNqd6YlWmX_v6vxFgVS-5u8SMFqGwACJ0wAAlzgmUtxWCk2-pvTsT0E",
-    "CAACAgIAAxkBAAEXkkVqd6YmKSS74hvpUNctJPyOg80O2wAC1EgAAsKvmUsRFrgOElSDWz0E"
+    "CAACAgIAAxkBAAEXkkVqd6YmKSS74hvpUNctJPyOg80O2wAC1EgAAsKvmUsRFrgOElSDWz0E",
 ]
 GIF_POOL = [
     "https://cdn.discordapp.com/attachments/1494583947664035913/1535766838695301150/moai_20260808214829.gif",
@@ -1082,6 +1211,7 @@ def _tg_bot_id() -> int | None:
     except Exception:
         return None
 
+
 def resolve_avatar_target_tg(message: telebot.types.Message):
     bot_id = _tg_bot_id()
     if message.reply_to_message and message.reply_to_message.from_user:
@@ -1095,6 +1225,7 @@ def resolve_avatar_target_tg(message: telebot.types.Message):
     if message.from_user and (bot_id is None or message.from_user.id != bot_id):
         return message.from_user
     return None
+
 
 async def get_avatar_description_tg(message, chat_id, user_id) -> str | None:
     target = resolve_avatar_target_tg(message)
@@ -1123,12 +1254,14 @@ async def get_avatar_description_tg(message, chat_id, user_id) -> str | None:
         logger.warning(f"avatar desc: {e}")
         return None
 
+
 async def get_avatar_description_ds(message, chat_id, user_id) -> str | None:
     target = None
     if message.mentions:
         for m in message.mentions:
             if m.id != ds_bot.user.id:
-                target = m; break
+                target = m
+                break
     if target is None and message.reference and message.reference.resolved and isinstance(message.reference.resolved, discord.Message):
         ref_auth = message.reference.resolved.author
         if ref_auth.id != ds_bot.user.id:
@@ -1150,6 +1283,7 @@ async def get_avatar_description_ds(message, chat_id, user_id) -> str | None:
     except Exception as e:
         logger.warning(f"DS avatar desc: {e}")
         return None
+
 
 async def get_recall_media_description_tg(message, chat_id, user_id, n=3) -> str | None:
     history = list(chat_media_history.get(f"tg_{chat_id}", []))
@@ -1208,6 +1342,7 @@ TIER_DISTRIBUTION = [
     {"key": "trueadam", "short": "TA",  "full_m": "TRUE ADAM", "full_f": "TRUE EVE",  "psl_low": 7.9, "psl_high": 8.0},
 ]
 
+
 def find_tier_key(tier_name: str) -> str | None:
     if not tier_name:
         return None
@@ -1218,17 +1353,24 @@ def find_tier_key(tier_name: str) -> str | None:
             return t["key"]
     return None
 
+
 def get_tier_color(tier_key_or_name: str) -> str:
     key = find_tier_key(tier_key_or_name) or (tier_key_or_name or "").strip().lower()
-    if key in ("sub3", "sub5"): return "#E53E3E"
-    if key in ("ltn", "mtn"):   return "#ECC94B"
-    if key in ("htn", "chadlite", "chad", "adamlite"): return "#38A169"
-    if key == "trueadam":       return "#9F7AEA"
+    if key in ("sub3", "sub5"):
+        return "#E53E3E"
+    if key in ("ltn", "mtn"):
+        return "#ECC94B"
+    if key in ("htn", "chadlite", "chad", "adamlite"):
+        return "#38A169"
+    if key == "trueadam":
+        return "#9F7AEA"
     return "#38A169"
+
 
 def is_looksmaxxing_command(text: str) -> bool:
     t = (text or "").strip().lower()
     return bool(re.match(r'^(кульш\s+)?psl(\s+(совет|advice))?$', t))
+
 
 def is_battle_command(text: str) -> bool:
     t = (text or "").strip().lower()
@@ -1244,66 +1386,100 @@ def load_font(size: int):
     except IOError:
         return ImageFont.load_default()
 
+
 def add_bullet(text: str) -> str:
     if text.startswith("•") or text.startswith("-"):
         return text
     return f"• {text}"
 
+
 def _wrap_text(text, draw, font, max_width):
-    words = text.split(' '); lines = []; cur = ""
+    words = text.split(' ')
+    lines = []
+    cur = ""
     for w in words:
         test = f"{cur} {w}".strip()
         bbox = draw.textbbox((0, 0), test, font=font)
         if bbox[2] - bbox[0] <= max_width:
             cur = test
         else:
-            if cur: lines.append(cur)
+            if cur:
+                lines.append(cur)
             cur = w
-    if cur: lines.append(cur)
+    if cur:
+        lines.append(cur)
     return lines
+
 
 def _block_height(lines, font, line_spacing, draw):
     total = 0
     for line in lines:
         bbox = draw.textbbox((0, 0), line, font=font)
         total += bbox[3] - bbox[1] + line_spacing
-    if total > 0: total -= line_spacing
+    if total > 0:
+        total -= line_spacing
     return total
+
 
 async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark", lang: str = "en") -> BytesIO:
     if lang == "ru":
-        TITLE = "ОТЧЁТ LOOKSMAXXING"; PSL_LABEL = "PSL"; STRENGTHS = "ПРЕИМУЩЕСТВ."; WEAKNESSES = "НЕДОСТАТКИ"
+        TITLE = "ОТЧЁТ LOOKSMAXXING"
+        PSL_LABEL = "PSL"
+        STRENGTHS = "ПРЕИМУЩЕСТВ."
+        WEAKNESSES = "НЕДОСТАТКИ"
         FULL_ANALYSIS = "Полный анализ в сообщении"
         METRIC_NAMES = {"skin": "Кожа", "eyes": "Глаза", "jawline": "Челюсть", "bloat": "Одутловатость",
                         "hair": "Волосы", "bone_structure": "Костная структура", "symmetry": "Симметрия",
                         "canthal_tilt": "Кант. наклон"}
-        BETTER_THAN = "Вы превосходите {}% людей"; DISTRIBUTION_CAPTION = "Распределение тиров"
+        BETTER_THAN = "Вы превосходите {}% людей"
+        DISTRIBUTION_CAPTION = "Распределение тиров"
         POTENTIAL_LABEL = "Потенциал:"
     else:
-        TITLE = "LOOKSMAXXING REPORT"; PSL_LABEL = "PSL"; STRENGTHS = "STRENGTHS"; WEAKNESSES = "WEAKNESSES"
+        TITLE = "LOOKSMAXXING REPORT"
+        PSL_LABEL = "PSL"
+        STRENGTHS = "STRENGTHS"
+        WEAKNESSES = "WEAKNESSES"
         FULL_ANALYSIS = "Full analysis in the message"
         METRIC_NAMES = {"skin": "Skin", "eyes": "Eyes", "jawline": "Jawline", "bloat": "Bloat",
                         "hair": "Hair", "bone_structure": "Bone structure", "symmetry": "Symmetry",
                         "canthal_tilt": "Canthal tilt"}
-        BETTER_THAN = "You outperform {}% of people"; DISTRIBUTION_CAPTION = "Tier distribution"
+        BETTER_THAN = "You outperform {}% of people"
+        DISTRIBUTION_CAPTION = "Tier distribution"
         POTENTIAL_LABEL = "Potential:"
 
     if theme == "light":
-        bg_color = "#F9F9FB"; text_primary = "#1A1A2E"; text_secondary = "#4A4A6A"
-        text_tertiary = "#6B6B80"; accent = "#2B6CB0"; line_color = "#D1D5DB"
-        scale_bg = "#E5E7EB"; weak_color = "#C53030"; highlight_outline = "#1A1A2E"
+        bg_color = "#F9F9FB"
+        text_primary = "#1A1A2E"
+        text_secondary = "#4A4A6A"
+        text_tertiary = "#6B6B80"
+        accent = "#2B6CB0"
+        line_color = "#D1D5DB"
+        scale_bg = "#E5E7EB"
+        weak_color = "#C53030"
+        highlight_outline = "#1A1A2E"
     else:
-        bg_color = "#0E0E12"; text_primary = "#F3F4F6"; text_secondary = "#9CA3AF"
-        text_tertiary = "#6B6B80"; accent = "#10B981"; line_color = "#2A2A3A"
-        scale_bg = "#2A2A3A"; weak_color = "#E53E3E"; highlight_outline = "#FFFFFF"
+        bg_color = "#0E0E12"
+        text_primary = "#F3F4F6"
+        text_secondary = "#9CA3AF"
+        text_tertiary = "#6B6B80"
+        accent = "#10B981"
+        line_color = "#2A2A3A"
+        scale_bg = "#2A2A3A"
+        weak_color = "#E53E3E"
+        highlight_outline = "#FFFFFF"
 
     canvas_w, canvas_h = 1000, 1000
     image = Image.new("RGBA", (canvas_w, canvas_h), bg_color)
     draw = ImageDraw.Draw(image)
 
-    font_title = load_font(34); font_psl_num = load_font(56); font_sub = load_font(24)
-    font_text = load_font(18); font_small = load_font(15); font_scale = load_font(16)
-    list_font = load_font(17); font_tier_label = load_font(13)
+    font_title = load_font(34)
+    font_psl_num = load_font(56)
+    font_sub = load_font(24)
+    font_text = load_font(18)
+    font_small = load_font(15)
+    font_scale = load_font(16)
+    list_font = load_font(17)
+    font_tier_label = load_font(13)
 
     draw.text((40, 25), TITLE, fill=text_tertiary, font=font_title)
     draw.line([(40, 70), (canvas_w - 40, 70)], fill=line_color, width=1)
@@ -1330,11 +1506,13 @@ async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark"
     if fk:
         for idx, t in enumerate(TIER_DISTRIBUTION):
             if t["key"] == fk:
-                current_tier_idx = idx; break
+                current_tier_idx = idx
+                break
     if current_tier_idx == -1:
         for idx, t in enumerate(TIER_DISTRIBUTION):
             if t["psl_low"] <= psl_val <= t["psl_high"]:
-                current_tier_idx = idx; break
+                current_tier_idx = idx
+                break
     if current_tier_idx == -1:
         current_tier_idx = 4
 
@@ -1343,7 +1521,10 @@ async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark"
     photo_bottom = photo_y + rounded.size[1]
     draw.text((40, photo_bottom + 20), better_text, fill=text_secondary, font=font_sub)
 
-    chart_x = 40; chart_y = photo_bottom + 65; chart_width = 430; chart_height = 20
+    chart_x = 40
+    chart_y = photo_bottom + 65
+    chart_width = 430
+    chart_height = 20
     total_range = 8.0 - 1.0
     for tier in TIER_DISTRIBUTION:
         low, high = tier["psl_low"], tier["psl_high"]
@@ -1351,7 +1532,7 @@ async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark"
         x_end = chart_x + (high - 1.0) / total_range * chart_width
         draw.rectangle([x_start, chart_y, x_end, chart_y + chart_height], fill=get_tier_color(tier["key"]))
         if tier["key"] == TIER_DISTRIBUTION[current_tier_idx]["key"]:
-            draw.rectangle([x_start-1, chart_y-1, x_end+1, chart_y+chart_height+1],
+            draw.rectangle([x_start - 1, chart_y - 1, x_end + 1, chart_y + chart_height + 1],
                            outline=highlight_outline, width=2)
         tb = draw.textbbox((0, 0), tier["short"], font=font_tier_label)
         tw = tb[2] - tb[0]
@@ -1359,7 +1540,8 @@ async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark"
                   tier["short"], fill=text_secondary, font=font_tier_label)
     draw.text((40, chart_y + chart_height + 30), DISTRIBUTION_CAPTION, fill=text_tertiary, font=font_small)
 
-    start_x = 510; right_top_y = 100
+    start_x = 510
+    right_top_y = 100
     draw.text((start_x, right_top_y), PSL_LABEL, fill=text_tertiary, font=font_sub)
     draw.text((start_x, right_top_y + 35), f"{psl_score}", fill=text_primary, font=font_psl_num)
     draw.text((start_x, right_top_y + 110), f"{tier_name} · {gender}", fill=accent, font=font_sub)
@@ -1387,10 +1569,13 @@ async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark"
         ("symmetry", data.get("symmetry", "N/A")), ("canthal_tilt", data.get("canthal_tilt", "N/A")),
     ]
     right_margin = start_x + 430
-    col1_x = start_x; col1_width = 200
+    col1_x = start_x
+    col1_width = 200
     col2_x = col1_x + col1_width + 20
     col2_width = right_margin - col2_x
-    base_row_height = 38; min_padding = 6; line_spacing = 2
+    base_row_height = 38
+    min_padding = 6
+    line_spacing = 2
     current_y = psl_bar_y + psl_bar_h + 25
     for key, val_str in metrics_mapping:
         title = METRIC_NAMES.get(key, key)
@@ -1410,14 +1595,20 @@ async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark"
         current_y += row_height
     draw.line([(col1_x, current_y), (right_margin, current_y)], fill=line_color, width=1)
 
-    pros = data.get("pros", []); cons = data.get("cons", [])
-    if isinstance(pros, str): pros = [pros]
-    if isinstance(cons, str): cons = [cons]
-    pros = [add_bullet(p) for p in pros]; cons = [add_bullet(c) for c in cons]
+    pros = data.get("pros", [])
+    cons = data.get("cons", [])
+    if isinstance(pros, str):
+        pros = [pros]
+    if isinstance(cons, str):
+        cons = [cons]
+    pros = [add_bullet(p) for p in pros]
+    cons = [add_bullet(c) for c in cons]
     col_y = current_y + 20
     draw.text((start_x, col_y), STRENGTHS, fill=accent, font=font_sub)
     draw.text((start_x + 220, col_y), WEAKNESSES, fill=weak_color, font=font_sub)
-    col_width = 200; line_height = 26; list_start_y = col_y + 38
+    col_width = 200
+    line_height = 26
+    list_start_y = col_y + 38
 
     def render_list(items, x, y, color, max_width=col_width):
         cy = y
@@ -1432,8 +1623,11 @@ async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark"
     end_right = render_list(cons, start_x + 230, list_start_y, text_primary)
     max_y = max(end_left, end_right)
     draw.text((40, max_y + 30), FULL_ANALYSIS, fill=text_tertiary, font=font_small)
-    out = BytesIO(); image.save(out, format="PNG"); out.seek(0)
+    out = BytesIO()
+    image.save(out, format="PNG")
+    out.seek(0)
     return out
+
 
 async def create_battle_infographic(p1: bytes, p2: bytes, data: dict, theme="dark", lang="en") -> BytesIO:
     if lang == "ru":
@@ -1441,40 +1635,63 @@ async def create_battle_infographic(p1: bytes, p2: bytes, data: dict, theme="dar
         FACTOR_LABELS = {"skin": "Кожа", "eyes": "Глаза", "jawline": "Челюсть", "bloat": "Одутловатость",
                          "hair": "Волосы", "bone_structure": "Костная структура", "symmetry": "Симметрия",
                          "canthal_tilt": "Кант. наклон"}
-        MOGGED_TEXT = "МОГГНУТ"; WINNER_LABEL = "ПОБЕДИТЕЛЬ"
+        MOGGED_TEXT = "МОГГНУТ"
+        WINNER_LABEL = "ПОБЕДИТЕЛЬ"
     else:
         TITLE = "LOOKSMAXXING BATTLE"
         FACTOR_LABELS = {"skin": "Skin", "eyes": "Eyes", "jawline": "Jawline", "bloat": "Bloat",
                          "hair": "Hair", "bone_structure": "Bone structure", "symmetry": "Symmetry",
                          "canthal_tilt": "Canthal tilt"}
-        MOGGED_TEXT = "MOGGED"; WINNER_LABEL = "WINNER"
+        MOGGED_TEXT = "MOGGED"
+        WINNER_LABEL = "WINNER"
 
     if theme == "light":
-        bg_color = "#F9F9FB"; text_primary = "#1A1A2E"; text_secondary = "#4A4A6A"
-        text_tertiary = "#6B6B80"; accent = "#2B6CB0"; line_color = "#D1D5DB"
-        scale_bg = "#E5E7EB"; mogged_color = (0, 0, 0, 180); mogged_text_color = "#E53E3E"
+        bg_color = "#F9F9FB"
+        text_primary = "#1A1A2E"
+        text_secondary = "#4A4A6A"
+        text_tertiary = "#6B6B80"
+        accent = "#2B6CB0"
+        line_color = "#D1D5DB"
+        scale_bg = "#E5E7EB"
+        mogged_color = (0, 0, 0, 180)
+        mogged_text_color = "#E53E3E"
     else:
-        bg_color = "#0E0E12"; text_primary = "#F3F4F6"; text_secondary = "#9CA3AF"
-        text_tertiary = "#6B6B80"; accent = "#10B981"; line_color = "#2A2A3A"
-        scale_bg = "#2A2A3A"; mogged_color = (0, 0, 0, 180); mogged_text_color = "#E53E3E"
+        bg_color = "#0E0E12"
+        text_primary = "#F3F4F6"
+        text_secondary = "#9CA3AF"
+        text_tertiary = "#6B6B80"
+        accent = "#10B981"
+        line_color = "#2A2A3A"
+        scale_bg = "#2A2A3A"
+        mogged_color = (0, 0, 0, 180)
+        mogged_text_color = "#E53E3E"
 
     canvas_w, canvas_h = 1300, 1300
     image = Image.new("RGBA", (canvas_w, canvas_h), bg_color)
     draw = ImageDraw.Draw(image)
-    font_title = load_font(34); font_psl_num = load_font(56); font_sub = load_font(24)
-    font_text = load_font(18); font_scale = load_font(16); font_winner = load_font(30); font_mogged = load_font(48)
+    font_title = load_font(34)
+    font_psl_num = load_font(56)
+    font_sub = load_font(24)
+    font_text = load_font(18)
+    font_scale = load_font(16)
+    font_winner = load_font(30)
+    font_mogged = load_font(48)
 
     draw.text((canvas_w // 2, 25), TITLE, fill=text_tertiary, font=font_title, anchor="mm")
     draw.line([(40, 70), (canvas_w - 40, 70)], fill=line_color, width=1)
 
-    col_width = 550; left_x = 50
+    col_width = 550
+    left_x = 50
     right_x = canvas_w - 50 - col_width
-    photo_y = 110; photo_width = col_width; photo_height = 500
+    photo_y = 110
+    photo_width = col_width
+    photo_height = 500
 
     def paste_rounded(img_bytes, x, y, w, h, radius=28):
         im = Image.open(BytesIO(img_bytes)).convert("RGBA")
         im.thumbnail((w, h), Image.Resampling.LANCZOS)
-        ix = x + (w - im.width) // 2; iy = y + (h - im.height) // 2
+        ix = x + (w - im.width) // 2
+        iy = y + (h - im.height) // 2
         mask = Image.new("L", im.size, 0)
         ImageDraw.Draw(mask).rounded_rectangle((0, 0) + im.size, radius=radius, fill=255)
         rounded = Image.new("RGBA", im.size, (0, 0, 0, 0))
@@ -1503,12 +1720,16 @@ async def create_battle_infographic(p1: bytes, p2: bytes, data: dict, theme="dar
     info_y = winner_y + 70
     for side, rect, key in [(1, left_rect, "photo1"), (2, right_rect, "photo2")]:
         pd = data.get(key, {})
-        psl = pd.get("psl", "N/A"); tier = pd.get("tier", "N/A")
-        gender = pd.get("gender", "N/A"); factors = pd.get("factors", {})
+        psl = pd.get("psl", "N/A")
+        tier = pd.get("tier", "N/A")
+        gender = pd.get("gender", "N/A")
+        factors = pd.get("factors", {})
         if side == 1:
-            anchor = "ls"; bar_x = rect[0]
+            anchor = "ls"
+            bar_x = rect[0]
         else:
-            anchor = "rs"; bar_x = rect[0] + rect[2]
+            anchor = "rs"
+            bar_x = rect[0] + rect[2]
         draw.text((bar_x, info_y), f"PSL: {psl}", fill=text_primary, font=font_psl_num, anchor=anchor)
         draw.text((bar_x, info_y + 50), f"{tier} · {gender}", fill=accent, font=font_sub, anchor=anchor)
         try:
@@ -1516,35 +1737,44 @@ async def create_battle_infographic(p1: bytes, p2: bytes, data: dict, theme="dar
         except (ValueError, TypeError):
             psl_val = 1.0
         psl_val = max(1.0, min(8.0, psl_val))
-        bar_w = rect[2]; bar_y = info_y + 95; bar_h = 20
+        bar_w = rect[2]
+        bar_y = info_y + 95
+        bar_h = 20
         if side == 1:
             draw.rounded_rectangle((bar_x, bar_y, bar_x + bar_w, bar_y + bar_h), radius=10, fill=scale_bg)
             fw = int((psl_val - 1) / 7 * bar_w)
             if fw > 0:
-                draw.rounded_rectangle((bar_x, bar_y, bar_x + fw, bar_y + bar_h), radius=10, fill=get_tier_color(tier))
+                draw.rounded_rectangle((bar_x, bar_y, bar_x + fw, bar_y + bar_h),
+                                       radius=10, fill=get_tier_color(tier))
             for i in range(1, 9):
                 x = bar_x + (i - 1) / 7 * bar_w
                 draw.line([(x, bar_y - 6), (x, bar_y)], fill=text_tertiary, width=1)
-                bbox = draw.textbbox((0, 0), str(i), font=font_scale); tw = bbox[2] - bbox[0]
+                bbox = draw.textbbox((0, 0), str(i), font=font_scale)
+                tw = bbox[2] - bbox[0]
                 draw.text((x - tw / 2, bar_y - 24), str(i), fill=text_secondary, font=font_scale)
         else:
             draw.rounded_rectangle((bar_x - bar_w, bar_y, bar_x, bar_y + bar_h), radius=10, fill=scale_bg)
             fw = int((psl_val - 1) / 7 * bar_w)
             if fw > 0:
-                draw.rounded_rectangle((bar_x - fw, bar_y, bar_x, bar_y + bar_h), radius=10, fill=get_tier_color(tier))
+                draw.rounded_rectangle((bar_x - fw, bar_y, bar_x, bar_y + bar_h),
+                                       radius=10, fill=get_tier_color(tier))
             for i in range(1, 9):
                 x = bar_x - (i - 1) / 7 * bar_w
                 draw.line([(x, bar_y - 6), (x, bar_y)], fill=text_tertiary, width=1)
-                bbox = draw.textbbox((0, 0), str(i), font=font_scale); tw = bbox[2] - bbox[0]
+                bbox = draw.textbbox((0, 0), str(i), font=font_scale)
+                tw = bbox[2] - bbox[0]
                 draw.text((x - tw / 2, bar_y - 24), str(i), fill=text_secondary, font=font_scale)
         fy = bar_y + bar_h + 25
         for idx, (fk, label) in enumerate(FACTOR_LABELS.items()):
             if fk in factors:
                 val = factors[fk]
-                if isinstance(val, (int, float)): val = str(val)
+                if isinstance(val, (int, float)):
+                    val = str(val)
                 draw.text((bar_x, fy + idx * 28), f"{label}: {val}",
                           fill=text_secondary, font=font_text, anchor=anchor)
-    out = BytesIO(); image.save(out, format="PNG"); out.seek(0)
+    out = BytesIO()
+    image.save(out, format="PNG")
+    out.seek(0)
     return out
 
 # ============================================================
@@ -1559,6 +1789,7 @@ TIER_RULES_STRICT = (
     "'Subhuman', 'Sub-five', 'Sub-5 (Canine)', 'Animal' и любые другие выдуманные варианты. "
     "Если на фото не человек — верни tier 'N/A' и gender 'N/A'."
 )
+
 
 async def get_looksmaxxing_data(photo_bytes: bytes, include_advice: bool, lang: str = "en") -> dict[str, Any]:
     if lang == "ru":
@@ -1593,13 +1824,14 @@ async def get_looksmaxxing_data(photo_bytes: bytes, include_advice: bool, lang: 
         system_instruction_override=(
             "You are a professional looksmaxxing AI. Answer ONLY with JSON. "
             "STRICT tier names only, no synonyms, no invented variants."
-        )
+        ),
     )
     try:
         return cast(dict, json.loads(clean_json_text(raw)))
     except json.JSONDecodeError:
         logger.error(f"Looksmaxxing JSON decode: {raw[:200]}")
         return {"error": "Не удалось распарсить ответ ИИ."}
+
 
 async def get_battle_data(p1: bytes, p2: bytes, lang: str = "en") -> dict[str, Any]:
     if lang == "ru":
@@ -1634,13 +1866,9 @@ async def get_battle_data(p1: bytes, p2: bytes, lang: str = "en") -> dict[str, A
         return {"error": "Could not parse AI response as JSON."}
 
 # ============================================================
-# STYLED BUTTON (Bot API 10.3 — цвета кнопок: primary/success/danger)
+# STYLED BUTTON (Bot API 10.3 — цвета: primary/success/danger)
 # ============================================================
 class StyledButton(InlineKeyboardButton):
-    """
-    Кнопка с поддержкой Bot API 10.3+ параметра style ("danger" / "success" / "primary").
-    В сериализации pyTelegramBotAPI переопределённый to_dict() добавляет поле 'style'.
-    """
     def __init__(self, text: str, style: str | None = None, **kwargs):
         super().__init__(text, **kwargs)
         self.style = style
@@ -1651,6 +1879,7 @@ class StyledButton(InlineKeyboardButton):
             d['style'] = self.style
         return d
 
+
 def btn(text: str, style: str | None = None, **kwargs) -> StyledButton:
     return StyledButton(text, style=style, **kwargs)
 
@@ -1660,11 +1889,12 @@ def btn(text: str, style: str | None = None, **kwargs) -> StyledButton:
 def _localize(lang: str, ru: str, en: str) -> str:
     return ru if lang == "ru" else en
 
+
 def _config_text(platform: str, chat_id: int, user_id: int) -> str:
     cfg = get_user_config(platform, chat_id, user_id)
     lang = cfg.get("language", "ru")
     prompt_safe = html.escape(cfg.get("custom_prompt") or _localize(lang, "стандартный", "default"))
-    title = _localize(lang, "⚙️ Настройки", "⚙️ Settings")
+    title = _localize(lang, "Настройки", "Settings")
     line = "━━━━━━━━━━━━━━━━━━━━"
     lang_label = _localize(lang, "Язык", "Language")
     theme_label = _localize(lang, "Тема", "Theme")
@@ -1677,13 +1907,14 @@ def _config_text(platform: str, chat_id: int, user_id: int) -> str:
     random_label = _localize(lang, "Случайные", "Random")
     prompt_label = _localize(lang, "Кастомный промпт", "Custom prompt")
     credits_label = _localize(lang, "Кредиты", "Credits")
-    on = "✅"; off = "❌"
+    on = "✅"
+    off = "❌"
     theme_disp = _localize(lang, "тёмная", "dark") if cfg.get("theme", "dark") == "dark" else _localize(lang, "светлая", "light")
     credits = get_user_credits(platform, user_id)
     stream_txt = f"{on if cfg.get('streaming_enabled') else off} · {'premium' if premium_functions_enabled else 'off'}"
     return (
         f"{title}\n{line}\n"
-        f"🌐 {lang_label}: {'Русский 🇷🇺' if lang=='ru' else 'English 🇬🇧'}\n"
+        f"🌐 {lang_label}: {'Русский 🇷🇺' if lang == 'ru' else 'English 🇬🇧'}\n"
         f"🌓 {theme_label}: {theme_disp}\n"
         f"🧠 {model_label}: {model_display_name(cfg.get('model'))}\n"
         f"🎛 {temp_label}: <code>{cfg.get('temperature', 0.9)}</code>\n"
@@ -1697,6 +1928,7 @@ def _config_text(platform: str, chat_id: int, user_id: int) -> str:
         f"📝 {prompt_label}: {prompt_safe}"
     )
 
+
 def build_main_config_keyboard(platform: str, chat_id: int, user_id: int) -> InlineKeyboardMarkup:
     cfg = get_user_config(platform, chat_id, user_id)
     lang = cfg.get("language", "ru")
@@ -1706,26 +1938,30 @@ def build_main_config_keyboard(platform: str, chat_id: int, user_id: int) -> Inl
         btn(_localize(lang, "🌓 Тема", "🌓 Theme"), style=None, callback_data="cfg:theme"),
     )
     kb.row(
-        btn(f"🧠 {_localize(lang,'Модель','Model')}: {model_display_name(cfg.get('model'))}",
+        btn(f"🧠 {_localize(lang, 'Модель', 'Model')}: {model_display_name(cfg.get('model'))}",
             style="primary", callback_data="cfg:model"),
-        btn(f"🎛 {_localize(lang,'Темп.','Temp')}: {cfg.get('temperature',0.9)}",
+        btn(f"🎛 {_localize(lang, 'Темп.', 'Temp')}: {cfg.get('temperature', 0.9)}",
             style=None, callback_data="cfg:temp"),
     )
     kb.row(
-        btn(f"💬 {_localize(lang,'Разбивка','Split')}: {'✅' if cfg.get('separate_enabled',True) else '❌'}",
+        btn(f"💬 {_localize(lang, 'Разбивка', 'Split')}: {'✅' if cfg.get('separate_enabled', True) else '❌'}",
             style=None, callback_data="cfg:separate"),
-        btn(f"📡 {_localize(lang,'Стриминг','Streaming')}: {'✅' if cfg.get('streaming_enabled') else '❌'}",
+        btn(f"📡 {_localize(lang, 'Стриминг', 'Streaming')}: {'✅' if cfg.get('streaming_enabled') else '❌'}",
             style=None, callback_data="cfg:streaming"),
     )
     kb.row(
-        btn(f"🎨 {_localize(lang,'Стикеры','Stickers')}: {'✅' if cfg.get('stickers_enabled',True) else '❌'}",
+        btn(f"🎨 {_localize(lang, 'Стикеры', 'Stickers')}: {'✅' if cfg.get('stickers_enabled', True) else '❌'}",
             style=None, callback_data="cfg:stickers"),
-        btn(f"🗣 {_localize(lang,'Автоотв.','Auto-reply')}: {'✅' if cfg.get('random_reply_enabled') else '❌'}",
+        btn(f"🗣 {_localize(lang, 'Автоотв.', 'Auto-reply')}: {'✅' if cfg.get('random_reply_enabled') else '❌'}",
             style=None, callback_data="cfg:autoreply"),
     )
     kb.row(
-        btn(f"📢 {_localize(lang,'Рандом','Random')}: {'✅' if cfg.get('random_messages_enabled',True) else '❌'}",
+        btn(f"📢 {_localize(lang, 'Рандом', 'Random')}: {'✅' if cfg.get('random_messages_enabled', True) else '❌'}",
             style=None, callback_data="cfg:random"),
+    )
+    kb.row(
+        btn("📝 " + _localize(lang, "Изменить промпт", "Edit prompt"),
+            style="primary", callback_data="cfg:prompt"),
     )
     kb.row(
         btn("🧹 " + _localize(lang, "Сбросить память", "Reset memory"),
@@ -1739,49 +1975,54 @@ def build_main_config_keyboard(platform: str, chat_id: int, user_id: int) -> Inl
     )
     return kb
 
+
 def build_model_keyboard(platform: str, chat_id: int, user_id: int) -> InlineKeyboardMarkup:
     cfg = get_user_config(platform, chat_id, user_id)
     lang = cfg.get("language", "ru")
     cur = cfg.get("model")
     kb = InlineKeyboardMarkup()
     auto_mark = "🔘" if not cur else "▫️"
-    kb.row(btn(f"{auto_mark} 🎲 {_localize(lang,'Авто','Auto')}", style=None, callback_data="cfg:model_set:auto"))
+    kb.row(btn(f"{auto_mark} 🎲 {_localize(lang, 'Авто', 'Auto')}", style=None, callback_data="cfg:model_set:auto"))
     row: list[StyledButton] = []
     for idx, model in enumerate(MODEL_LIST):
         mark = "🔘" if cur == model else "▫️"
         row.append(btn(f"{mark} {MODEL_DISPLAY.get(model, model)}", style=None, callback_data=f"cfg:model_set:{idx}"))
         if len(row) == 2:
-            kb.row(*row); row = []
+            kb.row(*row)
+            row = []
     if row:
         kb.row(*row)
     kb.row(btn("🔙 " + _localize(lang, "Назад", "Back"), style="primary", callback_data="cfg:model_back"))
     return kb
+
 
 def build_lang_keyboard(platform: str, chat_id: int, user_id: int) -> InlineKeyboardMarkup:
     cfg = get_user_config(platform, chat_id, user_id)
     cur = cfg.get("language", "ru")
     kb = InlineKeyboardMarkup()
     kb.row(
-        btn(f"{'🔘' if cur=='ru' else '▫️'} Русский 🇷🇺",
+        btn(f"{'🔘' if cur == 'ru' else '▫️'} Русский 🇷🇺",
             style="primary" if cur == "ru" else None, callback_data="cfg:lang_set:ru"),
-        btn(f"{'🔘' if cur=='en' else '▫️'} English 🇬🇧",
+        btn(f"{'🔘' if cur == 'en' else '▫️'} English 🇬🇧",
             style="primary" if cur == "en" else None, callback_data="cfg:lang_set:en"),
     )
     kb.row(btn("🔙 Назад / Back", style="primary", callback_data="cfg:sub_back"))
     return kb
+
 
 def build_theme_keyboard(platform: str, chat_id: int, user_id: int) -> InlineKeyboardMarkup:
     cfg = get_user_config(platform, chat_id, user_id)
     cur = cfg.get("theme", "dark")
     kb = InlineKeyboardMarkup()
     kb.row(
-        btn(f"{'🔘' if cur=='dark' else '▫️'} Тёмная 🌑",
+        btn(f"{'🔘' if cur == 'dark' else '▫️'} Тёмная 🌑",
             style="primary" if cur == "dark" else None, callback_data="cfg:theme_set:dark"),
-        btn(f"{'🔘' if cur=='light' else '▫️'} Светлая ☀️",
+        btn(f"{'🔘' if cur == 'light' else '▫️'} Светлая ☀️",
             style="primary" if cur == "light" else None, callback_data="cfg:theme_set:light"),
     )
     kb.row(btn("🔙 Назад / Back", style="primary", callback_data="cfg:sub_back"))
     return kb
+
 
 def build_temp_keyboard(platform: str, chat_id: int, user_id: int) -> InlineKeyboardMarkup:
     cfg = get_user_config(platform, chat_id, user_id)
@@ -1792,23 +2033,25 @@ def build_temp_keyboard(platform: str, chat_id: int, user_id: int) -> InlineKeyb
     for v in values:
         mark = "🔘" if abs(cur - v) < 0.01 else "▫️"
         row.append(btn(f"{mark} {v}", style=None, callback_data=f"cfg:temp_set:{v}"))
-    kb.row(*row[:4]); kb.row(*row[4:])
+    kb.row(*row[:4])
+    kb.row(*row[4:])
     kb.row(btn("🔙 Назад / Back", style="primary", callback_data="cfg:sub_back"))
     return kb
+
 
 def _model_picker_text(platform: str, chat_id: int, user_id: int) -> str:
     cfg = get_user_config(platform, chat_id, user_id)
     lang = cfg.get("language", "ru")
     cur = cfg.get("model")
     return (
-        f"🧠 <b>{_localize(lang,'Выбор модели','Model selection')}</b>\n"
+        f"🧠 <b>{_localize(lang, 'Выбор модели', 'Model selection')}</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"{_localize(lang,'Текущая','Current')}: {model_display_name(cur)}\n\n"
-        f"🎲 <b>{_localize(lang,'Авто','Auto')}</b> — {_localize(lang,'перебор всех моделей','bot tries all models')}"
+        f"{_localize(lang, 'Текущая', 'Current')}: {model_display_name(cur)}\n\n"
+        f"🎲 <b>{_localize(lang, 'Авто', 'Auto')}</b> — {_localize(lang, 'перебор всех моделей', 'bot tries all models')}"
     )
 
 # ============================================================
-# МЕНЮ / START / HELP / DONATE — форматированные тексты
+# МЕНЮ / START / HELP / DONATE — нейтральные тексты
 # ============================================================
 def _build_menu_text(platform: str, chat_id: int, user_id: int) -> str:
     cfg = get_user_config(platform, chat_id, user_id)
@@ -1816,55 +2059,55 @@ def _build_menu_text(platform: str, chat_id: int, user_id: int) -> str:
     if lang == "ru":
         return (
             "|K|*U*|L|*S*|H|\n\n"
-            "# Добро пожаловать в Кульш AI!\n\n"
-            "Твой карманный ИИ-собутыльник 🍷🗿. Здесь собрано всё, что нужно для комфортного "
-            "общения, настройки и развлечений — открывай Mini App для продвинутого чата, "
-            "подкручивай бота под себя и заглядывай в команды.\n\n"
-            "**Что можно сделать:**\n"
-            "- 🚀 **Mini App** — продвинутый чат с ИИ прямо в Telegram\n"
-            "- ⚙️ **Настройки** — язык, тема, модель, промпт, автоответы\n"
-            "- 📖 **Команды** — полный список возможностей Кульша\n"
-            "- 💎 **Донат** — поддержать разработку\n"
-            "- 🔗 **GitHub** — исходники проекта\n"
+            "# Кульш AI — главное меню\n\n"
+            "Открытая языковая модель с набором встроенных инструментов. "
+            "Ниже — основные разделы и команды для работы с ботом.\n\n"
+            "**Что доступно:**\n"
+            "- **Mini App** — расширенный чат с ИИ внутри Telegram\n"
+            "- **Настройки** — язык, тема, модель, промпт, автоответы\n"
+            "- **Команды** — полный список возможностей\n"
+            "- **Донат** — поддержка разработки\n"
+            "- **GitHub** — исходный код проекта\n"
         )
     return (
         "|K|*U*|L|*S*|H|\n\n"
-        "# Welcome to Kulsh AI!\n\n"
-        "Your pocket AI drinking buddy 🍷🗿. Everything you need for chilling, tuning the "
-        "bot and having fun — open the Mini App for advanced chat, tweak the bot your way, "
-        "and check out the commands.\n\n"
-        "**What you can do:**\n"
-        "- 🚀 **Mini App** — advanced AI chat inside Telegram\n"
-        "- ⚙️ **Settings** — language, theme, model, prompt, auto-replies\n"
-        "- 📖 **Commands** — full list of Kulsh features\n"
-        "- 💎 **Donate** — support development\n"
-        "- 🔗 **GitHub** — project sources\n"
+        "# Kulsh AI — main menu\n\n"
+        "An open-source language model with a set of built-in tools. "
+        "Below are the main sections and commands for working with the bot.\n\n"
+        "**Available:**\n"
+        "- **Mini App** — extended AI chat inside Telegram\n"
+        "- **Settings** — language, theme, model, prompt, auto-replies\n"
+        "- **Commands** — full feature list\n"
+        "- **Donate** — support development\n"
+        "- **GitHub** — project source code\n"
     )
+
 
 def _build_start_text(platform: str, chat_id: int, user_id: int) -> str:
     cfg = get_user_config(platform, chat_id, user_id)
     lang = cfg.get("language", "ru")
     if lang == "ru":
         return (
-            "# 🍷🗿 Кульш на связи\n\n"
-            "Здарова, кент! Я — **Кульш**, твой ИИ-собутыльник из опенсорса. Умею болтать по-человечески, "
-            "писать код, оценивать внешность и держать контекст чата.\n\n"
+            "# Кульш на связи\n\n"
+            "Открытая языковая модель с возможностями анализа изображений, "
+            "оценки внешности и настройки под себя. Работает в Telegram и Discord.\n\n"
             "**С чего начать:**\n"
-            "- 🚀 Жми **Mini App** — там продвинутый чат\n"
-            "- 📖 Загляни в **Меню** — там все кнопки и настройки\n"
-            "- 🧠 Напиши `кульш конфиг` — тонкая настройка под тебя\n\n"
-            "Погнали! 🍷"
+            "- **Mini App** — расширенный чат с ИИ\n"
+            "- **Меню** — все разделы и настройки\n"
+            "- `кульш конфиг` — тонкая настройка под тебя\n\n"
+            f"Веб-версия: {MINI_APP_URL}"
         )
     return (
-        "# 🍷🗿 Kulsh is online\n\n"
-        "Yo, mate! I'm **Kulsh**, your open-source AI drinking buddy. I chat like a human, write code, "
-        "rate looks and keep the chat context.\n\n"
-        "**Where to start:**\n"
-        "- 🚀 Hit **Mini App** — advanced chat there\n"
-        "- 📖 Open the **Menu** — all buttons & settings\n"
-        "- 🧠 Type `kulsh config` — tune me to your taste\n\n"
-        "Let's go! 🍷"
+        "# Kulsh is online\n\n"
+        "An open-source language model with image analysis, looksmaxxing, "
+        "and personal configuration. Available in Telegram and Discord.\n\n"
+        "**Get started:**\n"
+        "- **Mini App** — extended AI chat\n"
+        "- **Menu** — all sections and settings\n"
+        "- `kulsh config` — tune the bot\n\n"
+        f"Web version: {MINI_APP_URL}"
     )
+
 
 def build_menu_keyboard(platform: str, chat_id: int, user_id: int) -> InlineKeyboardMarkup:
     cfg = get_user_config(platform, chat_id, user_id)
@@ -1872,7 +2115,7 @@ def build_menu_keyboard(platform: str, chat_id: int, user_id: int) -> InlineKeyb
     kb = InlineKeyboardMarkup()
     kb.row(
         btn("🚀 " + _localize(lang, "Открыть Mini App", "Open Mini App"),
-            style="primary", web_app=telebot.types.WebAppInfo(url=MINI_APP_URL))
+            style="primary", web_app=WebAppInfo(url=MINI_APP_URL))
     )
     kb.row(
         btn("⚙️ " + _localize(lang, "Настройки", "Settings"),
@@ -1892,13 +2135,14 @@ def build_menu_keyboard(platform: str, chat_id: int, user_id: int) -> InlineKeyb
     )
     return kb
 
+
 def build_start_keyboard(platform: str, chat_id: int, user_id: int) -> InlineKeyboardMarkup:
     cfg = get_user_config(platform, chat_id, user_id)
     lang = cfg.get("language", "ru")
     kb = InlineKeyboardMarkup()
     kb.row(
         btn("🚀 " + _localize(lang, "Открыть Mini App", "Open Mini App"),
-            style="primary", web_app=telebot.types.WebAppInfo(url=MINI_APP_URL))
+            style="primary", web_app=WebAppInfo(url=MINI_APP_URL))
     )
     kb.row(
         btn("📖 " + _localize(lang, "Меню", "Menu"),
@@ -1921,19 +2165,21 @@ async def _edit_or_send(call: telebot.types.CallbackQuery, text: str, kb: Inline
     try:
         await tg_bot.edit_message_text(
             text, call.message.chat.id, call.message.message_id,
-            parse_mode='HTML', reply_markup=kb
+            parse_mode='HTML', reply_markup=kb,
         )
     except Exception as e:
         logger.warning(f"edit_message_text fail: {e}")
 
-MUTEX_SEP_STREAM_RU = "«Разбивка» и «Стриминг» взаимно исключаемы. Сначала отключи вторую настройку."
+
+MUTEX_SEP_STREAM_RU = "«Разбивка» и «Стриминг» взаимно исключаемы. Сначала отключите вторую настройку."
 MUTEX_SEP_STREAM_EN = "«Split» and «Streaming» are mutually exclusive. Disable the other first."
+
 
 @tg_bot.callback_query_handler(func=lambda call: call.data.startswith("cfg:"))
 async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
     owner = config_msg_owners.get(call.message.message_id)
     if owner is not None and owner != call.from_user.id:
-        await tg_bot.answer_callback_query(call.id, "это не твои настройки 🤚", show_alert=False)
+        await tg_bot.answer_callback_query(call.id, "это не твои настройки", show_alert=False)
         return
 
     chat_id = call.message.chat.id
@@ -2013,12 +2259,33 @@ async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
         try:
             val = max(0.0, min(2.0, float(parts[2])))
             cfg["temperature"] = val
-            toast = f"🌡 {val}"
+            toast = f"Температура: {val}"
         except (ValueError, IndexError):
             pass
         await _edit_or_send(call, _config_text("tg", chat_id, user_id),
                             build_main_config_keyboard("tg", chat_id, user_id))
         await tg_bot.answer_callback_query(call.id, toast)
+        return
+
+    if action == "prompt":
+        # Запрашиваем промпт через ForceReply
+        prompt_waiting[user_id] = call.message.message_id
+        try:
+            ask_text = _localize(
+                lang,
+                "Отправьте новый кастомный промпт одним сообщением (ответом на это). "
+                "Чтобы отменить — ответьте `отмена`.",
+                "Send the new custom prompt as a single reply to this message. "
+                "To cancel — reply `cancel`.",
+            )
+            await tg_bot.send_message(
+                chat_id, ask_text,
+                parse_mode='HTML',
+                reply_markup=ForceReply(selective=True),
+            )
+        except Exception as e:
+            logger.warning(f"prompt ask fail: {e}")
+        await tg_bot.answer_callback_query(call.id)
         return
 
     if action == "apply":
@@ -2030,12 +2297,10 @@ async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
                 await tg_bot.delete_message(chat_id, trig_id)
             except Exception:
                 pass
-        await tg_bot.answer_callback_query(call.id, _localize(lang, "Готово ✅", "Done ✅"))
-        # Запускаем пошаговую анимацию, она сама удалит сообщение в конце
+        await tg_bot.answer_callback_query(call.id, _localize(lang, "Готово", "Done"))
         asyncio.create_task(play_apply_animation(chat_id, call.message.message_id))
         return
 
-    # ---- Взаимоисключающие: разбивка <-> стриминг ----
     if action == "separate":
         new_val = not cfg.get("separate_enabled", True)
         if new_val and cfg.get("streaming_enabled", False):
@@ -2093,7 +2358,7 @@ async def handle_menu_callback(call: telebot.types.CallbackQuery) -> None:
             await tg_bot.delete_message(chat_id, call.message.message_id)
         except Exception:
             pass
-        await tg_bot.answer_callback_query(call.id, "🗿")
+        await tg_bot.answer_callback_query(call.id)
         return
 
     if action == "settings":
@@ -2112,58 +2377,61 @@ async def handle_menu_callback(call: telebot.types.CallbackQuery) -> None:
 
     if action == "help":
         await tg_bot.answer_callback_query(call.id)
-        try:
-            await tg_bot.send_message(chat_id, HELP_TEXT, parse_mode='HTML',
-                                      reply_to_message_id=call.message.message_id)
-        except Exception:
-            await tg_bot.send_message(chat_id, re.sub(r'<[^>]+>', '', HELP_TEXT))
+        # Заменяем сообщение на rich help, чтобы форматирование таблицы/H1 сохранилось
+        edited = await edit_rich_message(chat_id, call.message.message_id, HELP_TEXT)
+        if not edited:
+            # fallback: удаляем и отправляем заново
+            try:
+                await tg_bot.delete_message(chat_id, call.message.message_id)
+            except Exception:
+                pass
+            await send_formatted(chat_id, HELP_TEXT)
         return
 
     if action == "open":
-        # Открываем меню заново (например, из /start)
         await tg_bot.answer_callback_query(call.id)
         menu_text = _build_menu_text("tg", chat_id, user_id)
         kb = build_menu_keyboard("tg", chat_id, user_id)
-        # Сначала пробуем отредактировать текущее сообщение в меню
-        try:
-            await tg_bot.edit_message_text(
-                markdown_like_to_telegram_html(menu_text), chat_id, call.message.message_id,
-                parse_mode='HTML', reply_markup=kb,
-            )
-        except Exception:
-            await send_formatted(chat_id, menu_text, reply_to=call.message.message_id, reply_markup=kb)
+        edited = await edit_rich_message(chat_id, call.message.message_id, menu_text, reply_markup=kb)
+        if not edited:
+            try:
+                await tg_bot.delete_message(chat_id, call.message.message_id)
+            except Exception:
+                pass
+            await send_formatted(chat_id, menu_text, reply_markup=kb)
         return
 
 # ============================================================
-# TELEGRAM: HELP/START/DONATE/MENU
+# TELEGRAM: HELP / MENU / START / DONATE
 # ============================================================
 HELP_TEXT = (
-    "# 🍷🗿 Команды Кульша\n\n"
-    "**Общие:**\n"
+    "# Кульш — команды\n\n"
+    "**Общие**\n"
     "- `/start` — приветствие\n"
     "- `/menu` — интерактивное меню\n"
     "- `/help` — эта справка\n"
-    "- `/donate` — поддержать проект\n"
+    "- `/donate` — поддержка проекта\n"
+    "- `/donate_stars <N>` — донат через Telegram Stars\n"
     "- `/credits` — баланс кредитов\n\n"
-    "**Настройки:**\n"
-    "- `кульш конфиг` / `кульш настройки` — настройки (инлайн)\n\n"
-    "**Утилиты:**\n"
-    "- `кульш аватарка` — описать аватарку\n"
-    "- `кульш вспомни медиа [N]` — вспомнить N медиа\n"
-    "- `кульш логи` — логи (админам)\n\n"
-    "**Развлечения:**\n"
-    "- `кульш psl` — looksmaxxing\n"
-    "- `кульш psl совет` — + рекомендации\n"
-    "- `кульш battle` — баттл (альбом)\n"
+    "**Настройки**\n"
+    "- `кульш конфиг` / `кульш настройки` — панель настроек\n\n"
+    "**Утилиты**\n"
+    "- `кульш аватарка` — описать аватарку собеседника\n"
+    "- `кульш вспомни медиа [N]` — вспомнить последние N медиа\n"
+    "- `кульш логи` — логи сервера (админам)\n\n"
+    "**Развлечения**\n"
+    "- `кульш psl` — оценка внешности (looksmaxxing)\n"
+    "- `кульш psl совет` — оценка с рекомендациями\n"
+    "- `кульш battle` — баттл двух фото (одним альбомом)\n"
     "- `кульш донаты` — топ донатеров\n\n"
-    "**Инструменты (ЛС):**\n"
-    "Отправь архив/текстовый файл — бот распакует, изменит, соберёт и вернёт.\n\n"
-    f"🔗 Mini App: {MINI_APP_URL}\n"
-    f"🔗 GitHub: {GITHUB_URL}"
+    "**Инструменты (в личных сообщениях)**\n"
+    "Отправьте zip-архив или текстовый файл — бот обработает и вернёт результат.\n\n"
+    f"Mini App: {MINI_APP_URL}\n"
+    f"GitHub: {GITHUB_URL}"
 )
 
+
 async def _send_menu_gif(chat_id: int, reply_to: int | None, path: str, fallback_url: str) -> int | None:
-    """Отправляет GIF (файл или URL). Возвращает message_id или None."""
     try:
         if os.path.exists(path):
             with open(path, 'rb') as gif:
@@ -2181,6 +2449,7 @@ async def _send_menu_gif(chat_id: int, reply_to: int | None, path: str, fallback
         logger.warning(f"send menu gif failed ({path}): {e}")
         return None
 
+
 @tg_bot.message_handler(commands=['start'])
 async def handle_start(message: telebot.types.Message) -> None:
     args = telebot.util.extract_arguments(message.text or "")
@@ -2188,15 +2457,16 @@ async def handle_start(message: telebot.types.Message) -> None:
         if args.startswith('donate_stars_'):
             try:
                 stars = int(args.split('_')[-1])
-                if stars <= 0: raise ValueError
+                if stars <= 0:
+                    raise ValueError
             except (ValueError, IndexError):
-                await reply_tg_html(message, "❌ Неверное количество звёзд.")
+                await reply_tg_html(message, "Неверное количество звёзд.")
                 return
             pending_donations[message.chat.id] = stars
             prices = [telebot.types.LabeledPrice(label="Поддержать Кульша", amount=stars)]
             await tg_bot.send_invoice(
                 chat_id=message.chat.id, title="Донат Кульшу",
-                description=f"Поддержка разработки на {stars} ⭐️",
+                description=f"Поддержка разработки на {stars} ⭐",
                 invoice_payload=f"donate_{stars}_stars", provider_token="",
                 currency="XTR", prices=prices, start_parameter="donate",
             )
@@ -2207,18 +2477,17 @@ async def handle_start(message: telebot.types.Message) -> None:
     chat_id = message.chat.id
     user_id = message.from_user.id
 
-    # 1) GIF (kulsh.gif)
     gif_msg_id = await _send_menu_gif(
         chat_id, message.message_id,
         path=KULSH_GIF_PATH,
         fallback_url=random.choice(GIF_POOL),
     )
 
-    # 2) Rich-message с текстом и кнопками
     start_text = _build_start_text("tg", chat_id, user_id)
     kb = build_start_keyboard("tg", chat_id, user_id)
     reply_to = gif_msg_id if gif_msg_id else message.message_id
     await send_formatted(chat_id, start_text, reply_to=reply_to, reply_markup=kb)
+
 
 @tg_bot.message_handler(commands=['menu'])
 async def handle_menu(message: telebot.types.Message) -> None:
@@ -2226,19 +2495,22 @@ async def handle_menu(message: telebot.types.Message) -> None:
         return
     chat_id = message.chat.id
     user_id = message.from_user.id
+    cfg = get_user_config("tg", chat_id, user_id)
+    lang = cfg.get("language", "ru")
 
-    # 1) GIF (menu.gif)
+    gif_path = MENU_GIF_EN_PATH if lang == "en" else MENU_GIF_RU_PATH
+
     gif_msg_id = await _send_menu_gif(
         chat_id, message.message_id,
-        path=MENU_GIF_PATH,
+        path=gif_path,
         fallback_url=random.choice(GIF_POOL),
     )
 
-    # 2) Rich-message меню с кнопками
     menu_text = _build_menu_text("tg", chat_id, user_id)
     kb = build_menu_keyboard("tg", chat_id, user_id)
     reply_to = gif_msg_id if gif_msg_id else message.message_id
     await send_formatted(chat_id, menu_text, reply_to=reply_to, reply_markup=kb)
+
 
 @tg_bot.message_handler(commands=['help'])
 async def handle_help(message: telebot.types.Message) -> None:
@@ -2253,45 +2525,91 @@ async def handle_help(message: telebot.types.Message) -> None:
             reply_to_message_id=message.message_id,
         )
 
+
 @tg_bot.message_handler(commands=['donate'])
 async def handle_donate(message: telebot.types.Message) -> None:
     text = (
-        "# 💎 Поддержать Кульша\n\n"
-        "Спасибо, что хочешь поддержать проект! Любой донат идёт на серверы, домены "
-        "и дальнейшую разработку. 🍷🗿\n\n"
+        "# Поддержать Кульша\n\n"
+        "Донаты идут на серверы, домены и дальнейшую разработку проекта.\n\n"
         "**Способы:**\n"
-        f"- 💳 [Онлайн-донат]({DONATE_URL})\n"
-        "- ⭐️ Telegram Stars — напиши `/donate_stars` (если включено)\n\n"
-        f"🔗 GitHub: {GITHUB_URL}"
+        f"- Онлайн-донат: {DONATE_URL}\n"
+        "- Telegram Stars: `/donate_stars <количество>`\n\n"
+        f"GitHub: {GITHUB_URL}"
     )
     try:
         await send_formatted(message.chat.id, text, reply_to=message.message_id)
     except Exception:
-        await reply_tg_html(message, f"Поддержать Кульша: {DONATE_URL} 🍷🗿")
+        await reply_tg_html(message, f"Поддержать Кульша: {DONATE_URL}")
+
+
+@tg_bot.message_handler(commands=['donate_stars'])
+async def handle_donate_stars(message: telebot.types.Message) -> None:
+    if message.from_user is None:
+        return
+    chat_id = message.chat.id
+    args = telebot.util.extract_arguments(message.text or "").strip()
+    if not args:
+        await reply_tg_html(
+            message,
+            "Укажите количество звёзд: <code>/donate_stars 100</code>\n"
+            "Минимум — 1 звезда.",
+        )
+        return
+    try:
+        stars = int(args.split()[0])
+        if stars <= 0:
+            raise ValueError
+    except (ValueError, IndexError):
+        await reply_tg_html(message, "Неверное количество звёзд. Пример: <code>/donate_stars 100</code>")
+        return
+
+    pending_donations[chat_id] = stars
+    prices = [telebot.types.LabeledPrice(label="Поддержать Кульша", amount=stars)]
+    try:
+        await tg_bot.send_invoice(
+            chat_id=chat_id,
+            title="Донат Кульшу",
+            description=f"Поддержка разработки на {stars} ⭐",
+            invoice_payload=f"donate_{stars}_stars",
+            provider_token="",
+            currency="XTR",
+            prices=prices,
+            start_parameter="donate",
+            reply_to_message_id=message.message_id,
+        )
+    except Exception as e:
+        logger.error(f"donate_stars invoice fail: {e}")
+        await reply_tg_html(message, f"Не удалось выставить счёт: {e}")
+
 
 @tg_bot.message_handler(commands=['credits'])
 async def handle_credits(message: telebot.types.Message) -> None:
-    if message.from_user is None: return
+    if message.from_user is None:
+        return
     creds = get_user_credits("tg", message.from_user.id)
-    await reply_tg_html(message, f"💎 Кредиты: {creds}/{DAILY_CREDITS}")
+    await reply_tg_html(message, f"Кредиты: {creds}/{DAILY_CREDITS}")
+
 
 @tg_bot.message_handler(commands=['togglepremiumfunctionsadmin'])
 async def handle_toggle_premium(message: telebot.types.Message) -> None:
     global premium_functions_enabled
     if message.from_user is None or message.from_user.id != PREMIUM_ADMIN_ID:
-        await reply_tg_html(message, "⛔ Нет доступа.")
+        await reply_tg_html(message, "Нет доступа.")
         return
     premium_functions_enabled = not premium_functions_enabled
-    state = "включены ✅" if premium_functions_enabled else "выключены ❌"
+    state = "включены" if premium_functions_enabled else "выключены"
     await reply_tg_html(message, f"Расширенные функции: {state}")
+
 
 @tg_bot.pre_checkout_query_handler(func=lambda query: True)
 async def handle_pre_checkout(pre_checkout: telebot.types.PreCheckoutQuery) -> None:
     await tg_bot.answer_pre_checkout_query(pre_checkout.id, ok=True)
 
+
 @tg_bot.message_handler(content_types=['successful_payment'])
 async def handle_successful_payment(message: telebot.types.Message) -> None:
-    if message.successful_payment is None or message.from_user is None: return
+    if message.successful_payment is None or message.from_user is None:
+        return
     payment = message.successful_payment
     user_id = message.chat.id
     try:
@@ -2302,13 +2620,14 @@ async def handle_successful_payment(message: telebot.types.Message) -> None:
     logger.info(f"{user_id} задонатил {stars} звёзд")
     add_donation('tg', user_id, stars, name)
     await send_donation_alert('tg', name, stars)
-    await reply_tg_html(message, f"🍷🗿 Спасибо за {stars} звёзд, кент!")
+    await reply_tg_html(message, f"Спасибо за поддержку — {stars} ⭐")
 
 # ============================================================
-# TG CONFIG/AVATAR/RECALL
+# TG CONFIG / AVATAR / RECALL
 # ============================================================
 async def tg_handle_config(message: telebot.types.Message) -> None:
-    if message.from_user is None: return
+    if message.from_user is None:
+        return
     chat_id = message.chat.id
     user_id = message.from_user.id
     chat_key = get_chat_key("tg", chat_id)
@@ -2333,14 +2652,15 @@ async def tg_handle_config(message: telebot.types.Message) -> None:
         except Exception as e2:
             logger.error(f"Config fallback fail: {e2}")
 
+
 async def tg_handle_avatar(message: telebot.types.Message, chat_id: int, user_id: int) -> None:
     raw = await get_avatar_description_tg(message, chat_id, user_id)
     if not raw:
-        await reply_tg_html(message, "не смог получить аватарку")
+        await reply_tg_html(message, "не удалось получить аватарку")
         return
     segments = clean_extra_text(raw)
     if not segments:
-        await reply_tg_html(message, "не смог получить аватарку")
+        await reply_tg_html(message, "не удалось получить аватарку")
         return
     for i, seg in enumerate(segments):
         if i == 0:
@@ -2348,18 +2668,20 @@ async def tg_handle_avatar(message: telebot.types.Message, chat_id: int, user_id
         else:
             await send_tg_html(message.chat.id, seg)
 
+
 async def tg_handle_recall_media(message: telebot.types.Message, chat_id: int, user_id: int, parts: list[str]) -> None:
     n = 3
     for p in parts:
         if p.isdigit():
-            n = min(int(p), 10); break
+            n = min(int(p), 10)
+            break
     raw = await get_recall_media_description_tg(message, chat_id, user_id, n)
     if not raw:
-        await reply_tg_html(message, "не нашёл ничего в памяти")
+        await reply_tg_html(message, "ничего не найдено в памяти")
         return
     segments = clean_extra_text(raw)
     if not segments:
-        await reply_tg_html(message, "не нашёл ничего в памяти")
+        await reply_tg_html(message, "ничего не найдено в памяти")
         return
     for i, seg in enumerate(segments):
         if i == 0:
@@ -2380,6 +2702,7 @@ async def execute_utility_tg(message: telebot.types.Message, marker: str, chat_i
         except Exception as e:
             logger.error(f"sticker error: {e}")
 
+
 async def execute_utility_ds(message: discord.Message, marker: str, chat_id: int, user_id: int) -> None:
     cfg = get_user_config("ds", chat_id, user_id)
     if marker in ("sticker", "gif"):
@@ -2396,17 +2719,11 @@ async def execute_utility_ds(message: discord.Message, marker: str, chat_id: int
 # STREAMING HELPERS
 # ============================================================
 async def _stream_text_via_drafts(chat_id: int, text: str, is_private: bool = True) -> bool:
-    """
-    Плавный стриминг через sendMessageDraft (Bot API 9.5+).
-    Допустим ТОЛЬКО в приватных чатах — стриминг НЕ финализирует сообщение,
-    поэтому после него всё равно нужно отправить финальный текст через
-    send_rich_message / send_tg_html.
-    """
     if not premium_functions_enabled:
         return False
     if not is_private:
         return False
-    draft_id = random.randint(1, 2**30)
+    draft_id = random.randint(1, 2 ** 30)
     words = text.split()
     if not words:
         return False
@@ -2480,7 +2797,7 @@ async def send_tg_ai_response(message: telebot.types.Message, chat_id: int, user
         try:
             sent_ok = await send_rich_message(
                 message.chat.id, seg,
-                reply_to=message.message_id if i == 0 else None
+                reply_to=message.message_id if i == 0 else None,
             )
         except Exception as e:
             logger.debug(f"rich fail: {e}")
@@ -2550,6 +2867,7 @@ async def maybe_reply_to_old_message_tg(message: telebot.types.Message, chat_id:
     except Exception as e:
         logger.warning(f"old reply tg: {e}")
 
+
 async def should_random_reply(platform: str, chat_id: int, user_id: int) -> bool:
     cfg = get_user_config(platform, chat_id, user_id)
     if not cfg.get("random_reply_enabled", False):
@@ -2575,6 +2893,7 @@ TEXT_EXTS = {
 
 SAFE_COMMANDS = {"ls", "cat", "head", "tail", "wc", "grep", "find", "file", "stat", "du", "tree", "pwd"}
 
+
 def _safe_join(base: str, rel: str) -> str | None:
     if not rel:
         return base
@@ -2584,6 +2903,7 @@ def _safe_join(base: str, rel: str) -> str | None:
         return None
     return target
 
+
 def _list_files(base: str) -> list[str]:
     out: list[str] = []
     for root, dirs, files in os.walk(base):
@@ -2592,6 +2912,7 @@ def _list_files(base: str) -> list[str]:
             rel = os.path.relpath(full, base)
             out.append(rel)
     return out
+
 
 def _is_text_file(path: str) -> bool:
     try:
@@ -2604,10 +2925,12 @@ def _is_text_file(path: str) -> bool:
     except Exception:
         return False
 
+
 async def extract_archive(zip_path: str, dest_dir: str) -> list[str]:
     def _do():
         with zipfile.ZipFile(zip_path, 'r') as zf:
-            total = 0; count = 0
+            total = 0
+            count = 0
             for info in zf.infolist():
                 if info.is_dir():
                     continue
@@ -2626,6 +2949,7 @@ async def extract_archive(zip_path: str, dest_dir: str) -> list[str]:
         return _list_files(dest_dir)
     return await asyncio.to_thread(_do)
 
+
 async def create_archive(source_dir: str, out_zip: str) -> None:
     def _do():
         with zipfile.ZipFile(out_zip, 'w', zipfile.ZIP_DEFLATED) as zf:
@@ -2635,6 +2959,7 @@ async def create_archive(source_dir: str, out_zip: str) -> None:
                     rel = os.path.relpath(full, source_dir)
                     zf.write(full, rel)
     await asyncio.to_thread(_do)
+
 
 async def run_safe_command(base_dir: str, cmd: str) -> tuple[int, str]:
     parts = cmd.strip().split()
@@ -2663,11 +2988,12 @@ async def run_safe_command(base_dir: str, cmd: str) -> tuple[int, str]:
     except Exception as e:
         return 1, f"ошибка: {e}"
 
+
 async def tool_edit_archive(message: telebot.types.Message, user_request: str,
                             archive_bytes: bytes, filename: str) -> None:
     user_id = message.from_user.id
     chat_id = message.chat.id
-    status = await tg_bot.send_message(chat_id, "📦 Распаковываю архив...")
+    status = await tg_bot.send_message(chat_id, "Распаковываю архив...")
     work_dir = tempfile.mkdtemp(prefix="kulsh_tools_")
     tools_sessions[chat_id] = {"dir": work_dir, "user_id": user_id}
     try:
@@ -2677,8 +3003,8 @@ async def tool_edit_archive(message: telebot.types.Message, user_request: str,
         files = await extract_archive(arch_path, work_dir)
         files_display = ", ".join(files[:30])
         if len(files) > 30:
-            files_display += f" ... (+{len(files)-30})"
-        await tg_bot.edit_message_text(f"📦 Распаковал.\n\n📄 {files_display}",
+            files_display += f" ... (+{len(files) - 30})"
+        await tg_bot.edit_message_text(f"Распаковано:\n\n{files_display}",
                                        chat_id, status.message_id)
 
         contents: dict[str, str] = {}
@@ -2695,7 +3021,7 @@ async def tool_edit_archive(message: telebot.types.Message, user_request: str,
         if len(files_context) > 60000:
             files_context = files_context[:60000] + "\n...[обрезано]"
 
-        await tg_bot.edit_message_text(f"🧠 Анализирую {len(contents)} файл(ов)...",
+        await tg_bot.edit_message_text(f"Анализирую {len(contents)} файл(ов)...",
                                        chat_id, status.message_id)
 
         prompt = (
@@ -2717,18 +3043,18 @@ async def tool_edit_archive(message: telebot.types.Message, user_request: str,
         try:
             data = json.loads(clean_json_text(raw))
         except Exception as e:
-            await tg_bot.edit_message_text(f"❌ Не смог распарсить ответ ИИ: {e}",
+            await tg_bot.edit_message_text(f"Не удалось распарсить ответ ИИ: {e}",
                                            chat_id, status.message_id)
             return
 
         summary = data.get("summary", "готово")
         new_files = data.get("files", {})
         if not isinstance(new_files, dict) or not new_files:
-            await tg_bot.edit_message_text(f"🤔 ИИ не предложил изменений. {summary}",
+            await tg_bot.edit_message_text(f"ИИ не предложил изменений. {summary}",
                                            chat_id, status.message_id)
             return
 
-        await tg_bot.edit_message_text(f"✏️ Редактирую {len(new_files)} файл(ов)...",
+        await tg_bot.edit_message_text(f"Редактирую {len(new_files)} файл(ов)...",
                                        chat_id, status.message_id)
         for rel, new_content in new_files.items():
             full = _safe_join(work_dir, rel)
@@ -2738,23 +3064,23 @@ async def tool_edit_archive(message: telebot.types.Message, user_request: str,
             with open(full, 'w', encoding='utf-8') as f:
                 f.write(new_content)
 
-        await tg_bot.edit_message_text("🗜 Собираю архив обратно...",
+        await tg_bot.edit_message_text("Собираю архив обратно...",
                                        chat_id, status.message_id)
         out_zip = os.path.join(work_dir, f"edited_{filename or 'archive.zip'}")
         await create_archive(work_dir, out_zip)
 
-        await tg_bot.edit_message_text("📤 Отправляю готовый архив...",
+        await tg_bot.edit_message_text("Отправляю готовый архив...",
                                        chat_id, status.message_id)
         with open(out_zip, 'rb') as f:
             await tg_bot.send_document(
                 chat_id, InputFile(f, file_name=os.path.basename(out_zip)),
-                caption=f"🍷🗿 {summary}"
+                caption=summary,
             )
-        await tg_bot.edit_message_text("✅ Готово", chat_id, status.message_id)
+        await tg_bot.edit_message_text("Готово", chat_id, status.message_id)
     except Exception as e:
         logger.error(f"tool_edit_archive: {e}")
         try:
-            await tg_bot.edit_message_text(f"❌ Ошибка: {e}", chat_id, status.message_id)
+            await tg_bot.edit_message_text(f"Ошибка: {e}", chat_id, status.message_id)
         except Exception:
             pass
     finally:
@@ -2765,6 +3091,7 @@ async def tool_edit_archive(message: telebot.types.Message, user_request: str,
             pass
         tools_sessions.pop(chat_id, None)
 
+
 async def tool_review_file(message: telebot.types.Message, user_request: str,
                            file_bytes: bytes, filename: str) -> None:
     user_id = message.from_user.id
@@ -2772,7 +3099,7 @@ async def tool_review_file(message: telebot.types.Message, user_request: str,
     try:
         text = file_bytes.decode('utf-8', errors='replace')
     except Exception:
-        await reply_tg_html(message, "не могу прочитать файл как текст")
+        await reply_tg_html(message, "не удалось прочитать файл как текст")
         return
     if len(text) > MAX_FILE_SIZE:
         text = text[:MAX_FILE_SIZE] + "\n...[обрезано]"
@@ -2801,19 +3128,31 @@ async def handle_tg_media(message: telebot.types.Message) -> None:
     display_name = message.from_user.full_name or "Unknown"
     username = message.from_user.username or ""
 
-    media_tag = None; file_id = None; media_type = None; file_name = None
+    media_tag = None
+    file_id = None
+    media_type = None
+    file_name = None
     if message.photo:
-        file_id = message.photo[-1].file_id; media_type = "photo"; media_tag = "[фото]"
+        file_id = message.photo[-1].file_id
+        media_type = "photo"
+        media_tag = "[фото]"
     elif message.video:
-        file_id = message.video.file_id; media_type = "video"; media_tag = "[видео]"
+        file_id = message.video.file_id
+        media_type = "video"
+        media_tag = "[видео]"
     elif message.animation:
-        file_id = message.animation.file_id; media_type = "animation"; media_tag = "[гифка]"
+        file_id = message.animation.file_id
+        media_type = "animation"
+        media_tag = "[гифка]"
     elif message.document:
-        file_id = message.document.file_id; media_type = "document"
+        file_id = message.document.file_id
+        media_type = "document"
         file_name = message.document.file_name or "file"
         media_tag = f"[док: {file_name}]"
     elif message.sticker:
-        file_id = message.sticker.file_id; media_type = "sticker"; media_tag = "[стикер]"
+        file_id = message.sticker.file_id
+        media_type = "sticker"
+        media_tag = "[стикер]"
 
     if file_id and media_tag:
         add_media_history(chat_key, None, media_type, display_name, file_id=file_id, caption=caption)
@@ -2847,7 +3186,7 @@ async def handle_tg_media(message: telebot.types.Message) -> None:
     )
     if is_looksmaxxing and message.photo:
         user_looksmaxxing_state[chat_id] = False
-        status = await tg_bot.send_message(chat_id, "⏳ Анализирую внешность...")
+        status = await tg_bot.send_message(chat_id, "Анализирую внешность...")
         try:
             img_bytes = await get_tg_file_bytes(tg_bot, message.photo[-1].file_id)
             include_advice = ("совет" in cl or "advice" in cl or
@@ -2855,29 +3194,30 @@ async def handle_tg_media(message: telebot.types.Message) -> None:
                                ("совет" in message.reply_to_message.text.lower()
                                 or "advice" in message.reply_to_message.text.lower())))
             cfg = get_user_config("tg", chat_id, user_id)
-            lang = cfg.get("language", "ru"); theme = cfg.get("theme", "dark")
+            lang = cfg.get("language", "ru")
+            theme = cfg.get("theme", "dark")
             ai_data = await get_looksmaxxing_data(img_bytes, include_advice, lang=lang)
             if "error" in ai_data:
-                await tg_bot.edit_message_text(f"❌ {ai_data['error']}", chat_id, status.message_id)
+                await tg_bot.edit_message_text(f"Ошибка: {ai_data['error']}", chat_id, status.message_id)
                 return
             infographic = await create_infographic(img_bytes, ai_data, theme=theme, lang=lang)
             report_text = (
-                f"📊 <b>РЕЗУЛЬТАТЫ LOOKSMAXXING</b>\n\n"
-                f"🧬 <b>Пол:</b> {ai_data.get('gender','?')}\n"
-                f"📈 <b>PSL:</b> <code>{ai_data.get('psl','?')}/8.0</code>\n"
-                f"👑 <b>Tier:</b> <code>{ai_data.get('tier','?')}</code>\n"
+                f"<b>РЕЗУЛЬТАТЫ LOOKSMAXXING</b>\n\n"
+                f"Пол: {ai_data.get('gender', '?')}\n"
+                f"PSL: <code>{ai_data.get('psl', '?')}/8.0</code>\n"
+                f"Tier: <code>{ai_data.get('tier', '?')}</code>\n"
             )
             if ai_data.get("potential"):
-                report_text += f"🔮 <b>Потенциал:</b> <code>{ai_data['potential']}</code>\n"
-            report_text += f"\n📝 <b>Анализ:</b>\n{html.escape(ai_data.get('summary',''))}"
+                report_text += f"Потенциал: <code>{ai_data['potential']}</code>\n"
+            report_text += f"\n<b>Анализ:</b>\n{html.escape(ai_data.get('summary', ''))}"
             if include_advice and ai_data.get("advice"):
-                report_text += f"\n\n⚡ <b>Рекомендации:</b>\n{html.escape(ai_data['advice'])}"
+                report_text += f"\n\n<b>Рекомендации:</b>\n{html.escape(ai_data['advice'])}"
             try:
                 await tg_bot.send_photo(chat_id, InputFile(infographic),
-                                        caption="📊 Результаты looksmaxxing")
+                                        caption="Результаты looksmaxxing")
             except Exception as e:
                 logger.error(f"infographic send: {e}")
-            for chunk in [report_text[i:i+3900] for i in range(0, len(report_text), 3900)]:
+            for chunk in [report_text[i:i + 3900] for i in range(0, len(report_text), 3900)]:
                 try:
                     await tg_bot.send_message(chat_id, chunk, parse_mode='HTML')
                 except Exception:
@@ -2888,7 +3228,7 @@ async def handle_tg_media(message: telebot.types.Message) -> None:
             add_bot_memory(chat_key, "[looksmaxxing отчёт]")
         except Exception as e:
             logger.error(f"looksmaxxing: {e}")
-            await reply_tg_html(message, f"🌋 Ошибка: {e}")
+            await reply_tg_html(message, f"Ошибка: {e}")
         return
 
     if is_dm and message.document:
@@ -2901,15 +3241,15 @@ async def handle_tg_media(message: telebot.types.Message) -> None:
             if credits < COST_ARCHIVE_EDIT:
                 await reply_tg_html(
                     message,
-                    f"💎 Недостаточно кредитов для редактирования архива.\n"
-                    f"Нужно {COST_ARCHIVE_EDIT}, у тебя {credits}/{DAILY_CREDITS}."
+                    f"Недостаточно кредитов для редактирования архива.\n"
+                    f"Нужно {COST_ARCHIVE_EDIT}, у вас {credits}/{DAILY_CREDITS}.",
                 )
                 return
             spend_credits("tg", user_id, COST_ARCHIVE_EDIT)
             try:
                 file_bytes = await get_tg_file_bytes(tg_bot, message.document.file_id)
             except Exception as e:
-                await reply_tg_html(message, f"не смог скачать файл: {e}")
+                await reply_tg_html(message, f"не удалось скачать файл: {e}")
                 return
             await tool_edit_archive(message, caption.strip() or "отредактируй что-нибудь полезное",
                                     file_bytes, doc_name or "archive.zip")
@@ -2919,7 +3259,7 @@ async def handle_tg_media(message: telebot.types.Message) -> None:
             try:
                 file_bytes = await get_tg_file_bytes(tg_bot, message.document.file_id)
             except Exception as e:
-                await reply_tg_html(message, f"не смог скачать файл: {e}")
+                await reply_tg_html(message, f"не удалось скачать файл: {e}")
                 return
             await tool_review_file(message, caption.strip() or "что тут?", file_bytes, doc_name or "file")
             return
@@ -2943,25 +3283,28 @@ async def handle_tg_media(message: telebot.types.Message) -> None:
         return
 
     await tg_bot.send_chat_action(chat_id, 'typing')
-    image_bytes = None; image_mime = "image/jpeg"
+    image_bytes = None
+    image_mime = "image/jpeg"
     try:
         if message.photo:
             image_bytes = await get_tg_file_bytes(tg_bot, message.photo[-1].file_id)
         elif message.animation:
             vid = await get_tg_file_bytes(tg_bot, message.animation.file_id)
             frame = await extract_video_frame(vid, ".mp4")
-            if frame: image_bytes = frame
+            if frame:
+                image_bytes = frame
         elif message.video:
             vid = await get_tg_file_bytes(tg_bot, message.video.file_id)
             frame = await extract_video_frame(vid, ".mp4")
-            if frame: image_bytes = frame
+            if frame:
+                image_bytes = frame
         elif message.document and message.document.mime_type and message.document.mime_type.startswith("image/"):
             image_bytes = await get_tg_file_bytes(tg_bot, message.document.file_id)
             image_mime = message.document.mime_type
     except Exception as e:
         logger.warning(f"download media: {e}")
 
-    prompt = caption.strip() or "че на этом?"
+    prompt = caption.strip() or "что на этом?"
     add_user_memory(chat_key, "TG", display_name, username, user_id,
                     f"{prompt} [с медиа: {media_tag}]", [media_tag or "медиа"],
                     message_id=message.message_id)
@@ -2988,6 +3331,45 @@ async def handle_tg_text(message: telebot.types.Message) -> None:
     username = message.from_user.username or ""
     chat_key = f"tg_{chat_id}"
 
+    cfg = get_user_config("tg", chat_id, user_id)
+    lang = cfg.get("language", "ru")
+
+    # Ожидание кастомного промпта (ответ на ForceReply-сообщение)
+    if user_id in prompt_waiting:
+        waiting_msg_id = prompt_waiting[user_id]
+        # проверяем, что это ответ на наше сообщение, либо это просто следующее сообщение от того же юзера
+        is_reply_to_ask = bool(
+            message.reply_to_message and message.reply_to_message.message_id == waiting_msg_id
+        )
+        # Также принимаем любой текст, если пользователь ещё в режиме ожидания
+        if is_reply_to_ask or True:
+            prompt_waiting.pop(user_id, None)
+            new_prompt = text.strip()
+            if new_prompt.lower() in ("отмена", "cancel", "/cancel", "отменить"):
+                cfg["custom_prompt"] = None
+                try:
+                    await tg_bot.edit_message_text(
+                        _localize(lang, "Изменение промпта отменено.", "Prompt edit cancelled."),
+                        chat_id, waiting_msg_id,
+                    )
+                except Exception:
+                    pass
+            else:
+                truncated = new_prompt[:2000]
+                cfg["custom_prompt"] = truncated
+                try:
+                    await tg_bot.edit_message_text(
+                        _localize(
+                            lang,
+                            f"Промпт сохранён ({len(truncated)} символов).",
+                            f"Prompt saved ({len(truncated)} chars).",
+                        ),
+                        chat_id, waiting_msg_id,
+                    )
+                except Exception:
+                    pass
+            return
+
     if tl.startswith("кульш конфиг") or tl.startswith("кульш настройки"):
         await tg_handle_config(message)
         return
@@ -2995,9 +3377,9 @@ async def handle_tg_text(message: telebot.types.Message) -> None:
     if tl.startswith("кульш донаты"):
         top = get_top_donators()
         if not top:
-            await reply_tg_html(message, "Пока никто не донатил. Будь первым, бро 🍷🗿\n" + DONATE_URL)
+            await reply_tg_html(message, "Пока никто не донатил. Будь первым.\n" + DONATE_URL)
             return
-        lines = ["# 🏆 Топ донатеров\n"]
+        lines = ["# Топ донатеров\n"]
         for i, (name, total) in enumerate(top, 1):
             lines.append(f"{i}. {html.escape(name)} — {total} очков")
         await send_formatted(chat_id, "\n".join(lines), reply_to=message.message_id)
@@ -3016,16 +3398,17 @@ async def handle_tg_text(message: telebot.types.Message) -> None:
             try:
                 member = await tg_bot.get_chat_member(chat_id, user_id)
                 if member.status not in ('administrator', 'creator'):
-                    await reply_tg_html(message, "не для тебя писано")
+                    await reply_tg_html(message, "недостаточно прав")
                     return
             except Exception:
-                await reply_tg_html(message, "не могу проверить права")
+                await reply_tg_html(message, "не удалось проверить права")
                 return
         try:
             tail = read_log_tail(20)
             full_caption = f"{LOG_INTRO}\n\n{tail}"
             if len(full_caption) <= 1024:
-                caption = full_caption; extra_text = None
+                caption = full_caption
+                extra_text = None
             else:
                 available = 1024 - len(LOG_INTRO) - 5
                 caption = f"{LOG_INTRO}\n\n{tail[:available]}..."
@@ -3050,12 +3433,12 @@ async def handle_tg_text(message: telebot.types.Message) -> None:
     if is_looksmaxxing_command(text):
         user_looksmaxxing_state[chat_id] = True
         add_user_memory(chat_key, "TG", display_name, username, user_id, text, message_id=message.message_id)
-        await reply_tg_html(message, "📸 Жду фото для анализа. Отправь его с пометкой 'looksmaxxing'.")
+        await reply_tg_html(message, "Отправьте фото для анализа.")
         return
 
     if is_battle_command(text):
         add_user_memory(chat_key, "TG", display_name, username, user_id, text, message_id=message.message_id)
-        await reply_tg_html(message, "Для баттла пришлите два фото одним альбомом с командой 'кульш баттл'.")
+        await reply_tg_html(message, "Пришлите два фото одним альбомом с командой `кульш баттл`.")
         return
 
     is_reply_to_bot = (message.reply_to_message and message.reply_to_message.from_user
@@ -3107,31 +3490,32 @@ async def process_battle_media_group(media_group_id: str, tg_chat_id: int, user_
     battle_media_groups.pop(media_group_id, None)
     photo1_bytes, photo2_bytes = photos[:2]
     cfg = get_user_config("tg", tg_chat_id, user_id)
-    lang = cfg.get("language", "ru"); theme = cfg.get("theme", "dark")
+    lang = cfg.get("language", "ru")
+    theme = cfg.get("theme", "dark")
     try:
         await tg_bot.send_chat_action(tg_chat_id, 'typing')
     except Exception:
         pass
-    status = await tg_bot.send_message(tg_chat_id, "⚔️ Сравниваю лица...")
+    status = await tg_bot.send_message(tg_chat_id, "Сравниваю лица...")
     ai_data = await get_battle_data(photo1_bytes, photo2_bytes, lang=lang)
     if "error" in ai_data:
-        await tg_bot.edit_message_text(f"❌ {ai_data['error']}", tg_chat_id, status.message_id)
+        await tg_bot.edit_message_text(f"Ошибка: {ai_data['error']}", tg_chat_id, status.message_id)
         return
     battle_img = await create_battle_infographic(photo1_bytes, photo2_bytes, ai_data,
                                                   theme=theme, lang=lang)
     winner_num = str(ai_data.get("winner", "1"))
     winner_label = "Первое фото" if winner_num == "1" else "Второе фото"
     report_text = (
-        f"⚔️ <b>РЕЗУЛЬТАТ БАТТЛА</b>\n\n"
-        f"🥇 Победитель: <b>{winner_label}</b>\n"
-        f"🔍 Причина: {html.escape(ai_data.get('reason',''))}\n\n"
-        f"📊 Фото 1: PSL {ai_data.get('photo1',{}).get('psl','?')} | "
-        f"Tier {html.escape(ai_data.get('photo1',{}).get('tier','?'))}\n"
-        f"📊 Фото 2: PSL {ai_data.get('photo2',{}).get('psl','?')} | "
-        f"Tier {html.escape(ai_data.get('photo2',{}).get('tier','?'))}\n"
+        f"<b>РЕЗУЛЬТАТ БАТТЛА</b>\n\n"
+        f"Победитель: <b>{winner_label}</b>\n"
+        f"Причина: {html.escape(ai_data.get('reason', ''))}\n\n"
+        f"Фото 1: PSL {ai_data.get('photo1', {}).get('psl', '?')} | "
+        f"Tier {html.escape(ai_data.get('photo1', {}).get('tier', '?'))}\n"
+        f"Фото 2: PSL {ai_data.get('photo2', {}).get('psl', '?')} | "
+        f"Tier {html.escape(ai_data.get('photo2', {}).get('tier', '?'))}\n"
     )
     try:
-        await tg_bot.send_photo(tg_chat_id, InputFile(battle_img), caption="⚔️ Результат баттла")
+        await tg_bot.send_photo(tg_chat_id, InputFile(battle_img), caption="Результат баттла")
     except Exception as e:
         logger.error(f"battle infra: {e}")
     try:
@@ -3141,7 +3525,7 @@ async def process_battle_media_group(media_group_id: str, tg_chat_id: int, user_
     await tg_bot.delete_message(tg_chat_id, status.message_id)
 
 # ============================================================
-# SAFE GIT UPDATE (с откатом при ошибке)
+# SAFE GIT UPDATE
 # ============================================================
 def _run_git(args: list[str], cwd: str, timeout: int = 60) -> tuple[int, str, str]:
     try:
@@ -3153,6 +3537,7 @@ def _run_git(args: list[str], cwd: str, timeout: int = 60) -> tuple[int, str, st
         return 127, "", "git not found"
     except Exception as e:
         return 1, "", str(e)
+
 
 def _check_python_syntax(fpath: str) -> str | None:
     try:
@@ -3167,6 +3552,7 @@ def _check_python_syntax(fpath: str) -> str | None:
     except Exception as e:
         return f"{type(e).__name__}: {e}"
     return None
+
 
 def _safe_check_import(fpath: str, timeout: int = 45) -> str | None:
     if not os.path.isfile(fpath):
@@ -3199,6 +3585,7 @@ def _safe_check_import(fpath: str, timeout: int = 45) -> str | None:
         return f"{type(e).__name__}: {e}"
     return None
 
+
 def _find_entry_file(repo_path: str) -> str | None:
     try:
         cur = os.path.abspath(__file__)
@@ -3217,6 +3604,7 @@ def _find_entry_file(repo_path: str) -> str | None:
     except Exception:
         pass
     return None
+
 
 async def perform_safe_git_update(repo_path: str) -> tuple[str, str]:
     rc, out, err = _run_git(["rev-parse", "HEAD"], cwd=repo_path, timeout=10)
@@ -3280,7 +3668,7 @@ async def perform_safe_git_update(repo_path: str) -> tuple[str, str]:
     return "ok", pull_out
 
 # ============================================================
-# DISCORD HANDLERS
+# DISCORD: SEND AI RESPONSE
 # ============================================================
 async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: int, answer_raw: str) -> None:
     cfg = get_user_config("ds", chat_id, user_id)
@@ -3301,7 +3689,7 @@ async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: i
         history = list(chat_media_history.get(f"ds_{chat_id}", []))
         if history:
             last = history[-3:]
-            lines = [f"- {it.get('type','media')} от {it.get('sender','?')}: {(it.get('caption') or '')[:100]}"
+            lines = [f"- {it.get('type', 'media')} от {it.get('sender', '?')}: {(it.get('caption') or '')[:100]}"
                      for it in last]
             extra_segments.append("Недавние медиа:\n" + "\n".join(lines))
 
@@ -3336,103 +3724,512 @@ async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: i
             except Exception as e:
                 logger.warning(f"ds utility {m}: {e}")
 
+# ============================================================
+# DISCORD CONFIG (текстом)
+# ============================================================
+def _ds_config_embed(chat_id: int, user_id: int) -> discord.Embed:
+    cfg = get_user_config("ds", chat_id, user_id)
+    lang = cfg.get("language", "ru")
+    series = "вкл" if cfg.get("series_reminder_enabled", True) else "выкл"
+    stickers = "вкл" if cfg.get("stickers_enabled", True) else "выкл"
+    sep = "вкл" if cfg.get("separate_enabled", True) else "выкл"
+    autoreply = "вкл" if cfg.get("random_reply_enabled", False) else "выкл"
+    random_msgs = "вкл" if cfg.get("random_messages_enabled", True) else "выкл"
+    prompt = cfg.get("custom_prompt") or "стандартный"
+    if len(prompt) > 900:
+        prompt = prompt[:900] + "..."
+    theme_disp = "тёмная" if cfg.get("theme", "dark") == "dark" else "светлая"
+    lang_disp = "Русский" if lang == "ru" else "English"
+
+    embed = discord.Embed(
+        title="Настройки Кульша",
+        color=0x10B981,
+        description="Текущие параметры для этого канала. Изменение — текстом через "
+                    "`кульш конфиг <параметр> <значение>`.",
+    )
+    embed.add_field(name="Язык", value=lang_disp, inline=True)
+    embed.add_field(name="Тема", value=theme_disp, inline=True)
+    embed.add_field(name="Модель", value=model_display_name(cfg.get("model")), inline=True)
+    embed.add_field(name="Температура", value=str(cfg.get("temperature", 0.9)), inline=True)
+    embed.add_field(name="Разбивка", value=sep, inline=True)
+    embed.add_field(name="Стикеры/гифки", value=stickers, inline=True)
+    embed.add_field(name="Автоответ", value=autoreply, inline=True)
+    embed.add_field(name="Случайные сообщения", value=random_msgs, inline=True)
+    embed.add_field(name="Серия (напоминание)", value=series, inline=True)
+    embed.add_field(name="Кастомный промпт", value=prompt, inline=False)
+    embed.add_field(
+        name="Команды настройки",
+        value=(
+            "`кульш конфиг язык ru|en`\n"
+            "`кульш конфиг тема тёмная|светлая`\n"
+            "`кульш конфиг модель` — список\n"
+            "`кульш конфиг модель <номер|авто>`\n"
+            "`кульш конфиг температура <0.0-2.0>`\n"
+            "`кульш конфиг разбивка вкл|выкл`\n"
+            "`кульш конфиг стикеры вкл|выкл`\n"
+            "`кульш конфиг автоответ вкл|выкл`\n"
+            "`кульш конфиг рандом вкл|выкл`\n"
+            "`кульш конфиг промпт <текст|сброс>`\n"
+            "`кульш конфиг серия вкл|выкл`"
+        ),
+        inline=False,
+    )
+    return embed
+
+
 async def ds_handle_config(message: discord.Message, user_id: int) -> None:
     chat_id = message.channel.id
     if message.guild and not message.author.guild_permissions.administrator:
-        await message.reply("только админы могут менять конфиг")
+        await message.reply("изменение настроек доступно только администраторам канала")
         return
-    cfg = get_user_config("ds", chat_id, user_id)
-    series = "✅" if cfg["series_reminder_enabled"] else "❌"
-    stickers = "✅" if cfg["stickers_enabled"] else "❌"
-    sep = "✅" if cfg.get("separate_enabled", True) else "❌"
-    stream = "✅" if cfg.get("streaming_enabled") else "❌"
-    prompt = cfg["custom_prompt"] or "стандартный"
-    model_str = model_display_name(cfg.get("model"))
-    embed = discord.Embed(title="⚙️ Настройки (для тебя)", color=0x10b981)
-    embed.add_field(name="🎬 Серия", value=series, inline=True)
-    embed.add_field(name="🎨 Стикеры", value=stickers, inline=True)
-    embed.add_field(name="💬 Разбивка", value=sep, inline=True)
-    embed.add_field(name="📡 Стриминг", value=stream, inline=True)
-    embed.add_field(name="🧠 Модель", value=model_str, inline=False)
-    embed.add_field(name="🎛 Температура", value=str(cfg.get("temperature", 0.9)), inline=True)
-    embed.add_field(name="📝 Промпт", value=prompt[:1000], inline=False)
-    embed.add_field(
-        name="Что менять",
-        value=(
-            "`кульш конфиг серия вкл|выкл`\n"
-            "`кульш конфиг стикеры вкл|выкл`\n"
-            "`кульш конфиг разбивка вкл|выкл`\n"
-            "`кульш конфиг стриминг вкл|выкл`\n"
-            "`кульш конфиг температура 0.9`\n"
-            "`кульш конфиг промпт <текст | сброс>`\n"
-            "`кульш конфиг модель` — список\n"
-            "`кульш конфиг модель <номер | авто>`"
-        ), inline=False,
-    )
+    embed = _ds_config_embed(chat_id, user_id)
     await message.reply(embed=embed)
+
 
 async def ds_handle_config_param(message: discord.Message, user_id: int, parts: list[str]) -> None:
     chat_id = message.channel.id
+    if message.guild and not message.author.guild_permissions.administrator:
+        await message.reply("изменение настроек доступно только администраторам канала")
+        return
     cfg = get_user_config("ds", chat_id, user_id)
     if len(parts) < 3:
-        await ds_handle_config(message, user_id); return
+        await ds_handle_config(message, user_id)
+        return
     param = parts[2].lower()
     val = parts[3].lower() if len(parts) >= 4 else ""
-    if param == "серия":
-        cfg["series_reminder_enabled"] = val in ("вкл", "on", "1")
-        await message.reply("🎬 Серия: " + ("вкл" if cfg["series_reminder_enabled"] else "выкл"))
+    bool_on = val in ("вкл", "on", "1", "true", "да")
+
+    if param == "язык":
+        if val in ("ru", "русский", "russian"):
+            cfg["language"] = "ru"
+            await message.reply("Язык: русский")
+        elif val in ("en", "английский", "english"):
+            cfg["language"] = "en"
+            await message.reply("Language: English")
+        else:
+            await message.reply("Укажите `ru` или `en`.")
+    elif param == "тема":
+        if val in ("тёмная", "темная", "dark"):
+            cfg["theme"] = "dark"
+            await message.reply("Тема: тёмная")
+        elif val in ("светлая", "light"):
+            cfg["theme"] = "light"
+            await message.reply("Тема: светлая")
+        else:
+            await message.reply("Укажите `тёмная` или `светлая`.")
+    elif param == "серия":
+        cfg["series_reminder_enabled"] = bool_on
+        await message.reply("Напоминание о серии: " + ("вкл" if bool_on else "выкл"))
     elif param == "стикеры":
-        cfg["stickers_enabled"] = val in ("вкл", "on", "1")
-        await message.reply("🎨 Стикеры: " + ("вкл" if cfg["stickers_enabled"] else "выкл"))
+        cfg["stickers_enabled"] = bool_on
+        await message.reply("Стикеры/гифки: " + ("вкл" if bool_on else "выкл"))
     elif param == "разбивка":
-        new_val = val in ("вкл", "on", "1")
-        if new_val and cfg.get("streaming_enabled", False):
-            await message.reply("⚠️ Разбивка и стриминг взаимно исключаемы. Сначала отключи стриминг.")
-            return
-        cfg["separate_enabled"] = new_val
-        await message.reply("💬 Разбивка: " + ("вкл" if cfg["separate_enabled"] else "выкл"))
-    elif param == "стриминг":
-        new_val = val in ("вкл", "on", "1")
-        if new_val and cfg.get("separate_enabled", True):
-            await message.reply("⚠️ Стриминг и разбивка взаимно исключаемы. Сначала отключи разбивку.")
-            return
-        cfg["streaming_enabled"] = new_val
-        await message.reply("📡 Стриминг: " + ("вкл" if cfg["streaming_enabled"] else "выкл"))
+        cfg["separate_enabled"] = bool_on
+        await message.reply("Разбивка на сообщения: " + ("вкл" if bool_on else "выкл"))
+    elif param == "автоответ":
+        cfg["random_reply_enabled"] = bool_on
+        await message.reply("Автоответ: " + ("вкл" if bool_on else "выкл"))
+    elif param == "рандом":
+        cfg["random_messages_enabled"] = bool_on
+        await message.reply("Случайные сообщения: " + ("вкл" if bool_on else "выкл"))
     elif param == "температура":
         try:
             t = max(0.0, min(2.0, float(val)))
             cfg["temperature"] = t
-            await message.reply(f"🎛 Температура: {t}")
+            await message.reply(f"Температура: {t}")
         except ValueError:
-            await message.reply("введите число 0.0-2.0")
+            await message.reply("Укажите число от 0.0 до 2.0.")
     elif param == "промпт":
         new_prompt = " ".join(parts[3:]).strip()
         if new_prompt.lower() in ("сброс", "убрать", "стандарт"):
             cfg["custom_prompt"] = None
-            await message.reply("📝 Промпт сброшен")
+            await message.reply("Промпт сброшен.")
         elif new_prompt:
-            cfg["custom_prompt"] = new_prompt
-            await message.reply("📝 Промпт установлен")
+            cfg["custom_prompt"] = new_prompt[:2000]
+            await message.reply("Промпт установлен.")
         else:
-            await message.reply("Введите текст или 'сброс'")
+            await message.reply("Введите текст или `сброс`.")
     elif param == "модель":
         if not val:
             lines = [f"`{i}` — {MODEL_DISPLAY.get(m, m)}" for i, m in enumerate(MODEL_LIST)]
-            await message.reply(f"🧠 Текущая: {model_display_name(cfg.get('model'))}\n\n" + "\n".join(lines))
+            await message.reply(f"Текущая: {model_display_name(cfg.get('model'))}\n\n" + "\n".join(lines))
         elif val in ("авто", "auto"):
             cfg["model"] = None
-            await message.reply("🧠 Модель: авто")
+            await message.reply("Модель: авто")
         else:
             try:
                 idx = int(val)
                 if 0 <= idx < len(MODEL_LIST):
                     cfg["model"] = MODEL_LIST[idx]
-                    await message.reply(f"🧠 Модель: {MODEL_DISPLAY.get(MODEL_LIST[idx], MODEL_LIST[idx])}")
+                    await message.reply(f"Модель: {MODEL_DISPLAY.get(MODEL_LIST[idx], MODEL_LIST[idx])}")
                 else:
-                    await message.reply("❌ Неверный номер")
+                    await message.reply("Неверный номер.")
             except ValueError:
-                await message.reply("❌ Введите номер или 'авто'.")
+                await message.reply("Введите номер или `авто`.")
+    else:
+        await message.reply("Неизвестный параметр. Используйте `кульш конфиг` для просмотра.")
 
+# ============================================================
+# DISCORD: SLASH-КОМАНДЫ
+# ============================================================
+def _ds_slash_help_text(lang: str) -> str:
+    if lang == "ru":
+        return (
+            "# Кульш — команды\n\n"
+            "**Основные**\n"
+            "- `/start` — приветствие\n"
+            "- `/menu` — интерактивное меню\n"
+            "- `/help` — эта справка\n"
+            "- `/donate` — поддержать проект\n"
+            "- `/credits` — баланс кредитов\n\n"
+            "**Настройки**\n"
+            "- `/config` — текущие параметры канала\n"
+            "Изменение: `кульш конфиг <параметр> <значение>`\n\n"
+            "**Утилиты**\n"
+            "- `/avatar` — описать аватарку\n"
+            "- `/recall` — вспомнить последние медиа\n"
+            "- `/logs` — логи сервера (админам)\n\n"
+            "**Развлечения**\n"
+            "- `/psl` — оценка внешности (looksmaxxing)\n"
+            "- `/battle` — баттл двух фото\n\n"
+            f"Веб-версия: {MINI_APP_URL}\n"
+            f"GitHub: {GITHUB_URL}"
+        )
+    return (
+        "# Kulsh — commands\n\n"
+        "**Basics**\n"
+        "- `/start` — greeting\n"
+        "- `/menu` — interactive menu\n"
+        "- `/help` — this help\n"
+        "- `/donate` — support the project\n"
+        "- `/credits` — credits balance\n\n"
+        "**Settings**\n"
+        "- `/config` — current channel settings\n"
+        "Change: `kulsh config <param> <value>`\n\n"
+        "**Tools**\n"
+        "- `/avatar` — describe avatar\n"
+        "- `/recall` — recall recent media\n"
+        "- `/logs` — server logs (admins)\n\n"
+        "**Entertainment**\n"
+        "- `/psl` — looksmaxxing\n"
+        "- `/battle` — two-photo battle\n\n"
+        f"Web version: {MINI_APP_URL}\n"
+        f"GitHub: {GITHUB_URL}"
+    )
+
+
+def _ds_slash_menu_text(lang: str) -> str:
+    if lang == "ru":
+        return (
+            "# Меню Кульш AI\n\n"
+            "Открытая языковая модель с набором встроенных инструментов. "
+            "Ниже — основные разделы и команды.\n\n"
+            "**Основные**\n"
+            "- `/start` — приветствие\n"
+            "- `/help` — полный список команд\n"
+            "- `/config` — настройки канала\n"
+            "- `/donate` — поддержка разработки\n"
+            "- `/credits` — баланс кредитов\n\n"
+            "**Инструменты**\n"
+            "- `/avatar` — описать аватарку\n"
+            "- `/recall` — вспомнить последние медиа\n"
+            "- `/psl` — оценка внешности\n"
+            "- `/battle` — баттл двух фото\n"
+            "- `/logs` — логи сервера (админам)\n\n"
+            f"Веб-версия: {MINI_APP_URL}"
+        )
+    return (
+        "# Kulsh AI Menu\n\n"
+        "An open-source language model with a set of built-in tools. "
+        "Below are the main sections and commands.\n\n"
+        "**Basics**\n"
+        "- `/start` — greeting\n"
+        "- `/help` — full command list\n"
+        "- `/config` — channel settings\n"
+        "- `/donate` — support development\n"
+        "- `/credits` — credits balance\n\n"
+        "**Tools**\n"
+        "- `/avatar` — describe avatar\n"
+        "- `/recall` — recall recent media\n"
+        "- `/psl` — looksmaxxing\n"
+        "- `/battle` — two-photo battle\n"
+        "- `/logs` — server logs (admins)\n\n"
+        f"Web version: {MINI_APP_URL}"
+    )
+
+
+def _ds_slash_start_text(lang: str) -> str:
+    if lang == "ru":
+        return (
+            "# Кульш на связи\n\n"
+            "Открытая языковая модель с анализом изображений, оценкой внешности "
+            "и настройкой под себя. Работает в Telegram и Discord.\n\n"
+            "**С чего начать**\n"
+            "- `/menu` — все разделы\n"
+            "- `/help` — список команд\n"
+            "- `/config` — настройки канала\n\n"
+            f"Веб-версия: {MINI_APP_URL}"
+        )
+    return (
+        "# Kulsh is online\n\n"
+        "An open-source language model with image analysis, looksmaxxing, "
+        "and personal configuration. Available in Telegram and Discord.\n\n"
+        "**Get started**\n"
+        "- `/menu` — all sections\n"
+        "- `/help` — command list\n"
+        "- `/config` — channel settings\n\n"
+        f"Web version: {MINI_APP_URL}"
+    )
+
+
+def _ds_lang_of(interaction: discord.Interaction) -> str:
+    chat_id = interaction.channel_id or 0
+    user_id = interaction.user.id
+    cfg = get_user_config("ds", chat_id, user_id)
+    return cfg.get("language", "ru")
+
+
+@ds_tree.command(name="start", description="Greeting / Приветствие")
+async def ds_slash_start(interaction: discord.Interaction):
+    lang = _ds_lang_of(interaction)
+    await interaction.response.send_message(_ds_slash_start_text(lang))
+
+
+@ds_tree.command(name="menu", description="Menu / Меню")
+async def ds_slash_menu(interaction: discord.Interaction):
+    lang = _ds_lang_of(interaction)
+    await interaction.response.send_message(_ds_slash_menu_text(lang))
+
+
+@ds_tree.command(name="help", description="Command list / Список команд")
+async def ds_slash_help(interaction: discord.Interaction):
+    lang = _ds_lang_of(interaction)
+    await interaction.response.send_message(_ds_slash_help_text(lang))
+
+
+@ds_tree.command(name="donate", description="Support the project / Поддержать проект")
+async def ds_slash_donate(interaction: discord.Interaction):
+    lang = _ds_lang_of(interaction)
+    if lang == "ru":
+        text = (
+            "# Поддержать Кульша\n\n"
+            "Донаты идут на серверы, домены и дальнейшую разработку.\n\n"
+            f"Онлайн-донат: {DONATE_URL}\n"
+            f"GitHub: {GITHUB_URL}"
+        )
+    else:
+        text = (
+            "# Support Kulsh\n\n"
+            "Donations go to servers, domains and further development.\n\n"
+            f"Donate online: {DONATE_URL}\n"
+            f"GitHub: {GITHUB_URL}"
+        )
+    await interaction.response.send_message(text)
+
+
+@ds_tree.command(name="credits", description="Credits balance / Баланс кредитов")
+async def ds_slash_credits(interaction: discord.Interaction):
+    lang = _ds_lang_of(interaction)
+    creds = get_user_credits("ds", interaction.user.id)
+    if lang == "ru":
+        await interaction.response.send_message(f"Кредиты: {creds}/{DAILY_CREDITS}")
+    else:
+        await interaction.response.send_message(f"Credits: {creds}/{DAILY_CREDITS}")
+
+
+@ds_tree.command(name="config", description="Channel settings / Настройки канала")
+async def ds_slash_config(interaction: discord.Interaction):
+    chat_id = interaction.channel_id or 0
+    user_id = interaction.user.id
+    if interaction.guild and not interaction.user.guild_permissions.administrator:
+        lang = _ds_lang_of(interaction)
+        msg = "изменение настроек доступно только администраторам канала" if lang == "ru" \
+            else "only channel administrators can change settings"
+        await interaction.response.send_message(msg, ephemeral=True)
+        return
+    embed = _ds_config_embed(chat_id, user_id)
+    await interaction.response.send_message(embed=embed)
+
+
+@ds_tree.command(name="avatar", description="Describe avatar / Описать аватарку")
+@app_commands.describe(user="Whose avatar to describe / Чью аватарку описать")
+async def ds_slash_avatar(interaction: discord.Interaction, user: discord.Member | None = None):
+    await interaction.response.defer()
+    target = user or interaction.user
+    chat_id = interaction.channel_id or 0
+    user_id = interaction.user.id
+    try:
+        img_bytes = await download_image_bytes(target.display_avatar.url)
+        raw = await ask_ai_async(
+            prompt=(f"Ты только что посмотрел аватарку пользователя {target.display_name}. "
+                    f"Опиши коротко (1-2 предложения) в стиле Кульша. Без markdown. "
+                    f"НЕ используй маркеры !separate, !avatar, !recall_media, !sticker, !gif."),
+            image_bytes=img_bytes, image_mime="image/jpeg",
+            chat_id=chat_id, user_id=user_id, platform="ds",
+        )
+        segments = clean_extra_text(raw) if raw else []
+        if not segments:
+            await interaction.followup.send("не удалось получить описание")
+            return
+        for seg in segments:
+            await interaction.followup.send(seg)
+    except Exception as e:
+        logger.error(f"DS slash avatar: {e}")
+        await interaction.followup.send(f"Ошибка: {e}")
+
+
+@ds_tree.command(name="recall", description="Recall recent media / Вспомнить недавние медиа")
+@app_commands.describe(count="How many last items / Сколько последних элементов")
+async def ds_slash_recall(interaction: discord.Interaction, count: int = 3):
+    await interaction.response.defer()
+    chat_id = interaction.channel_id or 0
+    user_id = interaction.user.id
+    n = max(1, min(10, count))
+    history = list(chat_media_history.get(f"ds_{chat_id}", []))
+    if not history:
+        await interaction.followup.send("в памяти нет медиа")
+        return
+    last = history[-n:]
+    lines = [f"- {it.get('type', 'media')} от {it.get('sender', '?')}: {(it.get('caption') or '')[:120]}"
+             for it in last]
+    meta = "\n".join(lines)
+    try:
+        raw = await ask_ai_async(
+            prompt=(f"Ты вспоминаешь недавние медиа. Список:\n{meta}\n\n"
+                    f"Коротко прокомментируй в стиле Кульша. Без markdown. "
+                    f"НЕ используй маркеры !separate, !avatar, !recall_media, !sticker, !gif."),
+            chat_id=chat_id, user_id=user_id, platform="ds",
+        )
+        segments = clean_extra_text(raw) if raw else []
+        if not segments:
+            await interaction.followup.send(meta)
+            return
+        for seg in segments:
+            await interaction.followup.send(seg)
+    except Exception as e:
+        logger.error(f"DS slash recall: {e}")
+        await interaction.followup.send(f"Ошибка: {e}")
+
+
+@ds_tree.command(name="logs", description="Server logs (admins) / Логи сервера (админам)")
+async def ds_slash_logs(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    if interaction.user.id not in AUTHORIZED_UPDATERS:
+        await interaction.followup.send("недостаточно прав", ephemeral=True)
+        return
+    try:
+        tail = read_log_tail(20)
+        content = f"{LOG_INTRO}\n```\n{tail}\n```" if len(tail) <= 1900 else f"{LOG_INTRO}\n\n{tail[:1900]}"
+        try:
+            await interaction.followup.send(content=content, file=discord.File('bot.log'), ephemeral=True)
+        except FileNotFoundError:
+            await interaction.followup.send(content=content, ephemeral=True)
+    except Exception as e:
+        await interaction.followup.send(f"Ошибка: {e}", ephemeral=True)
+
+
+@ds_tree.command(name="psl", description="Looksmaxxing analysis / Оценка внешности")
+@app_commands.describe(image="Photo / Фото", advice="Include advice / Показать рекомендации")
+async def ds_slash_psl(interaction: discord.Interaction, image: discord.Attachment, advice: bool = False):
+    await interaction.response.defer()
+    chat_id = interaction.channel_id or 0
+    user_id = interaction.user.id
+    try:
+        img_bytes = await download_image_bytes(image.url)
+        cfg = get_user_config("ds", chat_id, user_id)
+        lang = cfg.get("language", "ru")
+        theme = cfg.get("theme", "dark")
+        ai_data = await get_looksmaxxing_data(img_bytes, advice, lang=lang)
+        if "error" in ai_data:
+            await interaction.followup.send(f"Ошибка: {ai_data['error']}")
+            return
+        infographic = await create_infographic(img_bytes, ai_data, theme=theme, lang=lang)
+        if lang == "ru":
+            report = (
+                f"**LOOKSMAXXING**\n"
+                f"Пол: {ai_data.get('gender', '?')}\n"
+                f"PSL: `{ai_data.get('psl', '?')}/8.0`\n"
+                f"Tier: `{ai_data.get('tier', '?')}`\n"
+            )
+            if ai_data.get("potential"):
+                report += f"Потенциал: `{ai_data['potential']}`\n"
+            report += f"\n{ai_data.get('summary', '')}"
+            if advice and ai_data.get("advice"):
+                report += f"\n\n**Рекомендации:**\n{ai_data['advice']}"
+        else:
+            report = (
+                f"**LOOKSMAXXING**\n"
+                f"Gender: {ai_data.get('gender', '?')}\n"
+                f"PSL: `{ai_data.get('psl', '?')}/8.0`\n"
+                f"Tier: `{ai_data.get('tier', '?')}`\n"
+            )
+            if ai_data.get("potential"):
+                report += f"Potential: `{ai_data['potential']}`\n"
+            report += f"\n{ai_data.get('summary', '')}"
+            if advice and ai_data.get("advice"):
+                report += f"\n\n**Advice:**\n{ai_data['advice']}"
+        await interaction.followup.send(
+            content=report[:1900],
+            file=discord.File(fp=infographic, filename="psl.png"),
+        )
+        if len(report) > 1900:
+            await interaction.followup.send(report[1900:])
+    except Exception as e:
+        logger.error(f"DS slash psl: {e}")
+        await interaction.followup.send(f"Ошибка: {e}")
+
+
+@ds_tree.command(name="battle", description="Two-photo battle / Баттл двух фото")
+@app_commands.describe(image1="First photo / Первое фото", image2="Second photo / Второе фото")
+async def ds_slash_battle(interaction: discord.Interaction, image1: discord.Attachment, image2: discord.Attachment):
+    await interaction.response.defer()
+    chat_id = interaction.channel_id or 0
+    user_id = interaction.user.id
+    try:
+        p1 = await download_image_bytes(image1.url)
+        p2 = await download_image_bytes(image2.url)
+        cfg = get_user_config("ds", chat_id, user_id)
+        lang = cfg.get("language", "ru")
+        theme = cfg.get("theme", "dark")
+        ai_data = await get_battle_data(p1, p2, lang=lang)
+        if "error" in ai_data:
+            await interaction.followup.send(f"Ошибка: {ai_data['error']}")
+            return
+        img = await create_battle_infographic(p1, p2, ai_data, theme=theme, lang=lang)
+        winner_num = str(ai_data.get("winner", "1"))
+        if lang == "ru":
+            winner_label = "Первое фото" if winner_num == "1" else "Второе фото"
+            report = (
+                f"**РЕЗУЛЬТАТ БАТТЛА**\n\n"
+                f"Победитель: **{winner_label}**\n"
+                f"Причина: {ai_data.get('reason', '')}\n\n"
+                f"Фото 1: PSL {ai_data.get('photo1', {}).get('psl', '?')} | "
+                f"{ai_data.get('photo1', {}).get('tier', '?')}\n"
+                f"Фото 2: PSL {ai_data.get('photo2', {}).get('psl', '?')} | "
+                f"{ai_data.get('photo2', {}).get('tier', '?')}"
+            )
+        else:
+            winner_label = "First photo" if winner_num == "1" else "Second photo"
+            report = (
+                f"**BATTLE RESULT**\n\n"
+                f"Winner: **{winner_label}**\n"
+                f"Reason: {ai_data.get('reason', '')}\n\n"
+                f"Photo 1: PSL {ai_data.get('photo1', {}).get('psl', '?')} | "
+                f"{ai_data.get('photo1', {}).get('tier', '?')}\n"
+                f"Photo 2: PSL {ai_data.get('photo2', {}).get('psl', '?')} | "
+                f"{ai_data.get('photo2', {}).get('tier', '?')}"
+            )
+        await interaction.followup.send(
+            content=report[:1900],
+            file=discord.File(fp=img, filename="battle.png"),
+        )
+    except Exception as e:
+        logger.error(f"DS slash battle: {e}")
+        await interaction.followup.send(f"Ошибка: {e}")
+
+# ============================================================
+# DISCORD: MESSAGE HANDLER
+# ============================================================
 @ds_bot.event
 async def on_message(message: discord.Message) -> None:
     if message.author == ds_bot.user or message.author.bot:
@@ -3446,21 +4243,22 @@ async def on_message(message: discord.Message) -> None:
 
     if not is_dm and content_lower.startswith("кульш обновись"):
         if message.author.id not in AUTHORIZED_UPDATERS:
-            await message.reply("ты кто бля, обновлять меня будешь?"); return
-        await message.reply("ща попробую обновиться (с автооткатом при ошибке)...")
+            await message.reply("недостаточно прав")
+            return
+        await message.reply("обновляюсь с автооткатом при ошибке...")
         try:
             repo_path = os.getenv('REPO_PATH', os.getcwd())
             status, info = await perform_safe_git_update(repo_path)
             if status == "up_to_date":
-                await message.reply(f"я и так свежий:\n```\n{info[:1500]}\n```")
+                await message.reply(f"уже актуальная версия:\n```\n{info[:1500]}\n```")
             elif status == "ok":
                 await message.reply(f"изменения подтянуты, перезапускаюсь:\n```\n{info[:1500]}\n```")
                 await asyncio.sleep(2)
                 os._exit(0)
             elif status == "rolled_back":
                 await message.reply(
-                    "⚠️ новый коммит содержит ошибки — я откатился к предыдущей версии. "
-                    "Бот продолжает работать.\n"
+                    "новый коммит содержит ошибки — откатился к предыдущей версии. "
+                    "Бот продолжает работу.\n"
                     f"```\n{info[:1500]}\n```"
                 )
             else:
@@ -3481,33 +4279,41 @@ async def on_message(message: discord.Message) -> None:
     if content_lower.startswith("кульш донаты"):
         top = get_top_donators()
         if not top:
-            await message.reply(f"Пока никто не донатил 🍷🗿\n{DONATE_URL}"); return
-        embed = discord.Embed(title="🏆 Топ донатеров", color=0x10b981)
+            await message.reply(f"Пока никто не донатил.\n{DONATE_URL}")
+            return
+        embed = discord.Embed(title="Топ донатеров", color=0x10B981)
         for i, (name, total) in enumerate(top, 1):
             embed.add_field(name=f"{i}. {name}", value=f"{total} очков", inline=False)
-        await message.reply(embed=embed); return
+        await message.reply(embed=embed)
+        return
 
     if content_lower.startswith("кульш аватарк") or content_lower.startswith("кульш аватар"):
         raw = await get_avatar_description_ds(message, chat_id, user_id)
         if not raw:
-            await message.reply("не смог получить аватарку"); return
+            await message.reply("не удалось получить аватарку")
+            return
         for seg in clean_extra_text(raw):
-            try: await message.channel.send(seg)
-            except Exception as e: logger.warning(f"DS avatar: {e}")
+            try:
+                await message.channel.send(seg)
+            except Exception as e:
+                logger.warning(f"DS avatar: {e}")
         return
 
     if not is_dm and "кульш логи" in content_lower:
         if message.author.id not in AUTHORIZED_UPDATERS:
-            await message.reply("ты кто бля"); return
+            await message.reply("недостаточно прав")
+            return
         try:
             tail = read_log_tail(20)
             try:
                 await message.reply(
                     content=f"{LOG_INTRO}\n```\n{tail}\n```" if len(tail) <= 1900 else LOG_INTRO,
-                    file=discord.File('bot.log')
+                    file=discord.File('bot.log'),
                 )
             except FileNotFoundError:
-                await message.reply(f"{LOG_INTRO}\n```\n{tail}\n```" if len(tail) <= 1900 else f"{LOG_INTRO}\n\n{tail}")
+                await message.reply(
+                    f"{LOG_INTRO}\n```\n{tail}\n```" if len(tail) <= 1900 else f"{LOG_INTRO}\n\n{tail}"
+                )
                 return
             if len(tail) > 1900:
                 for chunk in chunk_text(tail, 1900):
@@ -3519,7 +4325,8 @@ async def on_message(message: discord.Message) -> None:
     if not is_dm and "кульш зайди в войс" in content_lower:
         author = cast(discord.Member, message.author)
         if not (author.voice and author.voice.channel):
-            await message.reply("ты не в войсе, куда заходить?"); return
+            await message.reply("вы не в голосовом канале")
+            return
         voice_channel = author.voice.channel
         try:
             vc = cast(discord.VoiceChannel, message.guild.voice_client)
@@ -3531,14 +4338,14 @@ async def on_message(message: discord.Message) -> None:
                 else:
                     vc = await voice_channel.connect()
             voice_text_channels[message.guild.id] = message.channel
-            await message.reply(f"залетел в {voice_channel.name} 🍷🗿")
+            await message.reply(f"подключился к {voice_channel.name}")
             if VOICE_RECOGNITION_ENABLED and VOICE_RECV_AVAILABLE:
                 sink = RecognitionSink(ds_bot, message.guild, message.channel)
                 vc.listen(sink)
                 setattr(vc, "_recognition_sink", sink)
         except Exception as e:
             logger.error(f"voice: {e}")
-            await message.reply("не могу зайти.")
+            await message.reply("не удалось подключиться.")
         return
 
     if not is_dm and "кульш выйди из войса" in content_lower:
@@ -3548,21 +4355,21 @@ async def on_message(message: discord.Message) -> None:
                 getattr(vc, "_recognition_sink").cleanup()
             await vc.disconnect()
             voice_text_channels.pop(message.guild.id, None)
-            await message.reply("пока кенты")
+            await message.reply("отключился")
         else:
-            await message.reply("я и так не там")
+            await message.reply("я и так не в голосовом")
         return
 
     if is_looksmaxxing_command(message.content) and len(message.attachments) == 0:
         add_user_memory(f"ds_{chat_id}", "DS", display_name, username, user_id,
                         message.content, message_id=message.id)
-        await message.reply("📸 Пришли фото с командой `кульш psl`.")
+        await message.reply("Пришлите фото с командой `кульш psl` или используйте `/psl`.")
         return
 
     if is_battle_command(message.content) and len(message.attachments) == 0:
         add_user_memory(f"ds_{chat_id}", "DS", display_name, username, user_id,
                         message.content, message_id=message.id)
-        await message.reply("Для баттла пришлите два фото.")
+        await message.reply("Для баттла пришлите два фото или используйте `/battle`.")
         return
 
     image_attachments = [a for a in message.attachments if a.content_type and a.content_type.startswith('image/')]
@@ -3571,26 +4378,28 @@ async def on_message(message: discord.Message) -> None:
 
     if has_battle_cmd and len(image_attachments) >= 2:
         async with message.channel.typing():
-            status = await message.reply("⚔️ Сравниваю...")
+            status = await message.reply("сравниваю...")
             try:
                 p1 = await download_image_bytes(image_attachments[0].url)
                 p2 = await download_image_bytes(image_attachments[1].url)
                 cfg = get_user_config("ds", chat_id, user_id)
-                lang = cfg.get("language", "ru"); theme = cfg.get("theme", "dark")
+                lang = cfg.get("language", "ru")
+                theme = cfg.get("theme", "dark")
                 ai_data = await get_battle_data(p1, p2, lang=lang)
                 if "error" in ai_data:
-                    await status.edit(content=f"❌ {ai_data['error']}"); return
+                    await status.edit(content=f"Ошибка: {ai_data['error']}")
+                    return
                 img = await create_battle_infographic(p1, p2, ai_data, theme=theme, lang=lang)
                 winner_num = str(ai_data.get("winner", "1"))
                 winner_label = "Первое фото" if winner_num == "1" else "Второе фото"
                 report = (
-                    f"⚔️ **РЕЗУЛЬТАТ БАТТЛА**\n\n"
-                    f"🥇 Победитель: **{winner_label}**\n"
-                    f"🔍 {ai_data.get('reason','')}\n\n"
-                    f"📊 Фото 1: PSL {ai_data.get('photo1',{}).get('psl','?')} | "
-                    f"{ai_data.get('photo1',{}).get('tier','?')}\n"
-                    f"📊 Фото 2: PSL {ai_data.get('photo2',{}).get('psl','?')} | "
-                    f"{ai_data.get('photo2',{}).get('tier','?')}"
+                    f"**РЕЗУЛЬТАТ БАТТЛА**\n\n"
+                    f"Победитель: **{winner_label}**\n"
+                    f"Причина: {ai_data.get('reason', '')}\n\n"
+                    f"Фото 1: PSL {ai_data.get('photo1', {}).get('psl', '?')} | "
+                    f"{ai_data.get('photo1', {}).get('tier', '?')}\n"
+                    f"Фото 2: PSL {ai_data.get('photo2', {}).get('psl', '?')} | "
+                    f"{ai_data.get('photo2', {}).get('tier', '?')}"
                 )
                 await message.reply(file=discord.File(fp=img, filename="battle.png"),
                                     content=report[:1900])
@@ -3610,22 +4419,24 @@ async def on_message(message: discord.Message) -> None:
                 img_bytes = await download_image_bytes(image_attachments[0].url)
                 include_advice = "совет" in content_lower or "advice" in content_lower
                 cfg = get_user_config("ds", chat_id, user_id)
-                lang = cfg.get("language", "ru"); theme = cfg.get("theme", "dark")
+                lang = cfg.get("language", "ru")
+                theme = cfg.get("theme", "dark")
                 ai_data = await get_looksmaxxing_data(img_bytes, include_advice, lang=lang)
                 if "error" in ai_data:
-                    await message.reply(f"❌ {ai_data['error']}"); return
+                    await message.reply(f"Ошибка: {ai_data['error']}")
+                    return
                 infographic = await create_infographic(img_bytes, ai_data, theme=theme, lang=lang)
                 report = (
-                    f"📊 **LOOKSMAXXING**\n"
-                    f"🧬 Пол: {ai_data.get('gender','?')}\n"
-                    f"📈 PSL: `{ai_data.get('psl','?')}/8.0`\n"
-                    f"👑 Tier: `{ai_data.get('tier','?')}`\n"
+                    f"**LOOKSMAXXING**\n"
+                    f"Пол: {ai_data.get('gender', '?')}\n"
+                    f"PSL: `{ai_data.get('psl', '?')}/8.0`\n"
+                    f"Tier: `{ai_data.get('tier', '?')}`\n"
                 )
                 if ai_data.get("potential"):
-                    report += f"🔮 Потенциал: `{ai_data['potential']}`\n"
-                report += f"\n📝 {ai_data.get('summary','')}"
+                    report += f"Потенциал: `{ai_data['potential']}`\n"
+                report += f"\n{ai_data.get('summary', '')}"
                 if include_advice and ai_data.get("advice"):
-                    report += f"\n\n⚡ {ai_data['advice']}"
+                    report += f"\n\n**Рекомендации:**\n{ai_data['advice']}"
                 await message.reply(file=discord.File(fp=infographic, filename="psl.png"),
                                     content=report[:1900])
                 if len(report) > 1900:
@@ -3650,17 +4461,20 @@ async def on_message(message: discord.Message) -> None:
     if (image_attachments or video_attachments) and addressed:
         async with message.channel.typing():
             try:
-                img_bytes = None; img_mime = "image/jpeg"
+                img_bytes = None
+                img_mime = "image/jpeg"
                 if image_attachments:
                     img_bytes = await download_image_bytes(image_attachments[0].url)
                     img_mime = image_attachments[0].content_type or "image/jpeg"
                 elif video_attachments:
                     vid = await download_image_bytes(video_attachments[0].url)
                     frame = await extract_video_frame(vid, ".mp4")
-                    if frame: img_bytes = frame
-                prompt = message.content.strip() or "че на этом?"
+                    if frame:
+                        img_bytes = frame
+                prompt = message.content.strip() or "что на этом?"
                 add_user_memory(f"ds_{chat_id}", "DS", display_name, username, user_id,
-                                f"{prompt} [с медиа]", ["photo" if image_attachments else "video"],
+                                f"{prompt} [с медиа]",
+                                ["photo" if image_attachments else "video"],
                                 message_id=message.id)
                 messages = memory_to_messages(get_chat_memory(f"ds_{chat_id}"))
                 answer = await ask_ai_async(messages=messages, image_bytes=img_bytes,
@@ -3670,7 +4484,7 @@ async def on_message(message: discord.Message) -> None:
                 asyncio.create_task(extract_memory(f"ds_{chat_id}", f"{display_name}: [медиа]", answer))
             except Exception as e:
                 logger.info(f"DS media: {e}")
-                await message.reply("не могу глянуть, сломалась")
+                await message.reply("не удалось обработать вложение")
         return
 
     if addressed:
@@ -3704,7 +4518,7 @@ async def on_message(message: discord.Message) -> None:
 # ============================================================
 async def send_donation_alert(platform: str, name: str, amount: int, message_text: str = '') -> None:
     if platform == 'tg':
-        text = f"🍷🗿 {name} задонатил {amount} звёзд! Спасибо!"
+        text = f"{name} задонатил {amount} звёзд. Спасибо за поддержку."
         if message_text:
             text += f"\nСообщение: {message_text}"
         try:
@@ -3712,29 +4526,32 @@ async def send_donation_alert(platform: str, name: str, amount: int, message_tex
         except Exception as e:
             logger.error(f"Донат в ТГ: {e}")
     elif platform == 'ds':
-        text = f"💎 {name} задонатил {amount} руб."
+        text = f"{name} задонатил {amount} руб."
         if message_text:
             text += f"\n> {message_text}"
         if DS_DONATION_CHANNEL_ID:
             channel = ds_bot.get_channel(DS_DONATION_CHANNEL_ID)
             if channel:
-                try: await channel.send(text)
-                except Exception as e: logger.error(f"Донат в DS: {e}")
+                try:
+                    await channel.send(text)
+                except Exception as e:
+                    logger.error(f"Донат в DS: {e}")
+
 
 async def donation_alerts_listener() -> None:
     if not DONATIONALERTS_TOKEN:
-        logger.info("🔕 DonationAlerts токен не задан.")
+        logger.info("DonationAlerts токен не задан.")
         return
     await ds_bot.wait_until_ready()
     sio = socketio.AsyncClient(query={'token': DONATIONALERTS_TOKEN})
 
     @sio.event
     async def connect() -> None:
-        logger.info("🔌 DonationAlerts подключён")
+        logger.info("DonationAlerts подключён")
 
     @sio.event
     async def disconnect() -> None:
-        logger.warning("🔌 DonationAlerts отключён")
+        logger.warning("DonationAlerts отключён")
 
     @sio.on('donation')
     async def on_donation(data: dict) -> None:
@@ -3746,7 +4563,7 @@ async def donation_alerts_listener() -> None:
             points = int(amount)
             username = data.get('username', 'Аноним')
             message = data.get('message', '')
-            logger.info(f"💰 {username} → {points}")
+            logger.info(f"Донат {username} → {points}")
             add_donation('ds', 0, points, name=username)
             await send_donation_alert('ds', username, points, message)
         except Exception as e:
@@ -3766,8 +4583,12 @@ if VOICE_RECOGNITION_ENABLED and VOICE_RECV_AVAILABLE:
     class RecognitionSink(voice_recv.AudioSink):
         def __init__(self, bot, guild, text_channel):
             super().__init__()
-            self.bot = bot; self.guild = guild; self.text_channel = text_channel
-            self.buffers = {}; self.recognizer = sr.Recognizer(); self.processing_tasks = {}
+            self.bot = bot
+            self.guild = guild
+            self.text_channel = text_channel
+            self.buffers = {}
+            self.recognizer = sr.Recognizer()
+            self.processing_tasks = {}
 
         def wants_opus(self) -> bool:
             return False
@@ -3791,9 +4612,13 @@ if VOICE_RECOGNITION_ENABLED and VOICE_RECV_AVAILABLE:
             try:
                 audio = AudioSegment(data=pcm_data, sample_width=2, frame_rate=48000,
                                      channels=2).set_channels(1).set_frame_rate(16000)
-                wav_io = BytesIO(); audio.export(wav_io, format="wav"); wav_io.seek(0)
+                wav_io = BytesIO()
+                audio.export(wav_io, format="wav")
+                wav_io.seek(0)
                 with sr.AudioFile(wav_io) as source:
-                    return self.recognizer.recognize_google(self.recognizer.record(source), language="ru-RU")
+                    return self.recognizer.recognize_google(
+                        self.recognizer.record(source), language="ru-RU"
+                    )
             except sr.UnknownValueError:
                 return None
             except Exception as e:
@@ -3870,6 +4695,7 @@ async def random_post_loop() -> None:
         except Exception as e:
             logger.info(f"random_post_loop: {e}")
 
+
 async def series_reminder_loop() -> None:
     await ds_bot.wait_until_ready()
     channel = cast(discord.TextChannel, ds_bot.get_channel(DS_SERIES_CHANNEL_ID))
@@ -3878,7 +4704,7 @@ async def series_reminder_loop() -> None:
         return
     while True:
         try:
-            prompt = ("Попроси Антона отправить Фолзу сообщение в TikTok чтобы продлить серию. "
+            prompt = ("Попроси Антона отправить Фолзу сообщение в TikTok, чтобы продлить серию. "
                       "Одно короткое сообщение в стиле Кульша.")
             answer = await ask_ai_async(prompt=prompt, context_type="default",
                                         chat_id=DS_SERIES_CHANNEL_ID, user_id=0, platform="ds")
@@ -3901,7 +4727,17 @@ async def main() -> None:
     async def on_ready() -> None:
         logger.info(f'Discord {ds_bot.user} запущен, discord.py {discord.__version__}')
         if not VOICE_RECOGNITION_ENABLED:
-            logger.info("ℹ️ Распознавание голоса отключено")
+            logger.info("Распознавание голоса отключено")
+
+        # Синхронизация slash-команд с гильдией
+        try:
+            guild = discord.Object(id=DS_ALLOWED_GUILD_ID)
+            ds_tree.copy_global_to(guild=guild)
+            synced = await ds_tree.sync(guild=guild)
+            logger.info(f"Синхронизировано slash-команд: {len(synced)}")
+        except Exception as e:
+            logger.error(f"Не удалось синхронизировать slash-команды: {e}")
+
         asyncio.create_task(series_reminder_loop())
         if DONATIONALERTS_TOKEN:
             asyncio.create_task(donation_alerts_listener())
@@ -3913,6 +4749,7 @@ async def main() -> None:
         await tg_bot.polling(non_stop=True)
 
     await asyncio.gather(start_discord(), start_telegram())
+
 
 if __name__ == "__main__":
     logger.info(f">>> Кульш в эфире. МСК: {msk_datetime_str()}")
