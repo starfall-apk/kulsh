@@ -30,7 +30,7 @@ import io
 import sys
 from datetime import timezone, timedelta
 from logging.handlers import RotatingFileHandler
-from typing import Any, cast
+from typing import Any, Callable, Protocol, TypeAlias, TypeVar, cast
 from urllib.parse import quote_plus, unquote, urlparse, parse_qs
 from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageChops, ImageOps
 from dotenv import load_dotenv
@@ -77,14 +77,14 @@ def msk_datetime_str() -> str:
 # КОНФИГ .env
 # ============================================================
 load_dotenv()
-TG_TOKEN = cast(str, os.getenv('TG_TOKEN'))
-DISCORD_TOKEN = cast(str, os.getenv('DISCORD_TOKEN'))
+TG_TOKEN: str = os.getenv('TG_TOKEN') or ""
+DISCORD_TOKEN: str = os.getenv('DISCORD_TOKEN') or ""
 AI_KEY = os.getenv('AI_KEY')
 AI_KEY_1 = os.getenv('AI_KEY_1')
 AI_KEY_2 = os.getenv('AI_KEY_2')
 AI_KEY_3 = os.getenv('AI_KEY_3')
-TG_TARGET_CHAT = int(cast(str, os.getenv('TG_TARGET_CHAT')))
-DS_ALLOWED_GUILD_ID = int(cast(str, os.getenv('DS_ALLOWED_GUILD_ID')))
+TG_TARGET_CHAT = int(os.getenv('TG_TARGET_CHAT') or "0")
+DS_ALLOWED_GUILD_ID = int(os.getenv('DS_ALLOWED_GUILD_ID') or "0")
 DS_DONATION_CHANNEL_ID = int(os.getenv('DONATIONALERTS_CHANNEL_ID', '0'))
 DONATIONALERTS_TOKEN = os.getenv('DONATIONALERTS_TOKEN', '')
 
@@ -478,7 +478,7 @@ TEXTS: dict[str, tuple[str, str]] = {
 }
 
 
-def _t(lang: str, key: str, *args, **kwargs) -> str:
+def _t(lang: str, key: str, *args: Any, **kwargs: Any) -> str:
     entry = TEXTS.get(key)
     if not entry:
         return key
@@ -512,19 +512,25 @@ def _html_to_md(text: str) -> str:
 # ============================================================
 # VOICE / TTS
 # ============================================================
+voice_recv: Any = None
+sr: Any = None
+AudioSegment: Any = None
+edge_tts: Any = None
 try:
-    from discord.ext import voice_recv
+    from discord.ext import voice_recv as _voice_recv
+    voice_recv = _voice_recv
     VOICE_RECV_AVAILABLE = True
 except ImportError:
     VOICE_RECV_AVAILABLE = False
-    voice_recv = None
 
 DISCORD_VERSION = tuple(map(int, discord.__version__.split('.')))
 VOICE_RECOGNITION_ENABLED = DISCORD_VERSION >= (2, 0, 0) and VOICE_RECV_AVAILABLE
 if VOICE_RECOGNITION_ENABLED:
     try:
-        import speech_recognition as sr
-        from pydub import AudioSegment
+        import speech_recognition as _sr
+        from pydub import AudioSegment as _AudioSegment
+        sr = _sr
+        AudioSegment = _AudioSegment
     except ImportError:
         VOICE_RECOGNITION_ENABLED = False
         logger.info("⚠️ speech_recognition/pydub не найдены")
@@ -532,12 +538,85 @@ else:
     logger.info(f"⚠️ discord.py {discord.__version__}, voice_recv недоступен")
 
 try:
-    import edge_tts
+    import edge_tts as _edge_tts
     from discord import FFmpegPCMAudio
+    edge_tts = _edge_tts
     VOICE_ENABLED = True
 except ImportError:
     VOICE_ENABLED = False
     logger.info("⚠️ edge_tts/FFmpeg не найдены")
+
+# ============================================================
+# TYPING HELPERS
+# ============================================================
+JsonDict: TypeAlias = dict[str, Any]
+Color: TypeAlias = str | tuple[int, int, int]
+Font: TypeAlias = ImageFont.FreeTypeFont | ImageFont.ImageFont
+SearchHit: TypeAlias = dict[str, str]
+ChartTheme: TypeAlias = dict[str, Any]
+SeriesSpec: TypeAlias = dict[str, Any]
+_HandlerT = TypeVar("_HandlerT", bound=Callable[..., Any])
+
+
+class _TypedHandler(Protocol):
+    def __call__(self, handler: _HandlerT) -> _HandlerT: ...
+
+
+def _typed_decorator(decorator: Callable[..., Any]) -> Callable[..., _TypedHandler]:
+    """pyTelegramBotAPI decorators are untyped; preserve the wrapped callable."""
+    return cast(Callable[..., _TypedHandler], decorator)
+
+
+def _cb_id(call: telebot.types.CallbackQuery) -> int:
+    """Library stubs type callback query ids as int; the API sends strings."""
+    return cast(int, call.id)
+
+
+def _tg_msg(call: telebot.types.CallbackQuery) -> telebot.types.Message:
+    message = call.message
+    if not isinstance(message, telebot.types.Message):
+        raise RuntimeError("callback has no accessible message")
+    return message
+
+
+def _ds_user(bot: discord.Client) -> discord.ClientUser:
+    user = bot.user
+    if user is None:
+        raise RuntimeError("discord bot is not ready")
+    return user
+
+
+def _as_member(user: discord.abc.User) -> discord.Member | None:
+    return user if isinstance(user, discord.Member) else None
+
+
+def _voice_client(guild: discord.Guild | None) -> discord.VoiceClient | None:
+    if guild is None or guild.voice_client is None:
+        return None
+    client = guild.voice_client
+    return client if isinstance(client, discord.VoiceClient) else None
+
+
+def _messageable(channel: discord.abc.Messageable | None) -> discord.abc.Messageable | None:
+    if channel is None:
+        return None
+    send = getattr(channel, "send", None)
+    return channel if callable(send) else None
+
+
+def _json_dict(value: Any) -> JsonDict:
+    if isinstance(value, dict):
+        return cast(JsonDict, value)
+    return {}
+
+
+def _json_str(value: Any, default: str = "") -> str:
+    return value if isinstance(value, str) else default
+
+
+def _theme_str(theme: ChartTheme, key: str, default: str = "#000000") -> str:
+    value = theme.get(key, default)
+    return value if isinstance(value, str) else default
 
 # ============================================================
 # ГЛОБАЛЬНЫЕ СТРУКТУРЫ
@@ -555,7 +634,7 @@ tools_sessions: dict[int, dict[str, Any]] = {}
 chat_media_history: dict[str, deque[dict[str, Any]]] = defaultdict(lambda: deque(maxlen=50))
 last_random_reply: dict[str, float] = {}
 last_old_reply: dict[str, float] = {}
-battle_media_groups: dict[str, asyncio.Task] = {}
+battle_media_groups: dict[str, asyncio.Task[None]] = {}
 battle_photos: dict[str, list[bytes]] = {}
 pending_donations: dict[int, int] = {}
 user_looksmaxxing_state: defaultdict[int, bool] = defaultdict(lambda: False)
@@ -573,12 +652,12 @@ MAX_FILES = 100
 # ============================================================
 # ФАЙЛЫ СОСТОЯНИЯ
 # ============================================================
-def load_json_file(path: str) -> dict:
+def load_json_file(path: str) -> JsonDict:
     if not os.path.exists(path):
         return {}
     try:
         with open(path, 'r', encoding='utf-8') as f:
-            return json.load(f)
+            return _json_dict(json.load(f))
     except Exception:
         return {}
 
@@ -600,7 +679,7 @@ def save_donations() -> None:
     save_json_file(DONATIONS_FILE, donations_data)
 
 
-def save_long_term_memory(data: dict) -> None:
+def save_long_term_memory(data: JsonDict) -> None:
     save_json_file(MEMORY_FILE, data)
 
 
@@ -680,7 +759,7 @@ DEFAULT_USER_CONFIG = {
 }
 
 
-def get_user_config(platform: str, chat_id: int, user_id: int) -> dict:
+def get_user_config(platform: str, chat_id: int, user_id: int) -> JsonDict:
     key = f"{platform}_{chat_id}_{user_id}"
     cfg = user_configs.get(key)
     if cfg is None:
@@ -744,8 +823,16 @@ def get_chat_memory(chat_id: str) -> deque[dict[str, Any]]:
     return chat_memories[chat_id]
 
 
-def add_user_memory(chat_id, platform, display_name, username, user_id, text,
-                    media=None, message_id=None) -> None:
+def add_user_memory(
+    chat_id: str,
+    platform: str,
+    display_name: str | None,
+    username: str | None,
+    user_id: int,
+    text: str | None,
+    media: list[str] | None = None,
+    message_id: int | None = None,
+) -> None:
     mem = get_chat_memory(chat_id)
     mem.append({
         "type": "user", "time": msk_time_str(), "platform": platform,
@@ -776,7 +863,14 @@ def memory_to_messages(mem_deque: deque[dict[str, Any]]) -> list[dict[str, Any]]
     return messages
 
 
-def add_media_history(chat_id, url, media_type, sender, file_id=None, caption=""):
+def add_media_history(
+    chat_id: str,
+    url: str | None,
+    media_type: str,
+    sender: str,
+    file_id: str | None = None,
+    caption: str = "",
+) -> None:
     chat_media_history[chat_id].append({
         "url": url, "type": media_type, "sender": sender,
         "file_id": file_id, "caption": caption,
@@ -787,7 +881,7 @@ def add_media_history(chat_id, url, media_type, sender, file_id=None, caption=""
 # HTML / MARKDOWN (fallback)
 # ============================================================
 def markdown_like_to_telegram_html(text: str) -> str:
-    if text is None:
+    if not text:
         return ""
     text = html.escape(text, quote=False)
     text = re.sub(r'```([\s\S]*?)```', lambda m: '<pre>' + m.group(1) + '</pre>', text)
@@ -915,7 +1009,9 @@ async def typing_with_delay_tg(chat_id: int, text: str, delay: float | None = No
         elapsed += step
 
 
-async def typing_with_delay_ds(channel, text: str, delay: float | None = None) -> None:
+async def typing_with_delay_ds(
+    channel: discord.abc.Messageable, text: str, delay: float | None = None,
+) -> None:
     if delay is None:
         delay = calc_typing_delay(text)
     elapsed = 0.0
@@ -939,7 +1035,7 @@ def _parse_inline(text: str) -> Any:
     parts: list[Any] = []
     buf = ""
 
-    def flush():
+    def flush() -> None:
         nonlocal buf
         if buf:
             parts.append(buf)
@@ -1015,7 +1111,7 @@ def _parse_inline(text: str) -> Any:
     return parts
 
 
-def _make_cell(raw: str) -> dict:
+def _make_cell(raw: str) -> JsonDict:
     """Ячейка таблицы. *...* → is_header=True (залитая). Все ячейки по центру."""
     s = (raw or "").strip()
     is_header = False
@@ -1029,20 +1125,20 @@ def _make_cell(raw: str) -> dict:
     return cell
 
 
-def _text_to_blocks(text: str) -> list[dict]:
+def _text_to_blocks(text: str) -> list[JsonDict]:
     if not text:
         return []
     text = _html_to_md(text)
     lines = text.split('\n')
-    blocks: list[dict] = []
+    blocks: list[JsonDict] = []
     i = 0
     n = len(lines)
     in_code = False
     code_lang = ""
     code_lines: list[str] = []
-    table_rows: list[list[dict]] = []
+    table_rows: list[list[JsonDict]] = []
 
-    def flush_code():
+    def flush_code() -> None:
         nonlocal in_code, code_lang, code_lines
         if code_lines:
             block: dict[str, Any] = {"type": "pre", "text": '\n'.join(code_lines)}
@@ -1053,7 +1149,7 @@ def _text_to_blocks(text: str) -> list[dict]:
         code_lang = ""
         code_lines = []
 
-    def flush_table():
+    def flush_table() -> None:
         nonlocal table_rows
         if table_rows:
             blocks.append({
@@ -1110,7 +1206,7 @@ def _text_to_blocks(text: str) -> list[dict]:
             continue
 
         if re.match(r'^-\s*\[[ x]\]', line):
-            items: list[dict] = []
+            items: list[JsonDict] = []
             while i < n and re.match(r'^-\s*\[[ x]\]', lines[i]):
                 checked = '[x]' in lines[i].lower()
                 item_text = re.sub(r'^-\s*\[[ x]\]\s*', '', lines[i])
@@ -1126,25 +1222,25 @@ def _text_to_blocks(text: str) -> list[dict]:
             continue
 
         if re.match(r'^[-*+]\s', line):
-            items = []
+            bullet_items: list[JsonDict] = []
             while i < n and re.match(r'^[-*+]\s', lines[i]):
                 item_text = re.sub(r'^[-*+]\s', '', lines[i])
-                items.append({
+                bullet_items.append({
                     "blocks": [{"type": "paragraph", "text": _parse_inline(item_text)}],
                 })
                 i += 1
-            blocks.append({"type": "list", "items": items})
+            blocks.append({"type": "list", "items": bullet_items})
             continue
 
         if re.match(r'^\d+\.\s', line):
-            items = []
+            numbered_items: list[JsonDict] = []
             while i < n and re.match(r'^\d+\.\s', lines[i]):
                 item_text = re.sub(r'^\d+\.\s', '', lines[i])
-                items.append({
+                numbered_items.append({
                     "blocks": [{"type": "paragraph", "text": _parse_inline(item_text)}],
                 })
                 i += 1
-            blocks.append({"type": "list", "items": items})
+            blocks.append({"type": "list", "items": numbered_items})
             continue
 
         if stripped.startswith('>'):
@@ -1224,13 +1320,13 @@ async def send_rich_message(
     if not rich:
         return False
 
-    async def _try_post(markup):
+    async def _try_post(markup: InlineKeyboardMarkup | None) -> tuple[int, str]:
         payload: dict[str, Any] = {"chat_id": chat_id, "rich_message": rich}
         if reply_to:
             payload["reply_parameters"] = {"message_id": reply_to}
         if markup is not None:
             try:
-                payload["reply_markup"] = markup.to_dict()
+                payload["reply_markup"] = _json_dict(cast(Any, markup).to_dict())
             except AttributeError:
                 payload["reply_markup"] = markup
         async with aiohttp.ClientSession() as session:
@@ -1267,11 +1363,11 @@ async def edit_rich_message(
     if not rich:
         return False
 
-    async def _try_edit(markup):
+    async def _try_edit(markup: InlineKeyboardMarkup | None) -> tuple[int, str]:
         payload: dict[str, Any] = {"chat_id": chat_id, "message_id": message_id, "rich_message": rich}
         if markup is not None:
             try:
-                payload["reply_markup"] = markup.to_dict()
+                payload["reply_markup"] = _json_dict(cast(Any, markup).to_dict())
             except AttributeError:
                 payload["reply_markup"] = markup
         async with aiohttp.ClientSession() as session:
@@ -1508,8 +1604,9 @@ def build_system_prompt(platform: str, chat_id: int, user_id: int) -> str:
             "Размер по умолчанию 1400x1000, высота расширяется автоматически под блоки."
         )
 
-    if chat_id in long_term_memory:
-        mem_data = long_term_memory[chat_id]
+    mem_key = str(chat_id)
+    if mem_key in long_term_memory:
+        mem_data = _json_dict(long_term_memory[mem_key])
         facts = mem_data.get("facts", [])
         if facts:
             facts_str = "\n".join(f"- {f}" for f in facts)
@@ -1537,7 +1634,7 @@ async def ask_ai_async(
     platform: str = "tg",
     image_bytes_list: list[bytes] | None = None,
     image_mime_list: list[str] | None = None,
-):
+) -> str:
     lang = "ru"
     if chat_id is not None and user_id is not None:
         lang = get_user_config(platform, chat_id, user_id).get("language", "ru")
@@ -1651,15 +1748,19 @@ async def ask_ai_async(
                             text = await resp.text()
                             logger.error(f"{status}: {text[:300]}")
                             return _t(lang, "ai_error_generic")
-                        data = await resp.json()
+                        data = _json_dict(await resp.json())
                         if 'candidates' in data and data['candidates']:
                             try:
-                                return data['candidates'][0]['content']['parts'][0]['text']
-                            except (KeyError, IndexError):
+                                candidate = data['candidates'][0]
+                                content = _json_dict(candidate.get('content') if isinstance(candidate, dict) else None)
+                                parts_raw = content.get('parts')
+                                first = parts_raw[0] if isinstance(parts_raw, list) and parts_raw else {}
+                                return _json_str(_json_dict(first).get('text'))
+                            except (KeyError, IndexError, TypeError):
                                 continue
                         else:
                             if 'promptFeedback' in data:
-                                br = data['promptFeedback'].get('blockReason', 'UNKNOWN')
+                                br = _json_dict(data['promptFeedback']).get('blockReason', 'UNKNOWN')
                                 logger.error(f"❌ Заблокировано: {br}")
                                 return _t(lang, "ai_blocked")
                             await asyncio.sleep(backoff)
@@ -1687,7 +1788,7 @@ def clean_json_text(text: str) -> str:
     return text.strip()
 
 
-async def extract_memory(chat_id: str, user_message: str, bot_answer: str):
+async def extract_memory(chat_id: str, user_message: str, bot_answer: str) -> None:
     prompt = (
         f"Проанализируй последнее сообщение пользователя и ответ бота. Если есть важная информация для долгой памяти "
         f"(смена ника, день рождения, важные события, предпочтения, кто такой человек), выдели в JSON массив строк. "
@@ -1719,12 +1820,12 @@ USER_AGENT = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
               "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
 
 
-async def web_search_ddg(query: str, max_results: int = 6) -> list[dict]:
+async def web_search_ddg(query: str, max_results: int = 6) -> list[SearchHit]:
     """
     Поиск через DuckDuckGo HTML-версию. Без API-ключей, бесплатно.
     Пробуем сначала lite-интерфейс, потом обычный.
     """
-    results: list[dict] = []
+    results: list[SearchHit] = []
     headers = {
         "User-Agent": USER_AGENT,
         "Accept-Language": "ru,en;q=0.8",
@@ -1813,7 +1914,7 @@ def _strip_tags(text: str) -> str:
     return re.sub(r'<[^>]+>', '', text or '')
 
 
-async def web_search_wikipedia(query: str, max_results: int = 3) -> list[dict]:
+async def web_search_wikipedia(query: str, max_results: int = 3) -> list[SearchHit]:
     """Wikipedia API — бесплатный, без ключей. Для фактов."""
     try:
         params = {
@@ -1829,11 +1930,16 @@ async def web_search_wikipedia(query: str, max_results: int = 3) -> list[dict]:
                                    params=params, timeout=10) as resp:
                 if resp.status != 200:
                     return []
-                data = await resp.json()
-        out = []
-        for item in data.get("query", {}).get("search", [])[:max_results]:
-            title = item.get("title", "")
-            snippet = _strip_tags(item.get("snippet", ""))
+                data = _json_dict(await resp.json())
+        out: list[SearchHit] = []
+        query_obj = _json_dict(data.get("query"))
+        search_items = query_obj.get("search", [])
+        if not isinstance(search_items, list):
+            search_items = []
+        for item in search_items[:max_results]:
+            item_d = _json_dict(item)
+            title = _json_str(item_d.get("title"))
+            snippet = _strip_tags(_json_str(item_d.get("snippet")))
             url = "https://ru.wikipedia.org/wiki/" + quote_plus(title.replace(" ", "_"))
             out.append({"title": title, "url": url, "snippet": snippet})
         return out
@@ -1842,7 +1948,7 @@ async def web_search_wikipedia(query: str, max_results: int = 3) -> list[dict]:
         return []
 
 
-async def web_search(query: str, max_results: int = 6) -> list[dict]:
+async def web_search(query: str, max_results: int = 6) -> list[SearchHit]:
     """Комбинирует DDG + Wikipedia."""
     ddg_results = await web_search_ddg(query, max_results=max_results)
     if len(ddg_results) >= max_results:
@@ -1858,7 +1964,7 @@ async def web_search(query: str, max_results: int = 6) -> list[dict]:
     return ddg_results[:max_results]
 
 
-def _format_search_results(results: list[dict], max_chars: int = 4000) -> str:
+def _format_search_results(results: list[SearchHit], max_chars: int = 4000) -> str:
     lines = []
     for i, r in enumerate(results, 1):
         t = (r.get("title") or "").strip()
@@ -1916,16 +2022,22 @@ def _hex_to_rgb(h: str) -> tuple[int, int, int]:
         h = "".join(c * 2 for c in h)
     if len(h) != 6:
         return (0, 0, 0)
-    return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
+    return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+
+
+def _as_rgb(c: Color) -> tuple[int, int, int]:
+    if isinstance(c, str):
+        return _hex_to_rgb(c)
+    return (int(c[0]), int(c[1]), int(c[2]))
 
 
 def _rgb_to_hex(rgb: tuple[int, int, int]) -> str:
     return "#{:02X}{:02X}{:02X}".format(*[max(0, min(255, int(c))) for c in rgb])
 
 
-def _lerp_color(c1, c2, t: float) -> tuple[int, int, int]:
-    r1, g1, b1 = _hex_to_rgb(c1) if isinstance(c1, str) else c1
-    r2, g2, b2 = _hex_to_rgb(c2) if isinstance(c2, str) else c2
+def _lerp_color(c1: Color, c2: Color, t: float) -> tuple[int, int, int]:
+    r1, g1, b1 = _as_rgb(c1)
+    r2, g2, b2 = _as_rgb(c2)
     return (
         int(r1 + (r2 - r1) * t),
         int(g1 + (g2 - g1) * t),
@@ -1933,14 +2045,18 @@ def _lerp_color(c1, c2, t: float) -> tuple[int, int, int]:
     )
 
 
-def _darken(c, factor: float = 0.7):
-    rgb = _hex_to_rgb(c) if isinstance(c, str) else c
-    return tuple(int(v * factor) for v in rgb)
+def _darken(c: Color, factor: float = 0.7) -> tuple[int, int, int]:
+    rgb = _as_rgb(c)
+    return (int(rgb[0] * factor), int(rgb[1] * factor), int(rgb[2] * factor))
 
 
-def _lighten(c, factor: float = 1.3):
-    rgb = _hex_to_rgb(c) if isinstance(c, str) else c
-    return tuple(min(255, int(v * factor)) for v in rgb)
+def _lighten(c: Color, factor: float = 1.3) -> tuple[int, int, int]:
+    rgb = _as_rgb(c)
+    return (
+        min(255, int(rgb[0] * factor)),
+        min(255, int(rgb[1] * factor)),
+        min(255, int(rgb[2] * factor)),
+    )
 
 
 def _make_gradient_bg(w: int, h: int, c1: str, c2: str) -> Image.Image:
@@ -1948,10 +2064,10 @@ def _make_gradient_bg(w: int, h: int, c1: str, c2: str) -> Image.Image:
     for y in range(h):
         t = y / max(1, h - 1)
         base.putpixel((0, y), _lerp_color(c1, c2, t))
-    return base.resize((w, h), Image.BILINEAR)
+    return base.resize((w, h), Image.Resampling.BILINEAR)
 
 
-def _load_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
+def _load_font(size: int, bold: bool = False) -> Font:
     candidates_bold = [
         os.path.join("fonts", "Montserrat-Bold.ttf"),
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
@@ -1977,12 +2093,18 @@ def _load_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
     return ImageFont.load_default()
 
 
-def _text_size(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont) -> tuple[int, int]:
+def _text_size(draw: ImageDraw.ImageDraw, text: str, font: Font) -> tuple[int, int]:
     bbox = draw.textbbox((0, 0), text or " ", font=font)
-    return bbox[2] - bbox[0], bbox[3] - bbox[1]
+    return int(bbox[2] - bbox[0]), int(bbox[3] - bbox[1])
 
 
-def _draw_centered_text(draw, xy_box, text, font, fill):
+def _draw_centered_text(
+    draw: ImageDraw.ImageDraw,
+    xy_box: tuple[int, int, int, int],
+    text: str,
+    font: Font,
+    fill: str | tuple[int, ...],
+) -> None:
     x0, y0, x1, y1 = xy_box
     w, h = _text_size(draw, text, font)
     x = x0 + (x1 - x0 - w) // 2
@@ -1990,7 +2112,7 @@ def _draw_centered_text(draw, xy_box, text, font, fill):
     draw.text((x, y), text, font=font, fill=fill)
 
 
-def _wrap_lines(draw, text: str, font, max_width: int) -> list[str]:
+def _wrap_lines(draw: ImageDraw.ImageDraw, text: str, font: Font, max_width: int) -> list[str]:
     words = (text or "").split()
     lines: list[str] = []
     cur = ""
@@ -2009,7 +2131,7 @@ def _wrap_lines(draw, text: str, font, max_width: int) -> list[str]:
 
 
 def _render_bar_chart(canvas: Image.Image, box: tuple[int, int, int, int],
-                      spec: dict, theme: dict) -> None:
+                      spec: JsonDict, theme: ChartTheme) -> None:
     x0, y0, x1, y1 = box
     draw = ImageDraw.Draw(canvas)
     title = spec.get("title") or ""
@@ -2042,7 +2164,7 @@ def _render_bar_chart(canvas: Image.Image, box: tuple[int, int, int, int],
     vmax = vmax if vmax > 0 else 1.0
     # nice ceiling
     magnitude = 10 ** int(math.floor(math.log10(vmax))) if vmax > 0 else 1
-    nice_vmax = math.ceil(vmax / magnitude) * magnitude
+    nice_vmax = float(math.ceil(vmax / magnitude) * magnitude)
     if nice_vmax <= 0:
         nice_vmax = 1.0
 
@@ -2075,7 +2197,7 @@ def _render_bar_chart(canvas: Image.Image, box: tuple[int, int, int, int],
         for yy in range(max(1, bh)):
             t = yy / max(1, bh - 1)
             bar_img.putpixel((0, yy), _lerp_color(_lighten(rgb, 1.25), rgb, t))
-        bar_img = bar_img.resize((bar_w, max(1, bh)), Image.BILINEAR)
+        bar_img = bar_img.resize((bar_w, max(1, bh)), Image.Resampling.BILINEAR)
         if bh > 0:
             canvas.paste(bar_img, (bx, by))
         # value on top
@@ -2090,7 +2212,7 @@ def _render_bar_chart(canvas: Image.Image, box: tuple[int, int, int, int],
 
 
 def _render_line_chart(canvas: Image.Image, box: tuple[int, int, int, int],
-                       spec: dict, theme: dict) -> None:
+                       spec: JsonDict, theme: ChartTheme) -> None:
     x0, y0, x1, y1 = box
     draw = ImageDraw.Draw(canvas)
     title = spec.get("title") or ""
@@ -2099,14 +2221,22 @@ def _render_line_chart(canvas: Image.Image, box: tuple[int, int, int, int],
     if not series:
         return
     # normalize series
-    norm_series = []
+    norm_series: list[SeriesSpec] = []
     for s in series:
+        if not isinstance(s, dict):
+            continue
+        series_item = cast(JsonDict, s)
         ys = [float(v) for v in s.get("y", []) if _is_number(v)]
         if not ys:
             continue
-        color = s.get("color") or _PALETTE[len(norm_series) % len(_PALETTE)]
-        norm_series.append({"name": s.get("name") or f"Series {len(norm_series) + 1}",
-                            "y": ys, "color": color})
+        raw_color = series_item.get("color")
+        color = raw_color if isinstance(raw_color, str) else _PALETTE[len(norm_series) % len(_PALETTE)]
+        raw_name = series_item.get("name")
+        norm_series.append({
+            "name": raw_name if isinstance(raw_name, str) and raw_name else f"Series {len(norm_series) + 1}",
+            "y": ys,
+            "color": color,
+        })
     if not norm_series:
         return
 
@@ -2126,11 +2256,12 @@ def _render_line_chart(canvas: Image.Image, box: tuple[int, int, int, int],
     legend_x = cx1
     legend_y = cy0 - 4
     for s in reversed(norm_series):
-        name = s["name"][:18]
+        name = str(s["name"])[:18]
+        color = str(s["color"])
         tw, th = _text_size(draw, name, font_legend)
         legend_x -= tw + 24
         draw.line([(legend_x, legend_y + 8), (legend_x + 14, legend_y + 8)],
-                  fill=_hex_to_rgb(s["color"]), width=3)
+                  fill=_hex_to_rgb(color), width=3)
         draw.text((legend_x + 18, legend_y), name, font=font_legend, fill=theme["text_dim"])
 
     chart_top = cy0 + 8
@@ -2140,7 +2271,7 @@ def _render_line_chart(canvas: Image.Image, box: tuple[int, int, int, int],
     if chart_bottom <= chart_top:
         return
 
-    all_ys = [v for s in norm_series for v in s["y"]]
+    all_ys = [v for s in norm_series for v in cast(list[float], s["y"])]
     vmin = min(all_ys)
     vmax = max(all_ys)
     if vmax == vmin:
@@ -2159,22 +2290,23 @@ def _render_line_chart(canvas: Image.Image, box: tuple[int, int, int, int],
                   vs, font=font_grid, fill=theme["text_dim"])
 
     # X positions
-    max_len = max(len(s["y"]) for s in norm_series)
+    max_len = max(len(cast(list[float], s["y"])) for s in norm_series)
     if max_len < 2:
         max_len = 2
     x_step = (chart_right - chart_left) / (max_len - 1)
 
-    def _y_to_px(v):
+    def _y_to_px(v: float) -> int:
         return chart_bottom - int((v - vmin) / (vmax - vmin) * (chart_bottom - chart_top))
 
     for s in norm_series:
-        pts = [(chart_left + i * x_step, _y_to_px(v)) for i, v in enumerate(s["y"])]
+        color = str(s["color"])
+        pts = [(chart_left + i * x_step, _y_to_px(v)) for i, v in enumerate(cast(list[float], s["y"]))]
         if len(pts) >= 2:
-            draw.line(pts, fill=_hex_to_rgb(s["color"]), width=3)
+            draw.line(pts, fill=_hex_to_rgb(color), width=3)
         for p in pts:
             r = 4
             draw.ellipse([p[0] - r, p[1] - r, p[0] + r, p[1] + r],
-                         fill=_hex_to_rgb(s["color"]), outline=theme["bg"], width=2)
+                         fill=_hex_to_rgb(color), outline=theme["bg"], width=2)
 
     # X labels
     for i in range(max_len):
@@ -2186,7 +2318,7 @@ def _render_line_chart(canvas: Image.Image, box: tuple[int, int, int, int],
 
 
 def _render_pie_chart(canvas: Image.Image, box: tuple[int, int, int, int],
-                      spec: dict, theme: dict, depth: int = 0) -> None:
+                      spec: JsonDict, theme: ChartTheme, depth: int = 0) -> None:
     x0, y0, x1, y1 = box
     draw = ImageDraw.Draw(canvas)
     title = spec.get("title") or ""
@@ -2230,7 +2362,7 @@ def _render_pie_chart(canvas: Image.Image, box: tuple[int, int, int, int],
     px1 = px0 + side
     py1 = py0 + side
 
-    start = -90
+    start = -90.0
     legend_x = px1 + 30
     legend_y = cy0 + 20
 
@@ -2238,10 +2370,9 @@ def _render_pie_chart(canvas: Image.Image, box: tuple[int, int, int, int],
         extent = 360 * (val / total)
         color = colors[idx % len(colors)]
         try:
-            rgb = _hex_to_rgb(color)
+            rgb = _hex_to_rgb(str(color))
         except Exception:
-            rgb = _PALETTE[idx % len(_PALETTE)]
-            rgb = _hex_to_rgb(rgb)
+            rgb = _hex_to_rgb(_PALETTE[idx % len(_PALETTE)])
 
         if depth > 0:
             # Draw "side wall"
@@ -2257,7 +2388,7 @@ def _render_pie_chart(canvas: Image.Image, box: tuple[int, int, int, int],
     for idx, val in enumerate(values):
         color = colors[idx % len(colors)]
         try:
-            rgb = _hex_to_rgb(color)
+            rgb = _hex_to_rgb(str(color))
         except Exception:
             rgb = _hex_to_rgb(_PALETTE[idx % len(_PALETTE)])
         pct = val / total * 100
@@ -2275,7 +2406,7 @@ def _render_pie_chart(canvas: Image.Image, box: tuple[int, int, int, int],
 
 
 def _render_table(canvas: Image.Image, box: tuple[int, int, int, int],
-                  spec: dict, theme: dict) -> None:
+                  spec: JsonDict, theme: ChartTheme) -> None:
     x0, y0, x1, y1 = box
     draw = ImageDraw.Draw(canvas)
     title = spec.get("title") or ""
@@ -2339,7 +2470,7 @@ async def _load_remote_image(url: str) -> Image.Image | None:
 
 
 def _render_image_block(canvas: Image.Image, box: tuple[int, int, int, int],
-                        img: Image.Image, theme: dict) -> None:
+                        img: Image.Image, theme: ChartTheme) -> None:
     x0, y0, x1, y1 = box
     draw = ImageDraw.Draw(canvas)
     draw.rounded_rectangle(box, radius=16, fill=theme["card"], outline=theme["border"], width=2)
@@ -2350,7 +2481,7 @@ def _render_image_block(canvas: Image.Image, box: tuple[int, int, int, int],
     if box_w <= 0 or box_h <= 0:
         return
     im = img.copy()
-    im.thumbnail((box_w, box_h), Image.LANCZOS)
+    im.thumbnail((box_w, box_h), Image.Resampling.LANCZOS)
     ox = ix0 + (box_w - im.width) // 2
     oy = iy0 + (box_h - im.height) // 2
     if im.mode == "RGBA":
@@ -2359,15 +2490,15 @@ def _render_image_block(canvas: Image.Image, box: tuple[int, int, int, int],
         canvas.paste(im, (ox, oy))
 
 
-def _is_number(x) -> bool:
+def _is_number(x: object) -> bool:
     try:
-        float(x)
+        float(cast(Any, x))
         return True
     except (TypeError, ValueError):
         return False
 
 
-async def render_infographic(spec: dict, user_images: list[bytes] | None = None) -> BytesIO:
+async def render_infographic(spec: JsonDict, user_images: list[bytes] | None = None) -> BytesIO:
     """
     Строит инфографику по спецификации.
     spec = {
@@ -2460,7 +2591,11 @@ async def render_infographic(spec: dict, user_images: list[bytes] | None = None)
     total_h = max(600, total_h)
 
     # Draw background
-    bg_c1, bg_c2 = theme.get("bg_grad", (theme["bg"], theme["bg"]))
+    bg_grad = theme.get("bg_grad")
+    if isinstance(bg_grad, (tuple, list)) and len(bg_grad) >= 2:
+        bg_c1, bg_c2 = str(bg_grad[0]), str(bg_grad[1])
+    else:
+        bg_c1 = bg_c2 = _theme_str(theme, "bg")
     canvas = _make_gradient_bg(width, total_h, bg_c1, bg_c2).convert("RGBA")
 
     draw = ImageDraw.Draw(canvas)
@@ -2468,14 +2603,14 @@ async def render_infographic(spec: dict, user_images: list[bytes] | None = None)
     # Title
     y = padding
     if title:
-        draw.text((padding, y), title, font=font_title, fill=theme["text"])
+        draw.text((padding, y), title, font=font_title, fill=_theme_str(theme, "text"))
         y += 58
     if subtitle:
-        draw.text((padding, y), subtitle, font=font_sub, fill=theme["text_dim"])
+        draw.text((padding, y), subtitle, font=font_sub, fill=_theme_str(theme, "text_dim"))
         y += 34
     if title or subtitle:
         # subtle divider
-        draw.line([(padding, y), (width - padding, y)], fill=theme["border"], width=2)
+        draw.line([(padding, y), (width - padding, y)], fill=_theme_str(theme, "border"), width=2)
         y += 8
 
     # Blocks
@@ -2488,17 +2623,17 @@ async def render_infographic(spec: dict, user_images: list[bytes] | None = None)
 
         if t == "heading":
             _draw_centered_text(draw, (box[0], box[1], box[2], box[1] + h),
-                                block.get("text", ""), font_h, theme["text"])
+                                str(block.get("text", "")), font_h, _theme_str(theme, "text"))
         elif t == "text":
             lines = _wrap_lines(draw, block.get("text", ""), font_text, inner_w)
             ty = y
             for line in lines:
-                draw.text((padding, ty), line, font=font_text, fill=theme["text"])
+                draw.text((padding, ty), line, font=font_text, fill=_theme_str(theme, "text"))
                 ty += 26
         elif t == "divider":
             mid_y = y + h // 2
             draw.line([(padding + 20, mid_y), (width - padding - 20, mid_y)],
-                      fill=theme["border"], width=2)
+                      fill=_theme_str(theme, "border"), width=2)
         elif t == "bar":
             _render_bar_chart(canvas, box, block, theme)
         elif t == "line":
@@ -2522,7 +2657,7 @@ async def render_infographic(spec: dict, user_images: list[bytes] | None = None)
     return out
 
 
-def _extract_chart_marker(text: str) -> tuple[dict | None, str]:
+def _extract_chart_marker(text: str) -> tuple[JsonDict | None, str]:
     if not text or "!chart" not in text:
         return None, text
     # try fenced first
@@ -2560,14 +2695,14 @@ def _extract_chart_marker(text: str) -> tuple[dict | None, str]:
                 if end > 0:
                     raw = text[start:end]
                     try:
-                        spec = json.loads(raw)
+                        spec = _json_dict(json.loads(raw))
                         remaining = (text[:idx] + text[end:]).strip()
                         return spec, remaining
                     except Exception:
                         pass
         return None, text
     try:
-        spec = json.loads(m.group(1))
+        spec = _json_dict(json.loads(m.group(1)))
         remaining = (text[:m.start()] + text[m.end():]).strip()
         return spec, remaining
     except Exception as e:
@@ -2666,7 +2801,7 @@ def _tg_bot_id() -> int | None:
         return None
 
 
-def resolve_avatar_target_tg(message: telebot.types.Message):
+def resolve_avatar_target_tg(message: telebot.types.Message) -> telebot.types.User | None:
     bot_id = _tg_bot_id()
     if message.reply_to_message and message.reply_to_message.from_user:
         rt = message.reply_to_message.from_user
@@ -2681,7 +2816,9 @@ def resolve_avatar_target_tg(message: telebot.types.Message):
     return None
 
 
-async def get_avatar_description_tg(message, chat_id, user_id, lang: str = "ru") -> str | None:
+async def get_avatar_description_tg(
+    message: telebot.types.Message, chat_id: int, user_id: int, lang: str = "ru",
+) -> str | None:
     target = resolve_avatar_target_tg(message)
     if target is None:
         return None
@@ -2706,27 +2843,30 @@ async def get_avatar_description_tg(message, chat_id, user_id, lang: str = "ru")
             f"Describe briefly (1-2 sentences) in Kulsh's style. No markdown. "
             f"Do NOT use markers !separate, !avatar, !recall_media, !sticker, !gif, !search, !chart."
         )
-        return await ask_ai_async(
+        return _json_str(await ask_ai_async(
             prompt=prompt, image_bytes=img_bytes, image_mime="image/jpeg",
             chat_id=chat_id, user_id=user_id, platform="tg",
-        )
+        )) or None
     except Exception as e:
         logger.warning(f"avatar desc: {e}")
         return None
 
 
-async def get_avatar_description_ds(message, chat_id, user_id, lang: str = "ru") -> str | None:
+async def get_avatar_description_ds(
+    message: discord.Message, chat_id: int, user_id: int, lang: str = "ru",
+) -> str | None:
     target = None
+    me = _ds_user(ds_bot)
     if message.mentions:
         for m in message.mentions:
-            if m.id != ds_bot.user.id:
+            if m.id != me.id:
                 target = m
                 break
     if target is None and message.reference and message.reference.resolved and isinstance(message.reference.resolved, discord.Message):
         ref_auth = message.reference.resolved.author
-        if ref_auth.id != ds_bot.user.id:
+        if ref_auth.id != me.id:
             target = ref_auth
-    if target is None and message.author.id != ds_bot.user.id:
+    if target is None and message.author.id != me.id:
         target = message.author
     if target is None:
         return None
@@ -2742,16 +2882,19 @@ async def get_avatar_description_ds(message, chat_id, user_id, lang: str = "ru")
             f"Describe briefly (1-2 sentences) in Kulsh's style. No markdown. "
             f"Do NOT use markers !separate, !avatar, !recall_media, !sticker, !gif, !search, !chart."
         )
-        return await ask_ai_async(
+        desc = _json_str(await ask_ai_async(
             prompt=prompt, image_bytes=img_bytes, image_mime="image/jpeg",
             chat_id=chat_id, user_id=user_id, platform="ds",
-        )
+        ))
+        return desc or None
     except Exception as e:
         logger.warning(f"DS avatar desc: {e}")
         return None
 
 
-async def get_recall_media_description_tg(message, chat_id, user_id, n=3, lang: str = "ru") -> str | None:
+async def get_recall_media_description_tg(
+    message: telebot.types.Message, chat_id: int, user_id: int, n: int = 3, lang: str = "ru",
+) -> str | None:
     history = list(chat_media_history.get(f"tg_{chat_id}", []))
     if not history:
         return None
@@ -2782,9 +2925,9 @@ async def get_recall_media_description_tg(message, chat_id, user_id, n=3, lang: 
                 f"Comment briefly in Kulsh's style. No markdown. "
                 f"Do NOT use markers !separate, !avatar, !recall_media, !sticker, !gif, !search, !chart."
             )
-            return await ask_ai_async(
+            return _json_str(await ask_ai_async(
                 prompt=prompt, chat_id=chat_id, user_id=user_id, platform="tg",
-            )
+            )) or None
         except Exception as e:
             logger.warning(f"recall meta: {e}")
             return None
@@ -2796,10 +2939,10 @@ async def get_recall_media_description_tg(message, chat_id, user_id, n=3, lang: 
             "You recall the last media. Describe briefly in Kulsh's style. No markdown. "
             "Do NOT use markers !separate, !avatar, !recall_media, !sticker, !gif, !search, !chart."
         )
-        return await ask_ai_async(
+        return _json_str(await ask_ai_async(
             prompt=prompt, image_bytes=img_bytes, image_mime="image/jpeg",
             chat_id=chat_id, user_id=user_id, platform="tg",
-        )
+        )) or None
     except Exception as e:
         logger.warning(f"recall image: {e}")
         return None
@@ -2807,7 +2950,7 @@ async def get_recall_media_description_tg(message, chat_id, user_id, n=3, lang: 
 # ============================================================
 # LOOKSMAXXING TIERS
 # ============================================================
-TIER_DISTRIBUTION = [
+TIER_DISTRIBUTION: list[dict[str, str | float]] = [
     {"key": "sub3",     "short": "S3",  "full_m": "SUB 3",     "full_f": "SUB 3",     "psl_low": 1.0, "psl_high": 2.4},
     {"key": "sub5",     "short": "S5",  "full_m": "SUB 5",     "full_f": "SUB 5",     "psl_low": 2.5, "psl_high": 3.9},
     {"key": "ltn",      "short": "LTN", "full_m": "LTN",       "full_f": "LTB",       "psl_low": 4.0, "psl_high": 5.5},
@@ -2825,9 +2968,9 @@ def find_tier_key(tier_name: str) -> str | None:
         return None
     tn = tier_name.strip().upper().replace("_", " ").replace("-", " ")
     for t in TIER_DISTRIBUTION:
-        candidates = [t["key"].upper(), t["short"].upper(), t["full_m"].upper(), t["full_f"].upper()]
+        candidates = [str(t["key"]).upper(), str(t["short"]).upper(), str(t["full_m"]).upper(), str(t["full_f"]).upper()]
         if tn in candidates or tn.replace(" ", "") in [c.replace(" ", "") for c in candidates]:
-            return t["key"]
+            return str(t["key"])
     return None
 
 
@@ -2856,7 +2999,7 @@ def is_battle_command(text: str) -> bool:
 # ============================================================
 # INFOGRAPHIC (looksmaxxing) — существующий
 # ============================================================
-def load_font(size: int):
+def load_font(size: int) -> Font:
     font_path = os.path.join("fonts", "Montserrat-Bold.ttf")
     try:
         return ImageFont.truetype(font_path, size)
@@ -2870,9 +3013,9 @@ def add_bullet(text: str) -> str:
     return f"• {text}"
 
 
-def _wrap_text(text, draw, font, max_width):
+def _wrap_text(text: str, draw: ImageDraw.ImageDraw, font: Font, max_width: int) -> list[str]:
     words = text.split(' ')
-    lines = []
+    lines: list[str] = []
     cur = ""
     for w in words:
         test = f"{cur} {w}".strip()
@@ -2888,17 +3031,17 @@ def _wrap_text(text, draw, font, max_width):
     return lines
 
 
-def _block_height(lines, font, line_spacing, draw):
+def _block_height(lines: list[str], font: Font, line_spacing: int, draw: ImageDraw.ImageDraw) -> int:
     total = 0
     for line in lines:
         bbox = draw.textbbox((0, 0), line, font=font)
-        total += bbox[3] - bbox[1] + line_spacing
+        total += int(bbox[3] - bbox[1]) + line_spacing
     if total > 0:
         total -= line_spacing
     return total
 
 
-async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark", lang: str = "en") -> BytesIO:
+async def create_infographic(photo_bytes: bytes, data: JsonDict, theme: str = "dark", lang: str = "en") -> BytesIO:
     if lang == "ru":
         TITLE = "ОТЧЁТ LOOKSMAXXING"
         PSL_LABEL = "PSL"
@@ -2987,7 +3130,7 @@ async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark"
                 break
     if current_tier_idx == -1:
         for idx, t in enumerate(TIER_DISTRIBUTION):
-            if t["psl_low"] <= psl_val <= t["psl_high"]:
+            if float(t["psl_low"]) <= psl_val <= float(t["psl_high"]):
                 current_tier_idx = idx
                 break
     if current_tier_idx == -1:
@@ -3004,17 +3147,20 @@ async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark"
     chart_height = 20
     total_range = 8.0 - 1.0
     for tier in TIER_DISTRIBUTION:
-        low, high = tier["psl_low"], tier["psl_high"]
+        low = float(tier["psl_low"])
+        high = float(tier["psl_high"])
+        tier_key = str(tier["key"])
+        tier_short = str(tier["short"])
         x_start = chart_x + (low - 1.0) / total_range * chart_width
         x_end = chart_x + (high - 1.0) / total_range * chart_width
-        draw.rectangle([x_start, chart_y, x_end, chart_y + chart_height], fill=get_tier_color(tier["key"]))
-        if tier["key"] == TIER_DISTRIBUTION[current_tier_idx]["key"]:
+        draw.rectangle((x_start, chart_y, x_end, chart_y + chart_height), fill=get_tier_color(tier_key))
+        if tier_key == str(TIER_DISTRIBUTION[current_tier_idx]["key"]):
             draw.rectangle([x_start - 1, chart_y - 1, x_end + 1, chart_y + chart_height + 1],
                            outline=highlight_outline, width=2)
-        tb = draw.textbbox((0, 0), tier["short"], font=font_tier_label)
+        tb = draw.textbbox((0, 0), tier_short, font=font_tier_label)
         tw = tb[2] - tb[0]
         draw.text(((x_start + x_end) / 2 - tw / 2, chart_y + chart_height + 4),
-                  tier["short"], fill=text_secondary, font=font_tier_label)
+                  tier_short, fill=text_secondary, font=font_tier_label)
     draw.text((40, chart_y + chart_height + 30), DISTRIBUTION_CAPTION, fill=text_tertiary, font=font_small)
 
     start_x = 510
@@ -3053,7 +3199,7 @@ async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark"
     base_row_height = 38
     min_padding = 6
     line_spacing = 2
-    current_y = psl_bar_y + psl_bar_h + 25
+    current_y = float(psl_bar_y + psl_bar_h + 25)
     for key, val_str in metrics_mapping:
         title = METRIC_NAMES.get(key, key)
         tb = draw.textbbox((0, 0), title, font=font_text)
@@ -3063,23 +3209,23 @@ async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark"
         row_height = max(base_row_height, title_h + 2 * min_padding, val_block_h + 2 * min_padding)
         draw.line([(col1_x, current_y), (right_margin, current_y)], fill=line_color, width=1)
         draw.text((col1_x, current_y + (row_height - title_h) / 2), title, fill=text_secondary, font=font_text)
-        val_y = current_y + (row_height - val_block_h) / 2
+        val_y = float(current_y) + (row_height - val_block_h) / 2
         for line in val_lines:
             bbox = draw.textbbox((0, 0), line, font=font_text)
             lh = bbox[3] - bbox[1]
             draw.text((col2_x, val_y), line, fill=text_primary, font=font_text)
-            val_y += lh + line_spacing
-        current_y += row_height
+            val_y += float(lh) + line_spacing
+        current_y += float(row_height)
     draw.line([(col1_x, current_y), (right_margin, current_y)], fill=line_color, width=1)
 
-    pros = data.get("pros", [])
-    cons = data.get("cons", [])
-    if isinstance(pros, str):
-        pros = [pros]
-    if isinstance(cons, str):
-        cons = [cons]
-    pros = [add_bullet(p) for p in pros]
-    cons = [add_bullet(c) for c in cons]
+    raw_pros = data.get("pros", [])
+    raw_cons = data.get("cons", [])
+    if isinstance(raw_pros, str):
+        raw_pros = [raw_pros]
+    if isinstance(raw_cons, str):
+        raw_cons = [raw_cons]
+    pros = [add_bullet(str(p)) for p in raw_pros] if isinstance(raw_pros, list) else []
+    cons = [add_bullet(str(c)) for c in raw_cons] if isinstance(raw_cons, list) else []
     col_y = current_y + 20
     draw.text((start_x, col_y), STRENGTHS, fill=accent, font=font_sub)
     draw.text((start_x + 220, col_y), WEAKNESSES, fill=weak_color, font=font_sub)
@@ -3087,7 +3233,7 @@ async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark"
     line_height = 26
     list_start_y = col_y + 38
 
-    def render_list(items, x, y, color, max_width=col_width):
+    def render_list(items: list[str], x: int, y: int, color: str, max_width: int = col_width) -> int:
         cy = y
         for item in items:
             for line in _wrap_text(item, draw, list_font, max_width):
@@ -3096,8 +3242,8 @@ async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark"
             cy += 4
         return cy
 
-    end_left = render_list(pros, start_x + 10, list_start_y, text_primary)
-    end_right = render_list(cons, start_x + 230, list_start_y, text_primary)
+    end_left = render_list(pros, start_x + 10, int(list_start_y), text_primary)
+    end_right = render_list(cons, start_x + 230, int(list_start_y), text_primary)
     max_y = max(end_left, end_right)
     draw.text((40, max_y + 30), FULL_ANALYSIS, fill=text_tertiary, font=font_small)
     out = BytesIO()
@@ -3106,7 +3252,9 @@ async def create_infographic(photo_bytes: bytes, data: dict, theme: str = "dark"
     return out
 
 
-async def create_battle_infographic(p1: bytes, p2: bytes, data: dict, theme="dark", lang="en") -> BytesIO:
+async def create_battle_infographic(
+    p1: bytes, p2: bytes, data: JsonDict, theme: str = "dark", lang: str = "en",
+) -> BytesIO:
     if lang == "ru":
         TITLE = "БАТТЛ LOOKSMAXXING"
         FACTOR_LABELS = {"skin": "Кожа", "eyes": "Глаза", "jawline": "Челюсть", "bloat": "Одутловатость",
@@ -3164,7 +3312,7 @@ async def create_battle_infographic(p1: bytes, p2: bytes, data: dict, theme="dar
     photo_width = col_width
     photo_height = 500
 
-    def paste_rounded(img_bytes, x, y, w, h, radius=28):
+    def paste_rounded(img_bytes: bytes, x: int, y: int, w: int, h: int, radius: int = 28) -> tuple[int, int, int, int]:
         im = Image.open(BytesIO(img_bytes)).convert("RGBA")
         im.thumbnail((w, h), Image.Resampling.LANCZOS)
         ix = x + (w - im.width) // 2
@@ -3304,7 +3452,7 @@ async def get_looksmaxxing_data(photo_bytes: bytes, include_advice: bool, lang: 
         ),
     )
     try:
-        return cast(dict, json.loads(clean_json_text(raw)))
+        return _json_dict(json.loads(clean_json_text(raw)))
     except json.JSONDecodeError:
         logger.error(f"Looksmaxxing JSON decode: {raw[:200]}")
         return {"error": _t(lang, "ai_json_fail")}
@@ -3337,7 +3485,7 @@ async def get_battle_data(p1: bytes, p2: bytes, lang: str = "en") -> dict[str, A
         image_bytes_list=[p1, p2], image_mime_list=["image/jpeg", "image/jpeg"],
     )
     try:
-        return cast(dict, json.loads(clean_json_text(raw)))
+        return _json_dict(json.loads(clean_json_text(raw)))
     except json.JSONDecodeError:
         logger.error(f"Battle JSON decode: {raw[:200]}")
         return {"error": _t(lang, "ai_json_fail")}
@@ -3346,18 +3494,18 @@ async def get_battle_data(p1: bytes, p2: bytes, lang: str = "en") -> dict[str, A
 # STYLED BUTTON
 # ============================================================
 class StyledButton(InlineKeyboardButton):
-    def __init__(self, text: str, style: str | None = None, **kwargs):
+    def __init__(self, text: str, style: str | None = None, **kwargs: Any) -> None:
         super().__init__(text, **kwargs)
         self.style = style
 
-    def to_dict(self) -> dict:
-        d = super().to_dict()
+    def to_dict(self) -> JsonDict:
+        d = _json_dict(cast(Any, super()).to_dict())
         if self.style:
             d['style'] = self.style
         return d
 
 
-def btn(text: str, style: str | None = None, **kwargs) -> StyledButton:
+def btn(text: str, style: str | None = None, **kwargs: Any) -> StyledButton:
     return StyledButton(text, style=style, **kwargs)
 
 
@@ -3585,29 +3733,32 @@ def build_start_keyboard(lang: str, is_private: bool = True) -> InlineKeyboardMa
 # ============================================================
 # CALLBACK HANDLER (cfg:)
 # ============================================================
-async def _edit_or_send(call: telebot.types.CallbackQuery, text: str, kb: InlineKeyboardMarkup):
+async def _edit_or_send(call: telebot.types.CallbackQuery, text: str, kb: InlineKeyboardMarkup) -> None:
+    msg = _tg_msg(call)
     try:
         await tg_bot.edit_message_text(
-            text, call.message.chat.id, call.message.message_id,
+            text, msg.chat.id, msg.message_id,
             parse_mode='HTML', reply_markup=kb,
         )
     except Exception as e:
         logger.warning(f"edit_message_text fail: {e}")
 
 
-@tg_bot.callback_query_handler(func=lambda call: call.data.startswith("cfg:"))
+@_typed_decorator(tg_bot.callback_query_handler)(func=lambda call: bool(call.data and call.data.startswith("cfg:")))
 async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
-    owner = config_msg_owners.get(call.message.message_id)
+    msg = _tg_msg(call)
+    data = call.data or ""
+    owner = config_msg_owners.get(msg.message_id)
     if owner is not None and owner != call.from_user.id:
-        l = get_user_config("tg", call.message.chat.id, call.from_user.id).get("language", "ru")
-        await tg_bot.answer_callback_query(call.id, _t(l, "cfg_not_yours"), show_alert=False)
+        l = get_user_config("tg", msg.chat.id, call.from_user.id).get("language", "ru")
+        await tg_bot.answer_callback_query(_cb_id(call), _t(l, "cfg_not_yours"), show_alert=False)
         return
 
-    chat_id = call.message.chat.id
+    chat_id = msg.chat.id
     user_id = call.from_user.id
     cfg = get_user_config("tg", chat_id, user_id)
     lang = cfg.get("language", "ru")
-    parts = call.data.split(":")
+    parts = data.split(":")
     action = parts[1] if len(parts) > 1 else ""
     toast = _t(lang, "cfg_updated")
 
@@ -3626,24 +3777,24 @@ async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
                 pass
         await _edit_or_send(call, _model_picker_text("tg", chat_id, user_id),
                             build_model_keyboard("tg", chat_id, user_id))
-        await tg_bot.answer_callback_query(call.id, toast)
+        await tg_bot.answer_callback_query(_cb_id(call), toast)
         return
 
     if action == "model":
         await _edit_or_send(call, _model_picker_text("tg", chat_id, user_id),
                             build_model_keyboard("tg", chat_id, user_id))
-        await tg_bot.answer_callback_query(call.id)
+        await tg_bot.answer_callback_query(_cb_id(call))
         return
 
     if action in ("model_back", "sub_back"):
         await _edit_or_send(call, _config_text("tg", chat_id, user_id),
                             build_main_config_keyboard("tg", chat_id, user_id))
-        await tg_bot.answer_callback_query(call.id)
+        await tg_bot.answer_callback_query(_cb_id(call))
         return
 
     if action == "lang":
         await _edit_or_send(call, f"<b>{_t(lang, 'cfg_lang')}</b>", build_lang_keyboard("tg", chat_id, user_id))
-        await tg_bot.answer_callback_query(call.id)
+        await tg_bot.answer_callback_query(_cb_id(call))
         return
 
     if action == "lang_set":
@@ -3654,12 +3805,12 @@ async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
             toast = _t(lang, "cfg_lang_set_ru") if val == "ru" else _t(lang, "cfg_lang_set_en")
         await _edit_or_send(call, _config_text("tg", chat_id, user_id),
                             build_main_config_keyboard("tg", chat_id, user_id))
-        await tg_bot.answer_callback_query(call.id, toast)
+        await tg_bot.answer_callback_query(_cb_id(call), toast)
         return
 
     if action == "theme":
         await _edit_or_send(call, f"<b>{_t(lang, 'cfg_theme')}</b>", build_theme_keyboard("tg", chat_id, user_id))
-        await tg_bot.answer_callback_query(call.id)
+        await tg_bot.answer_callback_query(_cb_id(call))
         return
 
     if action == "theme_set":
@@ -3669,25 +3820,25 @@ async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
             toast = _t(lang, "cfg_theme_dark") if val == "dark" else _t(lang, "cfg_theme_light")
         await _edit_or_send(call, _config_text("tg", chat_id, user_id),
                             build_main_config_keyboard("tg", chat_id, user_id))
-        await tg_bot.answer_callback_query(call.id, toast)
+        await tg_bot.answer_callback_query(_cb_id(call), toast)
         return
 
     if action == "temp":
         await _edit_or_send(call, f"<b>{_t(lang, 'cfg_temp_short')}</b>",
                             build_temp_keyboard("tg", chat_id, user_id))
-        await tg_bot.answer_callback_query(call.id)
+        await tg_bot.answer_callback_query(_cb_id(call))
         return
 
     if action == "temp_set":
         try:
-            val = max(0.0, min(2.0, float(parts[2])))
-            cfg["temperature"] = val
-            toast = _t(lang, "cfg_temp", val)
+            temp_val = max(0.0, min(2.0, float(parts[2])))
+            cfg["temperature"] = temp_val
+            toast = _t(lang, "cfg_temp", temp_val)
         except (ValueError, IndexError):
             pass
         await _edit_or_send(call, _config_text("tg", chat_id, user_id),
                             build_main_config_keyboard("tg", chat_id, user_id))
-        await tg_bot.answer_callback_query(call.id, toast)
+        await tg_bot.answer_callback_query(_cb_id(call), toast)
         return
 
     if action == "prompt":
@@ -3696,18 +3847,18 @@ async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
                 chat_id, _t(lang, "cfg_edit_prompt_ask"),
                 parse_mode='HTML',
                 reply_markup=ForceReply(selective=True),
-                reply_to_message_id=call.message.message_id,
+                reply_to_message_id=msg.message_id,
             )
             prompt_waiting[user_id] = sent.message_id
             key = (chat_id, user_id)
             config_children_msgs.setdefault(key, []).append(sent.message_id)
         except Exception as e:
             logger.warning(f"prompt ask fail: {e}")
-        await tg_bot.answer_callback_query(call.id)
+        await tg_bot.answer_callback_query(_cb_id(call))
         return
 
     if action == "apply":
-        config_msg_owners.pop(call.message.message_id, None)
+        config_msg_owners.pop(msg.message_id, None)
         chat_key = get_chat_key("tg", chat_id)
         trig_id = config_trigger_msgs.pop(chat_key, None)
         if trig_id:
@@ -3716,23 +3867,23 @@ async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
             except Exception:
                 pass
         await _cleanup_config_children(chat_id, user_id)
-        await tg_bot.answer_callback_query(call.id, _t(lang, "cfg_done"))
-        asyncio.create_task(play_apply_animation(chat_id, call.message.message_id))
+        await tg_bot.answer_callback_query(_cb_id(call), _t(lang, "cfg_done"))
+        asyncio.create_task(play_apply_animation(chat_id, msg.message_id))
         return
 
     if action == "separate":
         new_val = not cfg.get("separate_enabled", True)
         if new_val and cfg.get("streaming_enabled", False):
-            await tg_bot.answer_callback_query(call.id, _t(lang, "cfg_mutex"), show_alert=False)
+            await tg_bot.answer_callback_query(_cb_id(call), _t(lang, "cfg_mutex"), show_alert=False)
             return
         cfg["separate_enabled"] = new_val
     elif action == "streaming":
         if not premium_functions_enabled:
-            await tg_bot.answer_callback_query(call.id, _t(lang, "cfg_premium_off"), show_alert=False)
+            await tg_bot.answer_callback_query(_cb_id(call), _t(lang, "cfg_premium_off"), show_alert=False)
             return
         new_val = not cfg.get("streaming_enabled", False)
         if new_val and cfg.get("separate_enabled", True):
-            await tg_bot.answer_callback_query(call.id, _t(lang, "cfg_mutex"), show_alert=False)
+            await tg_bot.answer_callback_query(_cb_id(call), _t(lang, "cfg_mutex"), show_alert=False)
             return
         cfg["streaming_enabled"] = new_val
     elif action == "stickers":
@@ -3759,27 +3910,29 @@ async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
 
     await _edit_or_send(call, _config_text("tg", chat_id, user_id),
                         build_main_config_keyboard("tg", chat_id, user_id))
-    await tg_bot.answer_callback_query(call.id, toast)
+    await tg_bot.answer_callback_query(_cb_id(call), toast)
 
 # ============================================================
 # CALLBACK HANDLER (menu:)
 # ============================================================
-@tg_bot.callback_query_handler(func=lambda call: call.data.startswith("menu:"))
+@_typed_decorator(tg_bot.callback_query_handler)(func=lambda call: bool(call.data and call.data.startswith("menu:")))
 async def handle_menu_callback(call: telebot.types.CallbackQuery) -> None:
-    action = call.data.split(":", 1)[1] if ":" in call.data else ""
-    chat_id = call.message.chat.id
+    msg = _tg_msg(call)
+    data = call.data or ""
+    action = data.split(":", 1)[1] if ":" in data else ""
+    chat_id = msg.chat.id
     user_id = call.from_user.id
     cfg = get_user_config("tg", chat_id, user_id)
     lang = cfg.get("language", "ru")
-    is_private = (call.message.chat.type == 'private')
+    is_private = (msg.chat.type == 'private')
 
     if action == "close":
         try:
-            await tg_bot.delete_message(chat_id, call.message.message_id)
+            await tg_bot.delete_message(chat_id, msg.message_id)
         except Exception:
             pass
         await _cleanup_config_children(chat_id, user_id)
-        await tg_bot.answer_callback_query(call.id)
+        await tg_bot.answer_callback_query(_cb_id(call))
         return
 
     if action == "settings":
@@ -3787,35 +3940,35 @@ async def handle_menu_callback(call: telebot.types.CallbackQuery) -> None:
         kb = build_main_config_keyboard("tg", chat_id, user_id)
         try:
             await tg_bot.edit_message_text(
-                cfg_text, chat_id, call.message.message_id,
+                cfg_text, chat_id, msg.message_id,
                 parse_mode='HTML', reply_markup=kb,
             )
-            config_msg_owners[call.message.message_id] = user_id
+            config_msg_owners[msg.message_id] = user_id
         except Exception as e:
             logger.warning(f"menu:settings edit: {e}")
-        await tg_bot.answer_callback_query(call.id)
+        await tg_bot.answer_callback_query(_cb_id(call))
         return
 
     if action == "help":
-        await tg_bot.answer_callback_query(call.id)
+        await tg_bot.answer_callback_query(_cb_id(call))
         help_text = _t(lang, "help_body", MINI_APP_URL, GITHUB_URL)
-        edited = await edit_rich_message(chat_id, call.message.message_id, help_text)
+        edited = await edit_rich_message(chat_id, msg.message_id, help_text)
         if not edited:
             try:
-                await tg_bot.delete_message(chat_id, call.message.message_id)
+                await tg_bot.delete_message(chat_id, msg.message_id)
             except Exception:
                 pass
             await send_formatted(chat_id, help_text)
         return
 
     if action == "open":
-        await tg_bot.answer_callback_query(call.id)
+        await tg_bot.answer_callback_query(_cb_id(call))
         menu_text = _build_menu_text(lang)
         kb = build_menu_keyboard(lang, is_private=is_private)
-        edited = await edit_rich_message(chat_id, call.message.message_id, menu_text, reply_markup=kb)
+        edited = await edit_rich_message(chat_id, msg.message_id, menu_text, reply_markup=kb)
         if not edited:
             try:
-                await tg_bot.delete_message(chat_id, call.message.message_id)
+                await tg_bot.delete_message(chat_id, msg.message_id)
             except Exception:
                 pass
             await send_formatted(chat_id, menu_text, reply_markup=kb)
@@ -3824,7 +3977,7 @@ async def handle_menu_callback(call: telebot.types.CallbackQuery) -> None:
 # ============================================================
 # TELEGRAM: HELP / MENU / START / DONATE
 # ============================================================
-@tg_bot.message_handler(commands=['start'])
+@_typed_decorator(tg_bot.message_handler)(commands=['start'])
 async def handle_start(message: telebot.types.Message) -> None:
     args = telebot.util.extract_arguments(message.text or "")
     if args:
@@ -3837,7 +3990,7 @@ async def handle_start(message: telebot.types.Message) -> None:
                 await reply_tg_html(message, "❌ Неверное количество звёзд.")
                 return
             pending_donations[message.chat.id] = stars
-            prices = [telebot.types.LabeledPrice(label="💎 Поддержать Кульша", amount=stars)]
+            prices = [cast(Any, telebot.types.LabeledPrice)(label="💎 Поддержать Кульша", amount=stars)]
             await tg_bot.send_invoice(
                 chat_id=message.chat.id, title="💎 Донат Кульшу",
                 description=f"💖 Поддержка разработки на {stars} ⭐",
@@ -3859,7 +4012,7 @@ async def handle_start(message: telebot.types.Message) -> None:
     await send_formatted(chat_id, start_text, reply_to=message.message_id, reply_markup=kb)
 
 
-@tg_bot.message_handler(commands=['menu'])
+@_typed_decorator(tg_bot.message_handler)(commands=['menu'])
 async def handle_menu(message: telebot.types.Message) -> None:
     if message.from_user is None:
         return
@@ -3874,7 +4027,7 @@ async def handle_menu(message: telebot.types.Message) -> None:
     await send_formatted(chat_id, menu_text, reply_to=message.message_id, reply_markup=kb)
 
 
-@tg_bot.message_handler(commands=['help'])
+@_typed_decorator(tg_bot.message_handler)(commands=['help'])
 async def handle_help(message: telebot.types.Message) -> None:
     if message.from_user is None:
         return
@@ -3890,7 +4043,7 @@ async def handle_help(message: telebot.types.Message) -> None:
         )
 
 
-@tg_bot.message_handler(commands=['donate'])
+@_typed_decorator(tg_bot.message_handler)(commands=['donate'])
 async def handle_donate(message: telebot.types.Message) -> None:
     if message.from_user is None:
         return
@@ -3911,14 +4064,14 @@ async def handle_donate(message: telebot.types.Message) -> None:
         await reply_tg_html(message, f"Поддержать Кульша: {DONATE_URL} 🍷🗿")
 
 
-@tg_bot.message_handler(commands=['donate_stars'])
+@_typed_decorator(tg_bot.message_handler)(commands=['donate_stars'])
 async def handle_donate_stars(message: telebot.types.Message) -> None:
     if message.from_user is None:
         return
     chat_id = message.chat.id
     cfg = get_user_config("tg", chat_id, message.from_user.id)
     lang = cfg.get("language", "ru")
-    args = telebot.util.extract_arguments(message.text or "").strip()
+    args = (telebot.util.extract_arguments(message.text or "") or "").strip()
     if not args:
         await reply_tg_html(message, _t(lang, "donate_stars_need"))
         return
@@ -3930,7 +4083,7 @@ async def handle_donate_stars(message: telebot.types.Message) -> None:
         await reply_tg_html(message, _t(lang, "donate_stars_bad"))
         return
     pending_donations[chat_id] = stars
-    prices = [telebot.types.LabeledPrice(label="Поддержать Кульша", amount=stars)]
+    prices = [cast(Any, telebot.types.LabeledPrice)(label="Поддержать Кульша", amount=stars)]
     try:
         await tg_bot.send_invoice(
             chat_id=chat_id,
@@ -3948,7 +4101,7 @@ async def handle_donate_stars(message: telebot.types.Message) -> None:
         await reply_tg_html(message, _t(lang, "donate_invoice_fail", str(e)))
 
 
-@tg_bot.message_handler(commands=['credits'])
+@_typed_decorator(tg_bot.message_handler)(commands=['credits'])
 async def handle_credits(message: telebot.types.Message) -> None:
     if message.from_user is None:
         return
@@ -3958,7 +4111,7 @@ async def handle_credits(message: telebot.types.Message) -> None:
     await reply_tg_html(message, _t(lang, "credits_balance", creds, DAILY_CREDITS))
 
 
-@tg_bot.message_handler(commands=['togglepremiumfunctionsadmin'])
+@_typed_decorator(tg_bot.message_handler)(commands=['togglepremiumfunctionsadmin'])
 async def handle_toggle_premium(message: telebot.types.Message) -> None:
     global premium_functions_enabled
     if message.from_user is None or message.from_user.id != PREMIUM_ADMIN_ID:
@@ -3969,12 +4122,12 @@ async def handle_toggle_premium(message: telebot.types.Message) -> None:
     await reply_tg_html(message, f"Расширенные функции: {state}")
 
 
-@tg_bot.pre_checkout_query_handler(func=lambda query: True)
+@_typed_decorator(tg_bot.pre_checkout_query_handler)(func=lambda query: True)
 async def handle_pre_checkout(pre_checkout: telebot.types.PreCheckoutQuery) -> None:
     await tg_bot.answer_pre_checkout_query(pre_checkout.id, ok=True)
 
 
-@tg_bot.message_handler(content_types=['successful_payment'])
+@_typed_decorator(tg_bot.message_handler)(content_types=['successful_payment'])
 async def handle_successful_payment(message: telebot.types.Message) -> None:
     if message.successful_payment is None or message.from_user is None:
         return
@@ -4449,7 +4602,7 @@ def _is_text_file(path: str) -> bool:
 
 
 async def extract_archive(zip_path: str, dest_dir: str) -> list[str]:
-    def _do():
+    def _do() -> list[str]:
         with zipfile.ZipFile(zip_path, 'r') as zf:
             total = 0
             count = 0
@@ -4473,7 +4626,7 @@ async def extract_archive(zip_path: str, dest_dir: str) -> list[str]:
 
 
 async def create_archive(source_dir: str, out_zip: str) -> None:
-    def _do():
+    def _do() -> None:
         with zipfile.ZipFile(out_zip, 'w', zipfile.ZIP_DEFLATED) as zf:
             for root, dirs, files in os.walk(source_dir):
                 for f in files:
@@ -4513,6 +4666,8 @@ async def run_safe_command(base_dir: str, cmd: str) -> tuple[int, str]:
 
 async def tool_edit_archive(message: telebot.types.Message, user_request: str,
                             archive_bytes: bytes, filename: str) -> None:
+    if message.from_user is None:
+        return
     user_id = message.from_user.id
     chat_id = message.chat.id
     cfg = get_user_config("tg", chat_id, user_id)
@@ -4618,6 +4773,8 @@ async def tool_edit_archive(message: telebot.types.Message, user_request: str,
 
 async def tool_review_file(message: telebot.types.Message, user_request: str,
                            file_bytes: bytes, filename: str) -> None:
+    if message.from_user is None:
+        return
     user_id = message.from_user.id
     chat_id = message.chat.id
     cfg = get_user_config("tg", chat_id, user_id)
@@ -4640,7 +4797,7 @@ async def tool_review_file(message: telebot.types.Message, user_request: str,
 # ============================================================
 # TG MEDIA HANDLER
 # ============================================================
-@tg_bot.message_handler(content_types=['photo', 'video', 'animation', 'document', 'sticker'])
+@_typed_decorator(tg_bot.message_handler)(content_types=['photo', 'video', 'animation', 'document', 'sticker'])
 async def handle_tg_media(message: telebot.types.Message) -> None:
     if message.from_user is None:
         return
@@ -4683,7 +4840,7 @@ async def handle_tg_media(message: telebot.types.Message) -> None:
         media_tag = "[стикер]" if lang == "ru" else "[sticker]"
 
     if file_id and media_tag:
-        add_media_history(chat_key, None, media_type, display_name, file_id=file_id, caption=caption)
+        add_media_history(chat_key, None, media_type or "media", display_name, file_id=file_id, caption=caption)
 
     if is_battle_command(caption) and message.photo:
         if message.media_group_id:
@@ -4729,10 +4886,11 @@ async def handle_tg_media(message: telebot.types.Message) -> None:
         status = await tg_bot.send_message(chat_id, _t(lang, "psl_analyzing"))
         try:
             img_bytes = await get_tg_file_bytes(tg_bot, message.photo[-1].file_id)
-            include_advice = ("совет" in cl or "advice" in cl or
-                              (message.reply_to_message and message.reply_to_message.text and
-                               ("совет" in message.reply_to_message.text.lower()
-                                or "advice" in message.reply_to_message.text.lower())))
+            reply_text = message.reply_to_message.text if message.reply_to_message else None
+            include_advice = bool(
+                "совет" in cl or "advice" in cl or
+                (reply_text and ("совет" in reply_text.lower() or "advice" in reply_text.lower()))
+            )
             theme = cfg.get("theme", "dark")
             ai_data = await get_looksmaxxing_data(img_bytes, include_advice, lang=lang)
             if "error" in ai_data:
@@ -4859,14 +5017,14 @@ async def handle_tg_media(message: telebot.types.Message) -> None:
 # ============================================================
 # TG TEXT HANDLER
 # ============================================================
-@tg_bot.message_handler(func=lambda m: m.text is not None, content_types=['text'])
+@_typed_decorator(tg_bot.message_handler)(func=lambda m: m.text is not None, content_types=['text'])
 async def handle_tg_text(message: telebot.types.Message) -> None:
     if message.from_user is None:
         return
     chat_id = message.chat.id
     user_id = message.from_user.id
     is_dm = message.chat.type == 'private'
-    text = cast(str, message.text or "")
+    text = message.text or ""
     tl = text.lower()
     display_name = message.from_user.full_name or "Unknown"
     username = message.from_user.username or ""
@@ -5019,7 +5177,7 @@ async def handle_tg_text(message: telebot.types.Message) -> None:
 # ============================================================
 # BATTLE MEDIA GROUP
 # ============================================================
-async def process_battle_media_group(media_group_id: str, tg_chat_id: int, user_id: int):
+async def process_battle_media_group(media_group_id: str, tg_chat_id: int, user_id: int) -> None:
     for _ in range(10):
         if media_group_id in battle_photos and len(battle_photos[media_group_id]) >= 2:
             break
@@ -5397,7 +5555,8 @@ def _ds_config_embed(chat_id: int, user_id: int) -> discord.Embed:
 
 async def ds_handle_config(message: discord.Message, user_id: int) -> None:
     chat_id = message.channel.id
-    if message.guild and not message.author.guild_permissions.administrator:
+    member = _as_member(message.author)
+    if message.guild and not (member and member.guild_permissions.administrator):
         cfg = get_user_config("ds", chat_id, user_id)
         lang = cfg.get("language", "ru")
         await message.reply(_t(lang, "ds_only_admins"))
@@ -5410,7 +5569,8 @@ async def ds_handle_config_param(message: discord.Message, user_id: int, parts: 
     chat_id = message.channel.id
     cfg = get_user_config("ds", chat_id, user_id)
     lang = cfg.get("language", "ru")
-    if message.guild and not message.author.guild_permissions.administrator:
+    member = _as_member(message.author)
+    if message.guild and not (member and member.guild_permissions.administrator):
         await message.reply(_t(lang, "ds_only_admins"))
         return
     if len(parts) < 3:
@@ -5571,29 +5731,30 @@ def _ds_lang_of(interaction: discord.Interaction) -> str:
     chat_id = interaction.channel_id or 0
     user_id = interaction.user.id
     cfg = get_user_config("ds", chat_id, user_id)
-    return cfg.get("language", "ru")
+    lang = cfg.get("language", "ru")
+    return lang if isinstance(lang, str) else "ru"
 
 
 @ds_tree.command(name="start", description="Greeting / Приветствие")
-async def ds_slash_start(interaction: discord.Interaction):
+async def ds_slash_start(interaction: discord.Interaction) -> None:
     lang = _ds_lang_of(interaction)
     await interaction.response.send_message(_ds_slash_start(lang))
 
 
 @ds_tree.command(name="menu", description="Menu / Меню")
-async def ds_slash_menu(interaction: discord.Interaction):
+async def ds_slash_menu(interaction: discord.Interaction) -> None:
     lang = _ds_lang_of(interaction)
     await interaction.response.send_message(_ds_slash_menu(lang))
 
 
 @ds_tree.command(name="help", description="Command list / Список команд")
-async def ds_slash_help(interaction: discord.Interaction):
+async def ds_slash_help(interaction: discord.Interaction) -> None:
     lang = _ds_lang_of(interaction)
     await interaction.response.send_message(_ds_slash_help(lang))
 
 
 @ds_tree.command(name="donate", description="Support the project / Поддержать проект")
-async def ds_slash_donate(interaction: discord.Interaction):
+async def ds_slash_donate(interaction: discord.Interaction) -> None:
     lang = _ds_lang_of(interaction)
     text = (
         f"# {_t(lang, 'donate_title')}\n\n"
@@ -5606,18 +5767,19 @@ async def ds_slash_donate(interaction: discord.Interaction):
 
 
 @ds_tree.command(name="credits", description="Credits balance / Баланс кредитов")
-async def ds_slash_credits(interaction: discord.Interaction):
+async def ds_slash_credits(interaction: discord.Interaction) -> None:
     lang = _ds_lang_of(interaction)
     creds = get_user_credits("ds", interaction.user.id)
     await interaction.response.send_message(_t(lang, "credits_balance", creds, DAILY_CREDITS))
 
 
 @ds_tree.command(name="config", description="Channel settings / Настройки канала")
-async def ds_slash_config(interaction: discord.Interaction):
+async def ds_slash_config(interaction: discord.Interaction) -> None:
     chat_id = interaction.channel_id or 0
     user_id = interaction.user.id
     lang = _ds_lang_of(interaction)
-    if interaction.guild and not interaction.user.guild_permissions.administrator:
+    member = _as_member(interaction.user)
+    if interaction.guild and not (member and member.guild_permissions.administrator):
         await interaction.response.send_message(_t(lang, "ds_only_admins"), ephemeral=True)
         return
     embed = _ds_config_embed(chat_id, user_id)
@@ -5626,7 +5788,7 @@ async def ds_slash_config(interaction: discord.Interaction):
 
 @ds_tree.command(name="avatar", description="Describe avatar / Описать аватарку")
 @app_commands.describe(user="Whose avatar to describe / Чью аватарку описать")
-async def ds_slash_avatar(interaction: discord.Interaction, user: discord.Member | None = None):
+async def ds_slash_avatar(interaction: discord.Interaction, user: discord.Member | None = None) -> None:
     await interaction.response.defer()
     target = user or interaction.user
     chat_id = interaction.channel_id or 0
@@ -5660,7 +5822,7 @@ async def ds_slash_avatar(interaction: discord.Interaction, user: discord.Member
 
 @ds_tree.command(name="recall", description="Recall recent media / Вспомнить недавние медиа")
 @app_commands.describe(count="How many last items / Сколько последних элементов")
-async def ds_slash_recall(interaction: discord.Interaction, count: int = 3):
+async def ds_slash_recall(interaction: discord.Interaction, count: int = 3) -> None:
     await interaction.response.defer()
     chat_id = interaction.channel_id or 0
     user_id = interaction.user.id
@@ -5699,7 +5861,7 @@ async def ds_slash_recall(interaction: discord.Interaction, count: int = 3):
 
 
 @ds_tree.command(name="logs", description="Server logs (admins) / Логи сервера (админам)")
-async def ds_slash_logs(interaction: discord.Interaction):
+async def ds_slash_logs(interaction: discord.Interaction) -> None:
     await interaction.response.defer(ephemeral=True)
     lang = _ds_lang_of(interaction)
     if interaction.user.id not in AUTHORIZED_UPDATERS:
@@ -5719,7 +5881,7 @@ async def ds_slash_logs(interaction: discord.Interaction):
 
 @ds_tree.command(name="search", description="Web search / Поиск в интернете")
 @app_commands.describe(query="What to search / Что искать")
-async def ds_slash_search(interaction: discord.Interaction, query: str):
+async def ds_slash_search(interaction: discord.Interaction, query: str) -> None:
     await interaction.response.defer()
     chat_id = interaction.channel_id or 0
     user_id = interaction.user.id
@@ -5749,7 +5911,7 @@ async def ds_slash_search(interaction: discord.Interaction, query: str):
 
 @ds_tree.command(name="chart", description="Generate infographic / Сгенерировать инфографику")
 @app_commands.describe(description="Describe the chart / Опиши график")
-async def ds_slash_chart(interaction: discord.Interaction, description: str):
+async def ds_slash_chart(interaction: discord.Interaction, description: str) -> None:
     await interaction.response.defer()
     chat_id = interaction.channel_id or 0
     user_id = interaction.user.id
@@ -5796,7 +5958,7 @@ async def ds_slash_chart(interaction: discord.Interaction, description: str):
 
 @ds_tree.command(name="psl", description="Looksmaxxing analysis / Оценка внешности")
 @app_commands.describe(image="Photo / Фото", advice="Include advice / Показать рекомендации")
-async def ds_slash_psl(interaction: discord.Interaction, image: discord.Attachment, advice: bool = False):
+async def ds_slash_psl(interaction: discord.Interaction, image: discord.Attachment, advice: bool = False) -> None:
     await interaction.response.defer()
     chat_id = interaction.channel_id or 0
     user_id = interaction.user.id
@@ -5834,7 +5996,7 @@ async def ds_slash_psl(interaction: discord.Interaction, image: discord.Attachme
 
 @ds_tree.command(name="battle", description="Two-photo battle / Баттл двух фото")
 @app_commands.describe(image1="First photo / Первое фото", image2="Second photo / Второе фото")
-async def ds_slash_battle(interaction: discord.Interaction, image1: discord.Attachment, image2: discord.Attachment):
+async def ds_slash_battle(interaction: discord.Interaction, image1: discord.Attachment, image2: discord.Attachment) -> None:
     await interaction.response.defer()
     chat_id = interaction.channel_id or 0
     user_id = interaction.user.id
@@ -5875,14 +6037,16 @@ async def ds_slash_battle(interaction: discord.Interaction, image1: discord.Atta
 async def on_message(message: discord.Message) -> None:
     if message.author == ds_bot.user or message.author.bot:
         return
-    is_dm = message.guild is None
-    chat_id = message.author.id if is_dm else message.guild.id
+    guild = message.guild
+    is_dm = guild is None
+    chat_id = message.author.id if guild is None else guild.id
     user_id = message.author.id
     content_lower = message.content.lower()
-    display_name = getattr(message.author, "display_name", message.author.name)
+    display_name = str(getattr(message.author, "display_name", message.author.name))
     username = message.author.name
     cfg = get_user_config("ds", chat_id, user_id)
-    lang = cfg.get("language", "ru")
+    lang_raw = cfg.get("language", "ru")
+    lang = lang_raw if isinstance(lang_raw, str) else "ru"
 
     if not is_dm and (content_lower.startswith("кульш обновись") or content_lower.startswith("kulsh update")):
         if message.author.id not in AUTHORIZED_UPDATERS:
@@ -5993,11 +6157,11 @@ async def on_message(message: discord.Message) -> None:
     if (content_lower.startswith("кульш аватарк") or
             content_lower.startswith("кульш аватар") or
             content_lower.startswith("kulsh avatar")):
-        raw = await get_avatar_description_ds(message, chat_id, user_id, lang=lang)
-        if not raw:
+        avatar_raw: str | None = await get_avatar_description_ds(message, chat_id, user_id, lang=str(lang))
+        if not avatar_raw:
             await message.reply(_t(lang, "avatar_fail"))
             return
-        for seg in clean_extra_text(raw):
+        for seg in clean_extra_text(avatar_raw):
             try:
                 await message.channel.send(seg)
             except Exception as e:
@@ -6034,20 +6198,22 @@ async def on_message(message: discord.Message) -> None:
             await message.reply(_t(lang, "ds_voice_not_in"))
             return
         voice_channel = author.voice.channel
+        if guild is None:
+            return
         try:
-            vc = cast(discord.VoiceChannel, message.guild.voice_client)
+            vc = _voice_client(guild)
             if vc and vc.is_connected():
                 await vc.move_to(voice_channel)
             else:
                 if VOICE_RECOGNITION_ENABLED and VOICE_RECV_AVAILABLE:
-                    vc = await voice_channel.connect(cls=voice_recv.VoiceRecvClient)
+                    vc = cast(discord.VoiceClient, await voice_channel.connect(cls=voice_recv.VoiceRecvClient))
                 else:
                     vc = await voice_channel.connect()
-            voice_text_channels[message.guild.id] = message.channel
+            voice_text_channels[guild.id] = message.channel
             await message.reply(_t(lang, "ds_voice_joined", voice_channel.name))
             if VOICE_RECOGNITION_ENABLED and VOICE_RECV_AVAILABLE:
-                sink = RecognitionSink(ds_bot, message.guild, message.channel)
-                vc.listen(sink)
+                sink = RecognitionSink(ds_bot, guild, message.channel)
+                cast(Any, vc).listen(sink)
                 setattr(vc, "_recognition_sink", sink)
         except Exception as e:
             logger.error(f"voice: {e}")
@@ -6055,12 +6221,13 @@ async def on_message(message: discord.Message) -> None:
         return
 
     if not is_dm and ("кульш выйди из войса" in content_lower or "kulsh leave voice" in content_lower):
-        vc = cast(discord.VoiceChannel, message.guild.voice_client)
+        vc = _voice_client(guild)
         if vc and vc.is_connected():
             if hasattr(vc, "_recognition_sink"):
                 getattr(vc, "_recognition_sink").cleanup()
             await vc.disconnect()
-            voice_text_channels.pop(message.guild.id, None)
+            if guild is not None:
+                voice_text_channels.pop(guild.id, None)
             await message.reply(_t(lang, "ds_voice_left"))
         else:
             await message.reply(_t(lang, "ds_voice_not_in_bot"))
@@ -6084,14 +6251,14 @@ async def on_message(message: discord.Message) -> None:
 
     if has_battle_cmd and len(image_attachments) >= 2:
         async with message.channel.typing():
-            status = await message.reply(_t(lang, "battle_waiting"))
+            status_msg = await message.reply(_t(lang, "battle_waiting"))
             try:
                 p1 = await download_image_bytes(image_attachments[0].url)
                 p2 = await download_image_bytes(image_attachments[1].url)
                 theme = cfg.get("theme", "dark")
                 ai_data = await get_battle_data(p1, p2, lang=lang)
                 if "error" in ai_data:
-                    await status.edit(content=ai_data['error'])
+                    await status_msg.edit(content=str(ai_data['error']))
                     return
                 img = await create_battle_infographic(p1, p2, ai_data, theme=theme, lang=lang)
                 winner_num = str(ai_data.get("winner", "1"))
@@ -6107,27 +6274,27 @@ async def on_message(message: discord.Message) -> None:
                 )
                 await message.reply(file=discord.File(fp=img, filename="battle.png"),
                                     content=report[:1900])
-                await status.delete()
+                await status_msg.delete()
                 add_user_memory(f"ds_{chat_id}", "DS", display_name, username, user_id,
                                 "[battle]", message_id=message.id)
                 add_bot_memory(f"ds_{chat_id}", "[battle результат]")
             except Exception as e:
                 logger.error(f"DS battle: {e}")
-                await status.edit(content=f"Ошибка: {e}")
+                await status_msg.edit(content=f"Ошибка: {e}")
         return
 
     has_looksmaxxing_cmd = is_looksmaxxing_command(message.content)
     if has_looksmaxxing_cmd and len(image_attachments) > 0:
         async with message.channel.typing():
             try:
-                img_bytes = await download_image_bytes(image_attachments[0].url)
+                psl_bytes = await download_image_bytes(image_attachments[0].url)
                 include_advice = "совет" in content_lower or "advice" in content_lower
                 theme = cfg.get("theme", "dark")
-                ai_data = await get_looksmaxxing_data(img_bytes, include_advice, lang=lang)
+                ai_data = await get_looksmaxxing_data(psl_bytes, include_advice, lang=lang)
                 if "error" in ai_data:
                     await message.reply(ai_data['error'])
                     return
-                infographic = await create_infographic(img_bytes, ai_data, theme=theme, lang=lang)
+                infographic = await create_infographic(psl_bytes, ai_data, theme=theme, lang=lang)
                 report = (
                     f"**{_t(lang, 'psl_title')}**\n"
                     f"{_t(lang, 'psl_gender')} {ai_data.get('gender', '?')}\n"
@@ -6163,23 +6330,23 @@ async def on_message(message: discord.Message) -> None:
     if (image_attachments or video_attachments) and addressed:
         async with message.channel.typing():
             try:
-                img_bytes = None
+                media_bytes: bytes | None = None
                 img_mime = "image/jpeg"
                 if image_attachments:
-                    img_bytes = await download_image_bytes(image_attachments[0].url)
+                    media_bytes = await download_image_bytes(image_attachments[0].url)
                     img_mime = image_attachments[0].content_type or "image/jpeg"
                 elif video_attachments:
                     vid = await download_image_bytes(video_attachments[0].url)
                     frame = await extract_video_frame(vid, ".mp4")
                     if frame:
-                        img_bytes = frame
+                        media_bytes = frame
                 prompt = message.content.strip() or ("че на этом?" if lang == "ru" else "what's this?")
                 add_user_memory(f"ds_{chat_id}", "DS", display_name, username, user_id,
                                 f"{prompt} [с медиа]",
                                 ["photo" if image_attachments else "video"],
                                 message_id=message.id)
                 messages = memory_to_messages(get_chat_memory(f"ds_{chat_id}"))
-                answer = await ask_ai_async(messages=messages, image_bytes=img_bytes,
+                answer = await ask_ai_async(messages=messages, image_bytes=media_bytes,
                                             image_mime=img_mime, chat_id=chat_id,
                                             user_id=user_id, platform="ds")
                 await send_ds_ai_response(message, chat_id, user_id, answer, user_text=prompt)
@@ -6233,9 +6400,10 @@ async def send_donation_alert(platform: str, name: str, amount: int, message_tex
             text += f"\n> {message_text}"
         if DS_DONATION_CHANNEL_ID:
             channel = ds_bot.get_channel(DS_DONATION_CHANNEL_ID)
-            if channel:
+            sendable = _messageable(cast(discord.abc.Messageable | None, channel))
+            if sendable is not None:
                 try:
-                    await channel.send(text)
+                    await sendable.send(text)
                 except Exception as e:
                     logger.error(f"Донат в DS: {e}")
 
@@ -6247,24 +6415,24 @@ async def donation_alerts_listener() -> None:
     await ds_bot.wait_until_ready()
     sio = socketio.AsyncClient(query={'token': DONATIONALERTS_TOKEN})
 
-    @sio.event
+    @cast(Callable[[_HandlerT], _HandlerT], sio.event)
     async def connect() -> None:
         logger.info("🔌 DonationAlerts подключён")
 
-    @sio.event
+    @cast(Callable[[_HandlerT], _HandlerT], sio.event)
     async def disconnect() -> None:
         logger.warning("🔌 DonationAlerts отключён")
 
-    @sio.on('donation')
-    async def on_donation(data: dict) -> None:
+    @cast(Callable[[_HandlerT], _HandlerT], sio.on('donation'))
+    async def on_donation(data: JsonDict) -> None:
         try:
-            amount = float(data.get('amount', 0))
-            currency = data.get('currency', 'RUB')
+            amount = float(cast(Any, data.get('amount', 0)))
+            currency = str(data.get('currency', 'RUB'))
             if currency != 'RUB':
                 return
             points = int(amount)
-            username = data.get('username', 'Аноним')
-            message = data.get('message', '')
+            username = str(data.get('username', 'Аноним'))
+            message = str(data.get('message', ''))
             logger.info(f"💰 {username} → {points}")
             add_donation('ds', 0, points, name=username)
             await send_donation_alert('ds', username, points, message)
@@ -6282,27 +6450,32 @@ async def donation_alerts_listener() -> None:
 # VOICE SINK
 # ============================================================
 if VOICE_RECOGNITION_ENABLED and VOICE_RECV_AVAILABLE:
-    class RecognitionSink(voice_recv.AudioSink):
-        def __init__(self, bot, guild, text_channel):
+    class RecognitionSink(voice_recv.AudioSink):  # type: ignore[misc]
+        def __init__(
+            self,
+            bot: discord.Client,
+            guild: discord.Guild,
+            text_channel: discord.abc.Messageable,
+        ) -> None:
             super().__init__()
             self.bot = bot
             self.guild = guild
             self.text_channel = text_channel
-            self.buffers = {}
+            self.buffers: dict[int | str, bytearray] = {}
             self.recognizer = sr.Recognizer()
-            self.processing_tasks = {}
+            self.processing_tasks: dict[int | str, Any] = {}
 
         def wants_opus(self) -> bool:
             return False
 
-        def write(self, user, data):
+        def write(self, user: discord.User | None, data: Any) -> None:
             user_id = user.id if user else "unknown_session"
             user_name = user.name if user else "Аноним"
             if user and user.bot:
                 return
             if user_id not in self.buffers:
                 self.buffers[user_id] = bytearray()
-            self.buffers[user_id].extend(data.pcm)
+            self.buffers[user_id].extend(cast(bytes, data.pcm))
             if len(self.buffers[user_id]) > 380000:
                 if user_id in self.processing_tasks:
                     self.processing_tasks[user_id].cancel()
@@ -6310,7 +6483,7 @@ if VOICE_RECOGNITION_ENABLED and VOICE_RECV_AVAILABLE:
                     self.wait_and_process(user_id, user_name), self.bot.loop
                 )
 
-        def _sync_recognize(self, pcm_data):
+        def _sync_recognize(self, pcm_data: bytes) -> str | None:
             try:
                 audio = AudioSegment(data=pcm_data, sample_width=2, frame_rate=48000,
                                      channels=2).set_channels(1).set_frame_rate(16000)
@@ -6318,16 +6491,17 @@ if VOICE_RECOGNITION_ENABLED and VOICE_RECV_AVAILABLE:
                 audio.export(wav_io, format="wav")
                 wav_io.seek(0)
                 with sr.AudioFile(wav_io) as source:
-                    return self.recognizer.recognize_google(
+                    recognized = self.recognizer.recognize_google(
                         self.recognizer.record(source), language="ru-RU"
                     )
+                    return recognized if isinstance(recognized, str) else None
             except sr.UnknownValueError:
                 return None
             except Exception as e:
                 logger.error(f"recognize: {e}")
                 return None
 
-        async def wait_and_process(self, user_id, user_name):
+        async def wait_and_process(self, user_id: int | str, user_name: str) -> None:
             try:
                 await asyncio.sleep(1.5)
                 if user_id in self.buffers:
@@ -6338,18 +6512,18 @@ if VOICE_RECOGNITION_ENABLED and VOICE_RECV_AVAILABLE:
             except asyncio.CancelledError:
                 pass
 
-        def cleanup(self):
+        def cleanup(self) -> None:
             for task in self.processing_tasks.values():
                 task.cancel()
             self.buffers.clear()
 else:
-    class RecognitionSink:
+    class RecognitionSink:  # type: ignore[no-redef]
         pass
 
 # ============================================================
 # TTS
 # ============================================================
-async def say_in_voice(voice_client, text):
+async def say_in_voice(voice_client: discord.VoiceClient | None, text: str) -> None:
     if not VOICE_ENABLED or not voice_client or not voice_client.is_connected():
         return
     try:
