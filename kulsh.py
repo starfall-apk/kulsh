@@ -1,7 +1,6 @@
-# Kulsh GPT | v2.38.0 (fixed BUTTON_TYPE_INVALID for web_app in groups,
-# html→markdown bridge for rich, robust fallback without keyboard,
-# original prompt, original emoji placement, clean GIF sending,
-# child message cleanup on apply/close, short apply animation)
+# Kulsh GPT | v2.39.0 (no GIFs in menu/start, restored start emojis, centered KULSH table,
+# slower apply animation, decorative unicode design, web search without API keys,
+# full Pillow-based infographic engine (bar/line/pie/3d_pie/table/text/images/themes))
 # by (main author):
 #     starfall-apk
 # coauthor & bot hosting:
@@ -32,7 +31,8 @@ import sys
 from datetime import timezone, timedelta
 from logging.handlers import RotatingFileHandler
 from typing import Any, cast
-from PIL import Image, ImageDraw, ImageFont
+from urllib.parse import quote_plus, unquote, urlparse, parse_qs
+from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageChops, ImageOps
 from dotenv import load_dotenv
 from io import BytesIO
 from collections import deque, defaultdict
@@ -114,9 +114,6 @@ DS_SERIES_CHANNEL_ID = 1403828467014832270
 DS_SERIES_TARGET_USER_ID = 1364588699589021890
 
 MINI_APP_URL = "https://kulsh.vercel.app"
-MENU_GIF_RU_PATH = "menu.gif"
-MENU_GIF_EN_PATH = "menu_en.gif"
-KULSH_GIF_PATH = "kulsh.gif"
 DONATE_URL = "https://kulsh.vercel.app/donate"
 GITHUB_URL = "https://github.com/starfall-apk/kulsh"
 
@@ -152,10 +149,36 @@ PREMIUM_ADMIN_ID = 1420898868
 premium_functions_enabled: bool = True
 AUTHORIZED_UPDATERS = [735217033867821098, 1193627300797878362]
 
+# Декоративные символы для красивого оформления
+DECO = {
+    "sparkle": "✦",
+    "wave": "彡",
+    "rivers": "巛",
+    "stroke": "〢",
+    "line": "─",
+    "dline": "═",
+    "dot": "▪",
+    "hollow": "▫",
+    "arrow": "▸",
+    "diamond": "◈",
+    "star": "★",
+    "star_hollow": "☆",
+    "flower": "❋",
+    "dash": "─",
+    "bul": "•",
+}
+
+
+def deco_divider(length: int = 20, char: str = "─") -> str:
+    return char * length
+
+
+def deco_title(text: str, lang: str = "ru") -> str:
+    return f"✦彡巛〢 {text} 〢巛彡✦"
+
+
 # ============================================================
 # ЛОКАЛИЗАЦИЯ
-# ------------------------------------------------------------
-# Тексты содержат эмодзи только там, где они были в оригинале.
 # ============================================================
 TEXTS: dict[str, tuple[str, str]] = {
     "cfg_title":               ("⚙️ Настройки", "⚙️ Settings"),
@@ -168,6 +191,7 @@ TEXTS: dict[str, tuple[str, str]] = {
     "cfg_stickers":            ("🎨 Стикеры", "🎨 Stickers"),
     "cfg_autoreply":           ("🗣 Автоотв.", "🗣 Auto-reply"),
     "cfg_random":              ("📢 Рандом", "📢 Random"),
+    "cfg_websearch":           ("🔎 Веб-поиск", "🔎 Web search"),
     "cfg_edit_prompt":         ("📝 Изменить промпт", "📝 Edit prompt"),
     "cfg_reset_memory":        ("🧹 Сбросить память", "🧹 Reset memory"),
     "cfg_reset_prompt":        ("♻️ Сбросить промпт", "♻️ Reset prompt"),
@@ -208,55 +232,57 @@ TEXTS: dict[str, tuple[str, str]] = {
     "prompt_saved":            ("Промпт сохранён ({0} символов)", "Prompt saved ({0} chars)"),
     "prompt_cancelled":        ("Изменение промпта отменено", "Prompt edit cancelled"),
 
+    # ---- МЕНЮ (без гif) ----
     "menu_title":              ("Кульш AI — главное меню", "Kulsh AI — Main Menu"),
     "menu_intro": (
-        "Открытая языковая модель с набором встроенных инструментов. "
-        "Ниже — основные разделы и команды.",
-        "An open-source language model with a set of built-in tools. "
-        "Below are the main sections and commands.",
+        "Открытая языковая модель с набором встроенных инструментов, "
+        "веб-поиском и генерацией инфографики.",
+        "Open-source language model with built-in tools, web search and infographic generation.",
     ),
     "menu_available":          ("Доступно:", "Available:"),
-    "menu_mini_app":           ("Mini App — расширенный чат с ИИ внутри Telegram",
-                                "Mini App — extended AI chat inside Telegram"),
-    "menu_settings_item":      ("Настройки — язык, тема, модель, промпт, автоответы",
-                                "Settings — language, theme, model, prompt, auto-replies"),
+    "menu_mini_app":           ("Mini App — расширенный чат с ИИ",
+                                "Mini App — extended AI chat"),
+    "menu_settings_item":      ("Настройки — язык, тема, модель, промпт, поиск",
+                                "Settings — language, theme, model, prompt, search"),
     "menu_commands":           ("Команды — полный список возможностей",
                                 "Commands — full feature list"),
     "menu_donate_item":        ("Донат — поддержка разработки", "Donate — support development"),
     "menu_github_item":        ("GitHub — исходный код проекта", "GitHub — project source code"),
 
-    "start_title":             ("Кульш на связи", "Kulsh is online"),
+    # ---- START (с эмодзи как в оригинале) ----
+    "start_title":             ("🍷🗿 Кульш на связи", "🍷🗿 Kulsh is online"),
     "start_intro": (
-        "Открытая языковая модель с возможностями анализа изображений, "
-        "оценки внешности и настройки под себя. Работает в Telegram и Discord.",
-        "An open-source language model with image analysis, looksmaxxing "
-        "and personal configuration. Available in Telegram and Discord.",
+        "Открытая языковая модель с анализом изображений, веб-поиском, "
+        "генерацией инфографики и настройкой под себя. Telegram и Discord.",
+        "Open-source language model with image analysis, web search, "
+        "infographic generation and personal config. Telegram and Discord.",
     ),
-    "start_where":             ("С чего начать:", "Where to start:"),
-    "start_mini_app":          ("Mini App — расширенный чат с ИИ",
-                                "Mini App — extended AI chat"),
-    "start_menu":              ("Меню — все разделы и настройки",
-                                "Menu — all sections and settings"),
-    "start_config":            ("<code>кульш конфиг</code> — тонкая настройка под тебя",
-                                "<code>kulsh config</code> — tune the bot"),
+    "start_where":             ("🚀 С чего начать:", "🚀 Where to start:"),
+    "start_mini_app":          ("🚀 Mini App — расширенный чат с ИИ",
+                                "🚀 Mini App — extended AI chat"),
+    "start_menu":              ("📖 Меню — все разделы и настройки",
+                                "📖 Menu — all sections and settings"),
+    "start_config":            ("⚙️ <code>кульш конфиг</code> — тонкая настройка под тебя",
+                                "⚙️ <code>kulsh config</code> — tune the bot"),
 
-    "btn_open_mini":           ("Открыть Mini App", "Open Mini App"),
-    "btn_settings":            ("Настройки", "Settings"),
-    "btn_commands":            ("Команды", "Commands"),
-    "btn_menu":                ("Меню", "Menu"),
-    "btn_donate":              ("Донат", "Donate"),
-    "btn_github":              ("GitHub", "GitHub"),
-    "btn_close":               ("Закрыть", "Close"),
+    "btn_open_mini":           ("🚀 Открыть Mini App", "🚀 Open Mini App"),
+    "btn_settings":            ("⚙️ Настройки", "⚙️ Settings"),
+    "btn_commands":            ("📖 Команды", "📖 Commands"),
+    "btn_menu":                ("📖 Меню", "📖 Menu"),
+    "btn_donate":              ("💎 Донат", "💎 Donate"),
+    "btn_github":              ("🔗 GitHub", "🔗 GitHub"),
+    "btn_close":               ("❌ Закрыть", "❌ Close"),
 
-    "donate_title":            ("Поддержать Кульша", "Support Kulsh"),
+    # ---- ДОНАТ ----
+    "donate_title":            ("💎 Поддержать Кульша", "💎 Support Kulsh"),
     "donate_intro": (
-        "Донаты идут на серверы, домены и дальнейшую разработку проекта.",
-        "Donations go to servers, domains and further development of the project.",
+        "💖 Донаты идут на серверы, домены и дальнейшую разработку проекта.",
+        "💖 Donations go to servers, domains and further development.",
     ),
-    "donate_methods":          ("Способы:", "Methods:"),
-    "donate_online":           ("Онлайн-донат", "Online donation"),
-    "donate_stars_hint":       ("Telegram Stars — <code>/donate_stars &lt;N&gt;</code>",
-                                "Telegram Stars — <code>/donate_stars &lt;N&gt;</code>"),
+    "donate_methods":          ("💰 Способы:", "💰 Methods:"),
+    "donate_online":           ("💳 Онлайн-донат", "💳 Online donation"),
+    "donate_stars_hint":       ("⭐ Telegram Stars — <code>/donate_stars &lt;N&gt;</code>",
+                                "⭐ Telegram Stars — <code>/donate_stars &lt;N&gt;</code>"),
     "donate_stars_need":       ("Укажите количество звёзд: <code>/donate_stars 100</code>",
                                 "Specify star amount: <code>/donate_stars 100</code>"),
     "donate_stars_bad":        ("Неверное количество звёзд.", "Invalid star amount."),
@@ -334,6 +360,25 @@ TEXTS: dict[str, tuple[str, str]] = {
     "russian":                 ("Русский 🇷🇺", "Russian 🇷🇺"),
     "english":                 ("Английский 🇬🇧", "English 🇬🇧"),
 
+    # ---- поиск ----
+    "search_starting":         ("🔎 Ищу: {0}", "🔎 Searching: {0}"),
+    "search_nothing":          ("🔎 Ничего не нашёл по запросу.", "🔎 Nothing found."),
+    "search_off":              ("🔎 Веб-поиск выключен в настройках.",
+                                "🔎 Web search is disabled in settings."),
+    "search_need_query":       ("Использование: <code>кульш поиск &lt;запрос&gt;</code>",
+                                "Usage: <code>kulsh search &lt;query&gt;</code>"),
+    "search_source":           ("Источник", "Source"),
+    "search_results_header":   ("🔎 Результаты поиска по запросу: {0}",
+                                "🔎 Search results for: {0}"),
+
+    # ---- chart ----
+    "chart_error":             ("❌ Не удалось построить график: {0}", "❌ Chart error: {0}"),
+    "chart_built":             ("📊 Инфографика готова", "📊 Infographic ready"),
+    "chart_building":          ("📊 Строю инфографику...", "📊 Rendering infographic..."),
+    "chart_usage":             ("Использование: <code>кульш график &lt;описание&gt;</code>",
+                                "Usage: <code>kulsh chart &lt;description&gt;</code>"),
+
+    # ---- Discord ----
     "ds_only_admins":          ("только админы могут менять конфиг", "only admins can change config"),
     "ds_need_specify_ru_en":   ("Укажите <code>ru</code> или <code>en</code>.", "Specify <code>ru</code> or <code>en</code>."),
     "ds_need_specify_theme":   ("Укажите <code>тёмная</code> или <code>светлая</code>.", "Specify <code>dark</code> or <code>light</code>."),
@@ -344,6 +389,7 @@ TEXTS: dict[str, tuple[str, str]] = {
     "ds_setting_sep":          ("Разбивка: {0}", "Split: {0}"),
     "ds_setting_autoreply":    ("Автоответ: {0}", "Auto-reply: {0}"),
     "ds_setting_random":       ("Рандом: {0}", "Random: {0}"),
+    "ds_setting_websearch":    ("Веб-поиск: {0}", "Web search: {0}"),
     "ds_setting_temp":         ("Температура: {0}", "Temperature: {0}"),
     "ds_setting_prompt_reset": ("Промпт сброшен", "Prompt reset"),
     "ds_setting_prompt_set":   ("Промпт установлен", "Prompt set"),
@@ -378,7 +424,7 @@ TEXTS: dict[str, tuple[str, str]] = {
     "ds_logs_content":         ("🍷🗿 Логи сервера:", "🍷🗿 Server logs:"),
 
     "help_body": (
-        "🍷🗿 <b>Команды Кульша:</b>\n\n"
+        "🍷🗿 <b>Команды Кульша</b>\n\n"
         "<b>Общие:</b>\n"
         "/start — приветствие\n"
         "/menu — интерактивное меню\n"
@@ -387,10 +433,12 @@ TEXTS: dict[str, tuple[str, str]] = {
         "/donate_stars &lt;N&gt; — донат через Telegram Stars\n"
         "/credits — баланс кредитов\n\n"
         "<b>Настройки:</b>\n"
-        "<code>кульш конфиг</code> / <code>кульш настройки</code> — настройки (инлайн)\n\n"
+        "<code>кульш конфиг</code> — настройки (инлайн)\n\n"
         "<b>Утилиты:</b>\n"
         "<code>кульш аватарка</code> — описать аватарку\n"
         "<code>кульш вспомни медиа [N]</code> — вспомнить N медиа\n"
+        "<code>кульш поиск &lt;запрос&gt;</code> — поиск в интернете\n"
+        "<code>кульш график &lt;описание&gt;</code> — сгенерировать инфографику\n"
         "<code>кульш логи</code> — логи (админам)\n\n"
         "<b>Развлечения:</b>\n"
         "<code>кульш psl</code> — looksmaxxing\n"
@@ -401,7 +449,7 @@ TEXTS: dict[str, tuple[str, str]] = {
         "Отправь архив/текстовый файл — бот распакует, изменит, соберёт и вернёт.\n\n"
         "🚀 Mini App: {0}\n"
         "🔗 GitHub: {1}",
-        "🍷🗿 <b>Kulsh commands:</b>\n\n"
+        "🍷🗿 <b>Kulsh commands</b>\n\n"
         "<b>General:</b>\n"
         "/start — greeting\n"
         "/menu — interactive menu\n"
@@ -410,10 +458,12 @@ TEXTS: dict[str, tuple[str, str]] = {
         "/donate_stars &lt;N&gt; — donate via Telegram Stars\n"
         "/credits — credits balance\n\n"
         "<b>Settings:</b>\n"
-        "<code>kulsh config</code> / <code>kulsh settings</code> — settings (inline)\n\n"
+        "<code>kulsh config</code> — settings (inline)\n\n"
         "<b>Utilities:</b>\n"
         "<code>kulsh avatar</code> — describe avatar\n"
         "<code>kulsh recall [N]</code> — recall N media\n"
+        "<code>kulsh search &lt;query&gt;</code> — web search\n"
+        "<code>kulsh chart &lt;description&gt;</code> — generate infographic\n"
         "<code>kulsh logs</code> — logs (admins)\n\n"
         "<b>Entertainment:</b>\n"
         "<code>kulsh psl</code> — looksmaxxing\n"
@@ -443,11 +493,6 @@ def _t(lang: str, key: str, *args, **kwargs) -> str:
 
 
 def _html_to_md(text: str) -> str:
-    """
-    Переводит базовые HTML-теги в markdown-эквиваленты.
-    Нужно, потому что часть текстов (help_body и т.п.) исторически
-    используют HTML, а rich-парсер работает с markdown.
-    """
     if not text:
         return text
     text = re.sub(r'<b>(.*?)</b>', r'**\1**', text, flags=re.DOTALL | re.IGNORECASE)
@@ -504,8 +549,6 @@ user_configs: defaultdict[str, dict[str, Any]] = defaultdict(dict)
 config_msg_owners: dict[int, int] = {}
 config_trigger_msgs: dict[str, int] = {}
 prompt_waiting: dict[int, int] = {}
-menu_gif_msgs: dict[int, int] = {}
-start_gif_msgs: dict[int, int] = {}
 config_children_msgs: dict[tuple[int, int], list[int]] = {}
 credits_data: dict[str, dict[str, Any]] = {}
 tools_sessions: dict[int, dict[str, Any]] = {}
@@ -633,6 +676,7 @@ DEFAULT_USER_CONFIG = {
     "separate_enabled": True,
     "streaming_enabled": False,
     "tools_enabled": False,
+    "web_search_enabled": True,
 }
 
 
@@ -753,7 +797,6 @@ def markdown_like_to_telegram_html(text: str) -> str:
     text = re.sub(r'(?<!\*)\*(?!\*)([^*\n]+?)(?<!\*)\*(?!\*)', r'<i>\1</i>', text)
     text = re.sub(r'(?<!_)_(?!_)([^_\n]+?)(?<!_)_(?!_)', r'<i>\1</i>', text)
     text = re.sub(r'~~(.+?)~~', r'<s>\1</s>', text, flags=re.DOTALL)
-    # Возвращаем намеренно экранированные теги
     for tag in ("code", "b", "i", "u", "s", "pre"):
         text = text.replace(f'&lt;{tag}&gt;', f'<{tag}>').replace(f'&lt;/{tag}&gt;', f'</{tag}>')
     text = text.replace('&lt;a href=', '<a href=').replace('&lt;/a&gt;', '</a>')
@@ -973,13 +1016,14 @@ def _parse_inline(text: str) -> Any:
 
 
 def _make_cell(raw: str) -> dict:
+    """Ячейка таблицы. *...* → is_header=True (залитая). Все ячейки по центру."""
     s = (raw or "").strip()
     is_header = False
     inner = s
     if len(s) >= 2 and s.startswith('*') and s.endswith('*') and '*' not in s[1:-1]:
         inner = s[1:-1]
         is_header = True
-    cell: dict[str, Any] = {"text": _parse_inline(inner)}
+    cell: dict[str, Any] = {"text": _parse_inline(inner), "align": "center"}
     if is_header:
         cell["is_header"] = True
     return cell
@@ -1141,7 +1185,6 @@ def _looks_like_rich(text: str) -> bool:
         re.search(r'^>\s', text, re.MULTILINE) or
         '```' in text or
         re.search(r'\$\$.+?\$\$', text, re.DOTALL) or
-        # HTML-теги, которые умеет конвертить _html_to_md:
         re.search(r'<(b|strong|i|em|u|ins|s|strike|del|code|pre|a)\b', text, re.IGNORECASE)
     )
 
@@ -1312,7 +1355,7 @@ async def stream_draft(chat_id: int, draft_id: int, text: str) -> bool:
         return False
 
 # ============================================================
-# АНИМАЦИЯ ПРИМЕНЕНИЯ НАСТРОЕК
+# АНИМАЦИЯ ПРИМЕНЕНИЯ НАСТРОЕК (медленнее)
 # ============================================================
 APPLY_ANIMATION_FRAMES = [
     "🍷🗿",
@@ -1339,7 +1382,7 @@ async def _edit_plain_safe(chat_id: int, message_id: int, text: str, attempts: i
     return False
 
 
-async def play_apply_animation(chat_id: int, message_id: int, step_delay: float = 0.35) -> None:
+async def play_apply_animation(chat_id: int, message_id: int, step_delay: float = 0.85) -> None:
     try:
         for frame in APPLY_ANIMATION_FRAMES:
             await _edit_plain_safe(chat_id, message_id, frame)
@@ -1364,7 +1407,7 @@ async def _cleanup_config_children(chat_id: int, user_id: int) -> None:
                 pass
 
 # ============================================================
-# SYSTEM PROMPT (ОРИГИНАЛЬНЫЙ)
+# SYSTEM PROMPT
 # ============================================================
 def build_system_prompt(platform: str, chat_id: int, user_id: int) -> str:
     cfg = get_user_config(platform, chat_id, user_id)
@@ -1372,7 +1415,7 @@ def build_system_prompt(platform: str, chat_id: int, user_id: int) -> str:
     if cfg.get("custom_prompt"):
         parts.append(f"Твои обязательные инструкции: {cfg['custom_prompt']}\n\n")
 
-    if premium_functions_enabled:
+    if premium_functions_enabled and platform == "tg":
         parts.append(
             "ФОРМАТИРОВАНИЕ (Bot API 10.1 Rich Messages). Ты можешь использовать расширенный Markdown: "
             "заголовки (# H1 – ###### H6), таблицы GFM (| столбец | столбец |), маркированные и нумерованные списки, "
@@ -1385,7 +1428,7 @@ def build_system_prompt(platform: str, chat_id: int, user_id: int) -> str:
             "сравнений, кода, формул. Не форматируй каждый ответ — в обычном чате пиши простым текстом.\n\n"
         )
     else:
-        parts.append("ФОРМАТИРОВАНИЕ: расширенные функции отключены. Пиши простым текстом.\n\n")
+        parts.append("ФОРМАТИРОВАНИЕ: расширенный режим отключён. Пиши простым текстом.\n\n")
 
     parts.append(
         f"Сейчас {msk_datetime_str()} по Москве. Учитывай это в контексте.\n\n"
@@ -1402,7 +1445,7 @@ def build_system_prompt(platform: str, chat_id: int, user_id: int) -> str:
         "кто говорит — не догадывайся вслепую, спроси или обращайся нейтрально. Отвечай ТОЛЬКО последнему написавшему.\n\n"
     )
 
-    if cfg.get("separate_enabled", True):
+    if cfg.get("separate_enabled", True) and platform == "tg":
         parts.append(
             "РАЗБИВКА НА СООБЩЕНИЯ. Живые люди в чатах почти никогда не пишут длинные монологи одним сообщением. "
             "Ты можешь разбивать свой ответ на 2-4 отдельных коротких сообщения. Между частями ставь маркер "
@@ -1411,7 +1454,7 @@ def build_system_prompt(platform: str, chat_id: int, user_id: int) -> str:
             "• 'ахахаха!separateты чё реально это сделал?separateну ты даёшь'\n"
             "2-4 частей обычно достаточно.\n\n"
         )
-    else:
+    elif platform == "tg":
         parts.append(
             "РАЗБИВКА НА СООБЩЕНИЯ ОТКЛЮЧЕНА. НЕ используй маркер !separate. Пиши одним цельным сообщением.\n\n"
         )
@@ -1425,6 +1468,45 @@ def build_system_prompt(platform: str, chat_id: int, user_id: int) -> str:
         "• !gif — отправить гифку.\n"
         "• !separate — разделить ответ на несколько сообщений."
     )
+
+    if cfg.get("web_search_enabled", True):
+        parts.append(
+            "\n\n🔎 ВЕБ-ПОИСК. Ты можешь искать актуальную информацию в интернете. Если пользователь спрашивает "
+            "о свежих событиях, фактах, ценах, новостях или чём-то, чего ты точно не знаешь — твой ответ должен "
+            "НАЧИНАТЬСЯ со строки `!search <поисковый запрос>` и не содержать ничего больше. Бот выполнит поиск, "
+            "и ты получишь результаты, после чего дашь финальный ответ. Пример:\n"
+            "!search погода в москве завтра\n\n"
+            "Не используй !search для общих знаний или болтовни."
+        )
+
+    if premium_functions_enabled:
+        parts.append(
+            "\n\n📊 ГЕНЕРАЦИЯ ИНФОГРАФИКИ. Ты можешь сгенерировать красивое инфографическое изображение. "
+            "Для этого включи в ответ блок:\n"
+            "!chart\n```json\n{...JSON-спецификация...}\n```\n"
+            "Спецификация (JSON):\n"
+            "{\n"
+            '  "theme": "dark_modern" | "light_minimal" | "ocean" | "retro",\n'
+            '  "title": "Заголовок",\n'
+            '  "subtitle": "Подзаголовок (опц.)",\n'
+            '  "blocks": [\n'
+            '    {"type": "heading", "text": "..."},\n'
+            '    {"type": "text", "text": "..."},\n'
+            '    {"type": "divider"},\n'
+            '    {"type": "bar", "title": "...", "labels": ["A","B"], "values": [10,20], "height": 320},\n'
+            '    {"type": "line", "title": "...", "x": ["Jan","Feb"], "series": [{"name":"S1","y":[1,2]}], "height": 320},\n'
+            '    {"type": "pie", "title": "...", "labels": ["A","B"], "values": [10,20], "height": 340},\n'
+            '    {"type": "pie3d", "title": "...", "labels": ["A","B"], "values": [10,20], "height": 340},\n'
+            '    {"type": "table", "title": "...", "headers": ["A","B"], "rows": [["1","2"],["3","4"]]},\n'
+            '    {"type": "image", "url": "https://..."},\n'
+            '    {"type": "image", "source": "user", "index": 0}\n'
+            "  ]\n"
+            "}\n"
+            "Используй !chart когда уместно: для сравнений, статистики, диаграмм, отчётов. "
+            "Числа в values должны быть реальными числами (не строками). "
+            "Цвета опционально можно указать массивом hex-строк в поле \"colors\". "
+            "Размер по умолчанию 1400x1000, высота расширяется автоматически под блоки."
+        )
 
     if chat_id in long_term_memory:
         mem_data = long_term_memory[chat_id]
@@ -1631,6 +1713,868 @@ async def extract_memory(chat_id: str, user_message: str, bot_answer: str):
         logger.error(f"extract_memory: {e}")
 
 # ============================================================
+# WEB SEARCH
+# ============================================================
+USER_AGENT = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+              "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
+
+
+async def web_search_ddg(query: str, max_results: int = 6) -> list[dict]:
+    """
+    Поиск через DuckDuckGo HTML-версию. Без API-ключей, бесплатно.
+    Пробуем сначала lite-интерфейс, потом обычный.
+    """
+    results: list[dict] = []
+    headers = {
+        "User-Agent": USER_AGENT,
+        "Accept-Language": "ru,en;q=0.8",
+        "Accept": "text/html,application/xhtml+xml",
+    }
+    endpoints = [
+        ("https://lite.duckduckgo.com/lite/", {"q": query}),
+        ("https://html.duckduckgo.com/html/", {"q": query}),
+    ]
+    async with aiohttp.ClientSession(headers=headers) as session:
+        for url, data in endpoints:
+            try:
+                async with session.post(url, data=data, timeout=15,
+                                        allow_redirects=True) as resp:
+                    if resp.status != 200:
+                        continue
+                    page = await resp.text()
+            except Exception as e:
+                logger.debug(f"ddg search {url} err: {e}")
+                continue
+
+            # ---- lite version parsing ----
+            # results are in <a rel="nofollow" href="..."> title </a> and next <td class="result-snippet">
+            lite_pattern = re.compile(
+                r'<a\s+rel="nofollow"\s+href="([^"]+)"[^>]*>(.*?)</a>.*?'
+                r'<td\s+class="result-snippet">(.*?)</td>',
+                re.DOTALL | re.IGNORECASE,
+            )
+            for m in lite_pattern.finditer(page):
+                href = _ddg_unwrap(m.group(1))
+                title = _strip_tags(m.group(2))
+                snippet = _strip_tags(m.group(3))
+                if href and title:
+                    results.append({
+                        "title": html.unescape(title).strip(),
+                        "url": href,
+                        "snippet": html.unescape(snippet).strip(),
+                    })
+                if len(results) >= max_results:
+                    return results
+
+            if len(results) >= max_results:
+                return results
+
+            # ---- html version parsing ----
+            html_pattern = re.compile(
+                r'<a[^>]+class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>.*?'
+                r'<a[^>]+class="result__snippet"[^>]*>(.*?)</a>',
+                re.DOTALL | re.IGNORECASE,
+            )
+            for m in html_pattern.finditer(page):
+                href = _ddg_unwrap(m.group(1))
+                title = _strip_tags(m.group(2))
+                snippet = _strip_tags(m.group(3))
+                if href and title:
+                    results.append({
+                        "title": html.unescape(title).strip(),
+                        "url": href,
+                        "snippet": html.unescape(snippet).strip(),
+                    })
+                if len(results) >= max_results:
+                    return results
+
+            if results:
+                return results
+
+    return results[:max_results]
+
+
+def _ddg_unwrap(url: str) -> str:
+    if not url:
+        return url
+    if url.startswith("//"):
+        url = "https:" + url
+    if "duckduckgo.com/l/" in url:
+        try:
+            qs = parse_qs(urlparse(url).query)
+            if "uddg" in qs:
+                return unquote(qs["uddg"][0])
+        except Exception:
+            pass
+    return url
+
+
+def _strip_tags(text: str) -> str:
+    return re.sub(r'<[^>]+>', '', text or '')
+
+
+async def web_search_wikipedia(query: str, max_results: int = 3) -> list[dict]:
+    """Wikipedia API — бесплатный, без ключей. Для фактов."""
+    try:
+        params = {
+            "action": "query",
+            "list": "search",
+            "srsearch": query,
+            "format": "json",
+            "srlimit": max_results,
+        }
+        headers = {"User-Agent": USER_AGENT}
+        async with aiohttp.ClientSession(headers=headers) as session:
+            async with session.get("https://ru.wikipedia.org/w/api.php",
+                                   params=params, timeout=10) as resp:
+                if resp.status != 200:
+                    return []
+                data = await resp.json()
+        out = []
+        for item in data.get("query", {}).get("search", [])[:max_results]:
+            title = item.get("title", "")
+            snippet = _strip_tags(item.get("snippet", ""))
+            url = "https://ru.wikipedia.org/wiki/" + quote_plus(title.replace(" ", "_"))
+            out.append({"title": title, "url": url, "snippet": snippet})
+        return out
+    except Exception as e:
+        logger.debug(f"wiki search err: {e}")
+        return []
+
+
+async def web_search(query: str, max_results: int = 6) -> list[dict]:
+    """Комбинирует DDG + Wikipedia."""
+    ddg_results = await web_search_ddg(query, max_results=max_results)
+    if len(ddg_results) >= max_results:
+        return ddg_results[:max_results]
+    wiki_results = await web_search_wikipedia(query, max_results=max_results)
+    seen = {r["url"] for r in ddg_results}
+    for r in wiki_results:
+        if r["url"] not in seen:
+            ddg_results.append(r)
+            seen.add(r["url"])
+            if len(ddg_results) >= max_results:
+                break
+    return ddg_results[:max_results]
+
+
+def _format_search_results(results: list[dict], max_chars: int = 4000) -> str:
+    lines = []
+    for i, r in enumerate(results, 1):
+        t = (r.get("title") or "").strip()
+        u = (r.get("url") or "").strip()
+        s = (r.get("snippet") or "").strip()
+        block = f"[{i}] {t}\nURL: {u}\n{s}"
+        lines.append(block)
+    joined = "\n\n".join(lines)
+    return joined[:max_chars]
+
+
+def _extract_search_marker(text: str) -> tuple[str | None, str]:
+    if not text:
+        return None, text
+    m = re.match(r'^\s*!search\s+(.+?)(?:\n|$)', text)
+    if m:
+        return m.group(1).strip(), text[m.end():].lstrip()
+    return None, text
+
+# ============================================================
+# CHART / INFOGRAPHIC ENGINE (Pillow)
+# ============================================================
+_PALETTE = [
+    "#4F46E5", "#06B6D4", "#10B981", "#F59E0B", "#EF4444",
+    "#8B5CF6", "#EC4899", "#14B8A6", "#F97316", "#6366F1",
+]
+
+CHART_THEMES = {
+    "dark_modern": {
+        "bg": "#0E0E12", "bg_grad": ("#171728", "#0E0E12"),
+        "text": "#F3F4F6", "text_dim": "#9CA3AF", "grid": "#2A2A3A",
+        "accent": "#10B981", "card": "#16161E", "border": "#2A2A3A",
+    },
+    "light_minimal": {
+        "bg": "#FAFAFB", "bg_grad": ("#FFFFFF", "#F1F1F4"),
+        "text": "#111827", "text_dim": "#4B5563", "grid": "#E5E7EB",
+        "accent": "#2563EB", "card": "#FFFFFF", "border": "#E5E7EB",
+    },
+    "ocean": {
+        "bg": "#0A1929", "bg_grad": ("#103A5C", "#0A1929"),
+        "text": "#E5F2FF", "text_dim": "#7FB1D6", "grid": "#17334B",
+        "accent": "#3FB0FF", "card": "#0F2538", "border": "#17334B",
+    },
+    "retro": {
+        "bg": "#FBF6E9", "bg_grad": ("#FFF8E7", "#F0E2B6"),
+        "text": "#2D2B22", "text_dim": "#6B6350", "grid": "#D8CBA5",
+        "accent": "#D97706", "card": "#FFFAEB", "border": "#D8CBA5",
+    },
+}
+
+
+def _hex_to_rgb(h: str) -> tuple[int, int, int]:
+    h = (h or "#000000").lstrip("#")
+    if len(h) == 3:
+        h = "".join(c * 2 for c in h)
+    if len(h) != 6:
+        return (0, 0, 0)
+    return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
+
+
+def _rgb_to_hex(rgb: tuple[int, int, int]) -> str:
+    return "#{:02X}{:02X}{:02X}".format(*[max(0, min(255, int(c))) for c in rgb])
+
+
+def _lerp_color(c1, c2, t: float) -> tuple[int, int, int]:
+    r1, g1, b1 = _hex_to_rgb(c1) if isinstance(c1, str) else c1
+    r2, g2, b2 = _hex_to_rgb(c2) if isinstance(c2, str) else c2
+    return (
+        int(r1 + (r2 - r1) * t),
+        int(g1 + (g2 - g1) * t),
+        int(b1 + (b2 - b1) * t),
+    )
+
+
+def _darken(c, factor: float = 0.7):
+    rgb = _hex_to_rgb(c) if isinstance(c, str) else c
+    return tuple(int(v * factor) for v in rgb)
+
+
+def _lighten(c, factor: float = 1.3):
+    rgb = _hex_to_rgb(c) if isinstance(c, str) else c
+    return tuple(min(255, int(v * factor)) for v in rgb)
+
+
+def _make_gradient_bg(w: int, h: int, c1: str, c2: str) -> Image.Image:
+    base = Image.new("RGB", (1, h), _hex_to_rgb(c1))
+    for y in range(h):
+        t = y / max(1, h - 1)
+        base.putpixel((0, y), _lerp_color(c1, c2, t))
+    return base.resize((w, h), Image.BILINEAR)
+
+
+def _load_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
+    candidates_bold = [
+        os.path.join("fonts", "Montserrat-Bold.ttf"),
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        "/Library/Fonts/Arial Bold.ttf",
+        "arialbd.ttf",
+        "DejaVuSans-Bold.ttf",
+    ]
+    candidates_reg = [
+        os.path.join("fonts", "Montserrat-Regular.ttf"),
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/Library/Fonts/Arial.ttf",
+        "arial.ttf",
+        "DejaVuSans.ttf",
+    ]
+    candidates = candidates_bold if bold else candidates_reg
+    for p in candidates:
+        try:
+            return ImageFont.truetype(p, size)
+        except (IOError, OSError):
+            continue
+    return ImageFont.load_default()
+
+
+def _text_size(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont) -> tuple[int, int]:
+    bbox = draw.textbbox((0, 0), text or " ", font=font)
+    return bbox[2] - bbox[0], bbox[3] - bbox[1]
+
+
+def _draw_centered_text(draw, xy_box, text, font, fill):
+    x0, y0, x1, y1 = xy_box
+    w, h = _text_size(draw, text, font)
+    x = x0 + (x1 - x0 - w) // 2
+    y = y0 + (y1 - y0 - h) // 2
+    draw.text((x, y), text, font=font, fill=fill)
+
+
+def _wrap_lines(draw, text: str, font, max_width: int) -> list[str]:
+    words = (text or "").split()
+    lines: list[str] = []
+    cur = ""
+    for w in words:
+        test = (cur + " " + w).strip()
+        tw, _ = _text_size(draw, test, font)
+        if tw <= max_width:
+            cur = test
+        else:
+            if cur:
+                lines.append(cur)
+            cur = w
+    if cur:
+        lines.append(cur)
+    return lines or [""]
+
+
+def _render_bar_chart(canvas: Image.Image, box: tuple[int, int, int, int],
+                      spec: dict, theme: dict) -> None:
+    x0, y0, x1, y1 = box
+    draw = ImageDraw.Draw(canvas)
+    title = spec.get("title") or ""
+    labels = [str(v) for v in spec.get("labels", [])]
+    values = [float(v) for v in spec.get("values", []) if _is_number(v)]
+    if not values:
+        return
+    colors = spec.get("colors") or _PALETTE
+    # card
+    draw.rounded_rectangle(box, radius=16, fill=theme["card"], outline=theme["border"], width=2)
+    inner_pad = 24
+    cx0, cy0, cx1, cy1 = x0 + inner_pad, y0 + inner_pad, x1 - inner_pad, y1 - inner_pad
+    font_title = _load_font(22, bold=True)
+    font_lab = _load_font(13)
+    font_val = _load_font(13, bold=True)
+
+    if title:
+        draw.text((cx0, cy0), title, font=font_title, fill=theme["text"])
+        cy0 += 34
+
+    # Chart area
+    chart_top = cy0 + 4
+    chart_bottom = cy1 - 36
+    chart_left = cx0 + 8
+    chart_right = cx1 - 8
+    if chart_bottom <= chart_top:
+        return
+
+    vmax = max(values) if values else 1.0
+    vmax = vmax if vmax > 0 else 1.0
+    # nice ceiling
+    magnitude = 10 ** int(math.floor(math.log10(vmax))) if vmax > 0 else 1
+    nice_vmax = math.ceil(vmax / magnitude) * magnitude
+    if nice_vmax <= 0:
+        nice_vmax = 1.0
+
+    n = len(values)
+    gap = 12
+    total_w = chart_right - chart_left
+    bar_w = max(6, int((total_w - gap * (n + 1)) / max(1, n)))
+
+    # grid + axis labels
+    steps = 5
+    font_grid = _load_font(11)
+    for i in range(steps + 1):
+        yy = chart_bottom - int((chart_bottom - chart_top) * i / steps)
+        val = nice_vmax * i / steps
+        draw.line([(chart_left, yy), (chart_right, yy)], fill=theme["grid"], width=1)
+        vs = f"{val:.2f}".rstrip("0").rstrip(".")
+        draw.text((cx0 - 4 - _text_size(draw, vs, font_grid)[0], yy - 6), vs, font=font_grid, fill=theme["text_dim"])
+
+    for idx, val in enumerate(values):
+        bx = chart_left + gap + idx * (bar_w + gap)
+        bh = int((chart_bottom - chart_top) * (val / nice_vmax))
+        by = chart_bottom - bh
+        color = colors[idx % len(colors)]
+        try:
+            rgb = _hex_to_rgb(color)
+        except Exception:
+            rgb = (79, 70, 229)
+        # gradient bar
+        bar_img = Image.new("RGB", (bar_w, max(1, bh)))
+        for yy in range(max(1, bh)):
+            t = yy / max(1, bh - 1)
+            bar_img.putpixel((0, yy), _lerp_color(_lighten(rgb, 1.25), rgb, t))
+        bar_img = bar_img.resize((bar_w, max(1, bh)), Image.BILINEAR)
+        if bh > 0:
+            canvas.paste(bar_img, (bx, by))
+        # value on top
+        vs = f"{val:g}"
+        vw, _ = _text_size(draw, vs, font_val)
+        draw.text((bx + (bar_w - vw) // 2, by - 20), vs, font=font_val, fill=theme["text"])
+        # label
+        lab = labels[idx] if idx < len(labels) else ""
+        lab = lab[:14]
+        lw, _ = _text_size(draw, lab, font_lab)
+        draw.text((bx + (bar_w - lw) // 2, chart_bottom + 8), lab, font=font_lab, fill=theme["text_dim"])
+
+
+def _render_line_chart(canvas: Image.Image, box: tuple[int, int, int, int],
+                       spec: dict, theme: dict) -> None:
+    x0, y0, x1, y1 = box
+    draw = ImageDraw.Draw(canvas)
+    title = spec.get("title") or ""
+    xs = [str(v) for v in spec.get("x", [])]
+    series = spec.get("series", []) or []
+    if not series:
+        return
+    # normalize series
+    norm_series = []
+    for s in series:
+        ys = [float(v) for v in s.get("y", []) if _is_number(v)]
+        if not ys:
+            continue
+        color = s.get("color") or _PALETTE[len(norm_series) % len(_PALETTE)]
+        norm_series.append({"name": s.get("name") or f"Series {len(norm_series) + 1}",
+                            "y": ys, "color": color})
+    if not norm_series:
+        return
+
+    draw.rounded_rectangle(box, radius=16, fill=theme["card"], outline=theme["border"], width=2)
+    inner_pad = 24
+    cx0, cy0, cx1, cy1 = x0 + inner_pad, y0 + inner_pad, x1 - inner_pad, y1 - inner_pad
+    font_title = _load_font(22, bold=True)
+    font_lab = _load_font(12)
+    font_grid = _load_font(11)
+    font_legend = _load_font(12)
+
+    if title:
+        draw.text((cx0, cy0), title, font=font_title, fill=theme["text"])
+        cy0 += 34
+
+    # legend at top-right
+    legend_x = cx1
+    legend_y = cy0 - 4
+    for s in reversed(norm_series):
+        name = s["name"][:18]
+        tw, th = _text_size(draw, name, font_legend)
+        legend_x -= tw + 24
+        draw.line([(legend_x, legend_y + 8), (legend_x + 14, legend_y + 8)],
+                  fill=_hex_to_rgb(s["color"]), width=3)
+        draw.text((legend_x + 18, legend_y), name, font=font_legend, fill=theme["text_dim"])
+
+    chart_top = cy0 + 8
+    chart_bottom = cy1 - 30
+    chart_left = cx0 + 6
+    chart_right = cx1 - 6
+    if chart_bottom <= chart_top:
+        return
+
+    all_ys = [v for s in norm_series for v in s["y"]]
+    vmin = min(all_ys)
+    vmax = max(all_ys)
+    if vmax == vmin:
+        vmax = vmin + 1
+    pad = (vmax - vmin) * 0.1
+    vmin -= pad
+    vmax += pad
+
+    steps = 5
+    for i in range(steps + 1):
+        yy = chart_bottom - int((chart_bottom - chart_top) * i / steps)
+        val = vmin + (vmax - vmin) * i / steps
+        draw.line([(chart_left, yy), (chart_right, yy)], fill=theme["grid"], width=1)
+        vs = f"{val:.2f}".rstrip("0").rstrip(".")
+        draw.text((cx0 - 4 - _text_size(draw, vs, font_grid)[0], yy - 6),
+                  vs, font=font_grid, fill=theme["text_dim"])
+
+    # X positions
+    max_len = max(len(s["y"]) for s in norm_series)
+    if max_len < 2:
+        max_len = 2
+    x_step = (chart_right - chart_left) / (max_len - 1)
+
+    def _y_to_px(v):
+        return chart_bottom - int((v - vmin) / (vmax - vmin) * (chart_bottom - chart_top))
+
+    for s in norm_series:
+        pts = [(chart_left + i * x_step, _y_to_px(v)) for i, v in enumerate(s["y"])]
+        if len(pts) >= 2:
+            draw.line(pts, fill=_hex_to_rgb(s["color"]), width=3)
+        for p in pts:
+            r = 4
+            draw.ellipse([p[0] - r, p[1] - r, p[0] + r, p[1] + r],
+                         fill=_hex_to_rgb(s["color"]), outline=theme["bg"], width=2)
+
+    # X labels
+    for i in range(max_len):
+        lab = xs[i] if i < len(xs) else str(i + 1)
+        lab = lab[:10]
+        lx = chart_left + i * x_step
+        lw, _ = _text_size(draw, lab, font_lab)
+        draw.text((lx - lw // 2, chart_bottom + 6), lab, font=font_lab, fill=theme["text_dim"])
+
+
+def _render_pie_chart(canvas: Image.Image, box: tuple[int, int, int, int],
+                      spec: dict, theme: dict, depth: int = 0) -> None:
+    x0, y0, x1, y1 = box
+    draw = ImageDraw.Draw(canvas)
+    title = spec.get("title") or ""
+    labels = [str(v) for v in spec.get("labels", [])]
+    values = [float(v) for v in spec.get("values", []) if _is_number(v)]
+    if not values:
+        return
+    colors = spec.get("colors") or _PALETTE
+    total = sum(values)
+    if total <= 0:
+        return
+
+    draw.rounded_rectangle(box, radius=16, fill=theme["card"], outline=theme["border"], width=2)
+    inner_pad = 24
+    cx0, cy0, cx1, cy1 = x0 + inner_pad, y0 + inner_pad, x1 - inner_pad, y1 - inner_pad
+
+    font_title = _load_font(22, bold=True)
+    font_legend = _load_font(13)
+    font_pct = _load_font(13, bold=True)
+
+    if title:
+        draw.text((cx0, cy0), title, font=font_title, fill=theme["text"])
+        cy0 += 34
+
+    # Pie on left half, legend on right half
+    chart_w = (cx1 - cx0)
+    pie_box = (
+        cx0 + 10,
+        cy0 + 10,
+        cx0 + min(chart_w // 2 + 40, (cy1 - cy0) + 10),
+        cy1 - 10,
+    )
+    # make it square
+    pw = pie_box[2] - pie_box[0]
+    ph = pie_box[3] - pie_box[1]
+    side = min(pw, ph)
+    pcx = pie_box[0] + pw // 2
+    pcy = pie_box[1] + ph // 2
+    px0 = pcx - side // 2
+    py0 = pcy - side // 2
+    px1 = px0 + side
+    py1 = py0 + side
+
+    start = -90
+    legend_x = px1 + 30
+    legend_y = cy0 + 20
+
+    for idx, val in enumerate(values):
+        extent = 360 * (val / total)
+        color = colors[idx % len(colors)]
+        try:
+            rgb = _hex_to_rgb(color)
+        except Exception:
+            rgb = _PALETTE[idx % len(_PALETTE)]
+            rgb = _hex_to_rgb(rgb)
+
+        if depth > 0:
+            # Draw "side wall"
+            for d in range(depth, 0, -1):
+                draw.pieslice([px0, py0 + d, px1, py1 + d],
+                              start, start + extent,
+                              fill=_darken(rgb, 0.55), outline=_darken(rgb, 0.5))
+        draw.pieslice([px0, py0, px1, py1], start, start + extent,
+                      fill=rgb, outline=theme["bg"], width=2)
+        start += extent
+
+    # Legend
+    for idx, val in enumerate(values):
+        color = colors[idx % len(colors)]
+        try:
+            rgb = _hex_to_rgb(color)
+        except Exception:
+            rgb = _hex_to_rgb(_PALETTE[idx % len(_PALETTE)])
+        pct = val / total * 100
+        lab = labels[idx] if idx < len(labels) else f"Item {idx + 1}"
+        lab_line = f"{lab}"
+        pct_line = f"{pct:.1f}%"
+        # swatch
+        draw.rectangle([legend_x, legend_y + 4, legend_x + 16, legend_y + 20], fill=rgb)
+        draw.text((legend_x + 24, legend_y), lab_line[:28], font=font_legend, fill=theme["text"])
+        pw_, _ = _text_size(draw, pct_line, font_pct)
+        draw.text((cx1 - pw_ - 4, legend_y), pct_line, font=font_pct, fill=theme["text_dim"])
+        legend_y += 28
+        if legend_y > cy1 - 20:
+            break
+
+
+def _render_table(canvas: Image.Image, box: tuple[int, int, int, int],
+                  spec: dict, theme: dict) -> None:
+    x0, y0, x1, y1 = box
+    draw = ImageDraw.Draw(canvas)
+    title = spec.get("title") or ""
+    headers = [str(h) for h in spec.get("headers", [])]
+    rows = [[str(c) for c in row] for row in spec.get("rows", [])]
+    if not headers and not rows:
+        return
+
+    draw.rounded_rectangle(box, radius=16, fill=theme["card"], outline=theme["border"], width=2)
+    inner_pad = 20
+    cx0, cy0, cx1, cy1 = x0 + inner_pad, y0 + inner_pad, x1 - inner_pad, y1 - inner_pad
+
+    font_title = _load_font(22, bold=True)
+    font_head = _load_font(14, bold=True)
+    font_row = _load_font(14)
+
+    if title:
+        draw.text((cx0, cy0), title, font=font_title, fill=theme["text"])
+        cy0 += 34
+
+    n_cols = max([len(headers)] + [len(r) for r in rows] + [1])
+    col_w = (cx1 - cx0) // n_cols
+    row_h = 30
+
+    y_cur = cy0 + 4
+    # header
+    if headers:
+        for i in range(n_cols):
+            label = headers[i] if i < len(headers) else ""
+            cell_x0 = cx0 + i * col_w
+            cell_x1 = cell_x0 + col_w
+            draw.rectangle([cell_x0, y_cur, cell_x1, y_cur + row_h],
+                           fill=theme["accent"])
+            _draw_centered_text(draw, (cell_x0 + 6, y_cur, cell_x1 - 6, y_cur + row_h),
+                                label, font_head, "#FFFFFF")
+        y_cur += row_h
+
+    # rows
+    for r_i, r in enumerate(rows):
+        if y_cur + row_h > cy1:
+            break
+        row_bg = theme["bg"] if r_i % 2 == 0 else theme["card"]
+        draw.rectangle([cx0, y_cur, cx1, y_cur + row_h], fill=row_bg)
+        for i in range(n_cols):
+            cell = r[i] if i < len(r) else ""
+            cell_x0 = cx0 + i * col_w
+            cell_x1 = cell_x0 + col_w
+            _draw_centered_text(draw, (cell_x0 + 6, y_cur, cell_x1 - 6, y_cur + row_h),
+                                cell[:40], font_row, theme["text"])
+        draw.line([(cx0, y_cur + row_h), (cx1, y_cur + row_h)], fill=theme["grid"], width=1)
+        y_cur += row_h
+
+
+async def _load_remote_image(url: str) -> Image.Image | None:
+    try:
+        data = await download_image_bytes(url)
+        return Image.open(BytesIO(data)).convert("RGBA")
+    except Exception as e:
+        logger.warning(f"load_remote_image err: {e}")
+        return None
+
+
+def _render_image_block(canvas: Image.Image, box: tuple[int, int, int, int],
+                        img: Image.Image, theme: dict) -> None:
+    x0, y0, x1, y1 = box
+    draw = ImageDraw.Draw(canvas)
+    draw.rounded_rectangle(box, radius=16, fill=theme["card"], outline=theme["border"], width=2)
+    inner_pad = 12
+    ix0, iy0, ix1, iy1 = x0 + inner_pad, y0 + inner_pad, x1 - inner_pad, y1 - inner_pad
+    box_w = ix1 - ix0
+    box_h = iy1 - iy0
+    if box_w <= 0 or box_h <= 0:
+        return
+    im = img.copy()
+    im.thumbnail((box_w, box_h), Image.LANCZOS)
+    ox = ix0 + (box_w - im.width) // 2
+    oy = iy0 + (box_h - im.height) // 2
+    if im.mode == "RGBA":
+        canvas.paste(im, (ox, oy), im)
+    else:
+        canvas.paste(im, (ox, oy))
+
+
+def _is_number(x) -> bool:
+    try:
+        float(x)
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
+async def render_infographic(spec: dict, user_images: list[bytes] | None = None) -> BytesIO:
+    """
+    Строит инфографику по спецификации.
+    spec = {
+        "theme": "dark_modern",
+        "title": "...",
+        "subtitle": "...",
+        "width": 1400,
+        "blocks": [ {...}, ... ]
+    }
+    Возвращает BytesIO с PNG.
+    """
+    theme_name = spec.get("theme", "dark_modern")
+    theme = CHART_THEMES.get(theme_name, CHART_THEMES["dark_modern"])
+
+    width = int(spec.get("width", 1400))
+    title = spec.get("title") or ""
+    subtitle = spec.get("subtitle") or ""
+    blocks = spec.get("blocks", []) or []
+
+    # Preload images (URL or user references)
+    preloaded: dict[int, Image.Image] = {}
+    for idx, block in enumerate(blocks):
+        if not isinstance(block, dict):
+            continue
+        if block.get("type") == "image":
+            src = block.get("source", "url")
+            if src == "user" and user_images:
+                i = int(block.get("index", 0))
+                if 0 <= i < len(user_images):
+                    try:
+                        preloaded[idx] = Image.open(BytesIO(user_images[i])).convert("RGBA")
+                    except Exception:
+                        pass
+            elif src == "url" and block.get("url"):
+                img = await _load_remote_image(block["url"])
+                if img is not None:
+                    preloaded[idx] = img
+
+    # Precompute heights
+    # Approximate: heading 60, text computed by width, divider 32, chart uses "height" or default 340,
+    # table uses headers/rows, image uses "height" or 400.
+    padding = 40
+    inner_w = width - padding * 2
+
+    # measure text heights
+    tmp_img = Image.new("RGB", (10, 10))
+    tmp_draw = ImageDraw.Draw(tmp_img)
+    font_title = _load_font(44, bold=True)
+    font_sub = _load_font(20)
+    font_h = _load_font(28, bold=True)
+    font_text = _load_font(18)
+
+    heights: list[int] = []
+    for idx, block in enumerate(blocks):
+        if not isinstance(block, dict):
+            heights.append(0)
+            continue
+        t = block.get("type", "text")
+        if t == "heading":
+            heights.append(52)
+        elif t == "text":
+            lines = _wrap_lines(tmp_draw, block.get("text", ""), font_text, inner_w)
+            heights.append(max(30, len(lines) * 26 + 8))
+        elif t == "divider":
+            heights.append(36)
+        elif t == "bar":
+            heights.append(int(block.get("height", 340)))
+        elif t == "line":
+            heights.append(int(block.get("height", 340)))
+        elif t == "pie":
+            heights.append(int(block.get("height", 360)))
+        elif t == "pie3d":
+            heights.append(int(block.get("height", 380)))
+        elif t == "table":
+            n_rows = len(block.get("rows", []))
+            n_head = 1 if block.get("headers") else 0
+            heights.append(70 + (n_rows + n_head) * 30)
+        elif t == "image":
+            heights.append(int(block.get("height", 400)))
+        else:
+            heights.append(0)
+
+    header_h = 0
+    if title:
+        header_h += 66
+    if subtitle:
+        header_h += 34
+
+    total_h = padding * 2 + header_h + sum(heights) + max(0, len(blocks) - 1) * 20
+    total_h = max(600, total_h)
+
+    # Draw background
+    bg_c1, bg_c2 = theme.get("bg_grad", (theme["bg"], theme["bg"]))
+    canvas = _make_gradient_bg(width, total_h, bg_c1, bg_c2).convert("RGBA")
+
+    draw = ImageDraw.Draw(canvas)
+
+    # Title
+    y = padding
+    if title:
+        draw.text((padding, y), title, font=font_title, fill=theme["text"])
+        y += 58
+    if subtitle:
+        draw.text((padding, y), subtitle, font=font_sub, fill=theme["text_dim"])
+        y += 34
+    if title or subtitle:
+        # subtle divider
+        draw.line([(padding, y), (width - padding, y)], fill=theme["border"], width=2)
+        y += 8
+
+    # Blocks
+    for idx, block in enumerate(blocks):
+        h = heights[idx]
+        if h <= 0 or not isinstance(block, dict):
+            continue
+        box = (padding, y, width - padding, y + h)
+        t = block.get("type", "text")
+
+        if t == "heading":
+            _draw_centered_text(draw, (box[0], box[1], box[2], box[1] + h),
+                                block.get("text", ""), font_h, theme["text"])
+        elif t == "text":
+            lines = _wrap_lines(draw, block.get("text", ""), font_text, inner_w)
+            ty = y
+            for line in lines:
+                draw.text((padding, ty), line, font=font_text, fill=theme["text"])
+                ty += 26
+        elif t == "divider":
+            mid_y = y + h // 2
+            draw.line([(padding + 20, mid_y), (width - padding - 20, mid_y)],
+                      fill=theme["border"], width=2)
+        elif t == "bar":
+            _render_bar_chart(canvas, box, block, theme)
+        elif t == "line":
+            _render_line_chart(canvas, box, block, theme)
+        elif t == "pie":
+            _render_pie_chart(canvas, box, block, theme, depth=0)
+        elif t == "pie3d":
+            _render_pie_chart(canvas, box, block, theme, depth=max(12, h // 20))
+        elif t == "table":
+            _render_table(canvas, box, block, theme)
+        elif t == "image":
+            img = preloaded.get(idx)
+            if img is not None:
+                _render_image_block(canvas, box, img, theme)
+
+        y += h + 20
+
+    out = BytesIO()
+    canvas.convert("RGB").save(out, format="PNG", optimize=True)
+    out.seek(0)
+    return out
+
+
+def _extract_chart_marker(text: str) -> tuple[dict | None, str]:
+    if not text or "!chart" not in text:
+        return None, text
+    # try fenced first
+    m = re.search(r'!chart\s*\n?```(?:json)?\s*(\{[\s\S]*?\})\s*```', text)
+    if not m:
+        # bare json (greedy balanced)
+        idx = text.find("!chart")
+        if idx >= 0:
+            start = text.find("{", idx)
+            if start >= 0:
+                depth = 0
+                end = -1
+                in_str = False
+                esc = False
+                for i in range(start, len(text)):
+                    c = text[i]
+                    if esc:
+                        esc = False
+                        continue
+                    if c == "\\":
+                        esc = True
+                        continue
+                    if c == '"':
+                        in_str = not in_str
+                        continue
+                    if in_str:
+                        continue
+                    if c == "{":
+                        depth += 1
+                    elif c == "}":
+                        depth -= 1
+                        if depth == 0:
+                            end = i + 1
+                            break
+                if end > 0:
+                    raw = text[start:end]
+                    try:
+                        spec = json.loads(raw)
+                        remaining = (text[:idx] + text[end:]).strip()
+                        return spec, remaining
+                    except Exception:
+                        pass
+        return None, text
+    try:
+        spec = json.loads(m.group(1))
+        remaining = (text[:m.start()] + text[m.end():]).strip()
+        return spec, remaining
+    except Exception as e:
+        logger.warning(f"chart json parse fail: {e}")
+        return None, text
+
+# ============================================================
 # УТИЛИТЫ-МАРКЕРЫ
 # ============================================================
 UTILITY_PATTERNS = {
@@ -1756,11 +2700,11 @@ async def get_avatar_description_tg(message, chat_id, user_id, lang: str = "ru")
         prompt = (
             f"Ты только что посмотрел аватарку пользователя {name} {uname}. "
             f"Опиши коротко (1-2 предложения) в стиле Кульша. Без markdown. "
-            f"НЕ используй маркеры !separate, !avatar, !recall_media, !sticker, !gif."
+            f"НЕ используй маркеры !separate, !avatar, !recall_media, !sticker, !gif, !search, !chart."
             if lang == "ru" else
             f"You've just seen the avatar of {name} {uname}. "
             f"Describe briefly (1-2 sentences) in Kulsh's style. No markdown. "
-            f"Do NOT use markers !separate, !avatar, !recall_media, !sticker, !gif."
+            f"Do NOT use markers !separate, !avatar, !recall_media, !sticker, !gif, !search, !chart."
         )
         return await ask_ai_async(
             prompt=prompt, image_bytes=img_bytes, image_mime="image/jpeg",
@@ -1792,11 +2736,11 @@ async def get_avatar_description_ds(message, chat_id, user_id, lang: str = "ru")
         prompt = (
             f"Ты только что посмотрел аватарку пользователя {name}. "
             f"Опиши коротко (1-2 предложения) в стиле Кульша. Без markdown. "
-            f"НЕ используй маркеры !separate, !avatar, !recall_media, !sticker, !gif."
+            f"НЕ используй маркеры !separate, !avatar, !recall_media, !sticker, !gif, !search, !chart."
             if lang == "ru" else
             f"You've just seen the avatar of {name}. "
             f"Describe briefly (1-2 sentences) in Kulsh's style. No markdown. "
-            f"Do NOT use markers !separate, !avatar, !recall_media, !sticker, !gif."
+            f"Do NOT use markers !separate, !avatar, !recall_media, !sticker, !gif, !search, !chart."
         )
         return await ask_ai_async(
             prompt=prompt, image_bytes=img_bytes, image_mime="image/jpeg",
@@ -1832,11 +2776,11 @@ async def get_recall_media_description_tg(message, chat_id, user_id, n=3, lang: 
             prompt = (
                 f"Ты вспоминаешь недавние медиа. Список:\n{meta}\n\n"
                 f"Коротко прокомментируй в стиле Кульша. Без markdown. "
-                f"НЕ используй маркеры !separate, !avatar, !recall_media, !sticker, !gif."
+                f"НЕ используй маркеры !separate, !avatar, !recall_media, !sticker, !gif, !search, !chart."
                 if lang == "ru" else
                 f"You recall recent media. List:\n{meta}\n\n"
                 f"Comment briefly in Kulsh's style. No markdown. "
-                f"Do NOT use markers !separate, !avatar, !recall_media, !sticker, !gif."
+                f"Do NOT use markers !separate, !avatar, !recall_media, !sticker, !gif, !search, !chart."
             )
             return await ask_ai_async(
                 prompt=prompt, chat_id=chat_id, user_id=user_id, platform="tg",
@@ -1847,10 +2791,10 @@ async def get_recall_media_description_tg(message, chat_id, user_id, n=3, lang: 
     try:
         prompt = (
             "Ты вспоминаешь последнее медиа. Опиши коротко в стиле Кульша. Без markdown. "
-            "НЕ используй маркеры !separate, !avatar, !recall_media, !sticker, !gif."
+            "НЕ используй маркеры !separate, !avatar, !recall_media, !sticker, !gif, !search, !chart."
             if lang == "ru" else
             "You recall the last media. Describe briefly in Kulsh's style. No markdown. "
-            "Do NOT use markers !separate, !avatar, !recall_media, !sticker, !gif."
+            "Do NOT use markers !separate, !avatar, !recall_media, !sticker, !gif, !search, !chart."
         )
         return await ask_ai_async(
             prompt=prompt, image_bytes=img_bytes, image_mime="image/jpeg",
@@ -1910,7 +2854,7 @@ def is_battle_command(text: str) -> bool:
     return bool(re.match(r'^(кульш\s+)?(battle|баттл|батл)$', t))
 
 # ============================================================
-# INFOGRAPHIC
+# INFOGRAPHIC (looksmaxxing) — существующий
 # ============================================================
 def load_font(size: int):
     font_path = os.path.join("fonts", "Montserrat-Bold.ttf")
@@ -2418,7 +3362,6 @@ def btn(text: str, style: str | None = None, **kwargs) -> StyledButton:
 
 
 def _mini_app_button(lang: str, is_private: bool) -> StyledButton:
-    """web_app работает только в приватных чатах; в группах используем url."""
     text = _t(lang, "btn_open_mini")
     if is_private:
         return btn(text, style="primary", web_app=WebAppInfo(url=MINI_APP_URL))
@@ -2431,14 +3374,15 @@ def _config_text(platform: str, chat_id: int, user_id: int) -> str:
     cfg = get_user_config(platform, chat_id, user_id)
     lang = cfg.get("language", "ru")
     prompt_safe = html.escape(cfg.get("custom_prompt") or _t(lang, "cfg_prompt_default"))
-    line = "━━━━━━━━━━━━━━━━━━━━"
+    line = "═" * 22
     on = "✅"
     off = "❌"
     theme_disp = _t(lang, "dark") if cfg.get("theme", "dark") == "dark" else _t(lang, "light")
     credits = get_user_credits(platform, user_id)
     stream_txt = f"{on if cfg.get('streaming_enabled') else off} · {'premium' if premium_functions_enabled else 'off'}"
+    search_txt = on if cfg.get("web_search_enabled", True) else off
     return (
-        f"{_t(lang, 'cfg_title')}\n{line}\n"
+        f"✦ {_t(lang, 'cfg_title')} ✦\n{line}\n"
         f"{_t(lang, 'cfg_lang')}: {_t(lang, 'russian') if lang == 'ru' else _t(lang, 'english')}\n"
         f"{_t(lang, 'cfg_theme')}: {theme_disp}\n"
         f"{_t(lang, 'cfg_model')}: {model_display_name(cfg.get('model'), lang)}\n"
@@ -2448,6 +3392,7 @@ def _config_text(platform: str, chat_id: int, user_id: int) -> str:
         f"{_t(lang, 'cfg_stickers')}: {on if cfg.get('stickers_enabled', True) else off}\n"
         f"{_t(lang, 'cfg_autoreply')}: {on if cfg.get('random_reply_enabled') else off}\n"
         f"{_t(lang, 'cfg_random')}: {on if cfg.get('random_messages_enabled', True) else off}\n"
+        f"{_t(lang, 'cfg_websearch')}: {search_txt}\n"
         f"{_t(lang, 'cfg_credits_label')}: <code>{credits}/{DAILY_CREDITS}</code>\n"
         f"{line}\n"
         f"{_t(lang, 'cfg_prompt_label')}: {prompt_safe}"
@@ -2483,6 +3428,8 @@ def build_main_config_keyboard(platform: str, chat_id: int, user_id: int) -> Inl
     kb.row(
         btn(f"{_t(lang, 'cfg_random')}: {'✅' if cfg.get('random_messages_enabled', True) else '❌'}",
             style=None, callback_data="cfg:random"),
+        btn(f"{_t(lang, 'cfg_websearch')}: {'✅' if cfg.get('web_search_enabled', True) else '❌'}",
+            style=None, callback_data="cfg:websearch"),
     )
     kb.row(
         btn(_t(lang, "cfg_edit_prompt"), style="primary", callback_data="cfg:prompt"),
@@ -2568,37 +3515,40 @@ def _model_picker_text(platform: str, chat_id: int, user_id: int) -> str:
     lang = cfg.get("language", "ru")
     return (
         f"<b>{_t(lang, 'cfg_choose_model')}</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"{'─' * 22}\n"
         f"{_t(lang, 'cfg_current')}: {model_display_name(cfg.get('model'), lang)}\n\n"
         f"<b>{_t(lang, 'cfg_auto')}</b> — {_t(lang, 'cfg_auto_hint')}"
     )
 
 # ============================================================
-# МЕНЮ / START / HELP / DONATE
+# МЕНЮ / START / HELP / DONATE (без GIF, с декором)
 # ============================================================
 def _build_menu_text(lang: str) -> str:
     return (
         "|K|*U*|L|*S*|H|\n\n"
         f"# {_t(lang, 'menu_title')}\n\n"
+        f"✦彡巛〢 ✦ 彡 巛 〢 ✦ 彡 巛 〢 ✦\n\n"
         f"{_t(lang, 'menu_intro')}\n\n"
         f"**{_t(lang, 'menu_available')}**\n"
-        f"- {_t(lang, 'menu_mini_app')}\n"
-        f"- {_t(lang, 'menu_settings_item')}\n"
-        f"- {_t(lang, 'menu_commands')}\n"
-        f"- {_t(lang, 'menu_donate_item')}\n"
-        f"- {_t(lang, 'menu_github_item')}\n"
+        f"▸ {_t(lang, 'menu_mini_app')}\n"
+        f"▸ {_t(lang, 'menu_settings_item')}\n"
+        f"▸ {_t(lang, 'menu_commands')}\n"
+        f"▸ {_t(lang, 'menu_donate_item')}\n"
+        f"▸ {_t(lang, 'menu_github_item')}\n\n"
+        f"✦ 彡 巛 〢 〢 巛 彡 ✦"
     )
 
 
 def _build_start_text(lang: str) -> str:
     return (
         f"# {_t(lang, 'start_title')}\n\n"
+        f"✦彡巛〢 ✦ 彡 巛 〢 ✦ 彡 巛 〢 ✦\n\n"
         f"{_t(lang, 'start_intro')}\n\n"
         f"**{_t(lang, 'start_where')}**\n"
-        f"- {_t(lang, 'start_mini_app')}\n"
-        f"- {_t(lang, 'start_menu')}\n"
-        f"- {_t(lang, 'start_config')}\n\n"
-        f"🚀 {MINI_APP_URL}"
+        f"▸ {_t(lang, 'start_mini_app')}\n"
+        f"▸ {_t(lang, 'start_menu')}\n"
+        f"▸ {_t(lang, 'start_config')}\n\n"
+        f"🍷🗿 {MINI_APP_URL}"
     )
 
 
@@ -2791,6 +3741,8 @@ async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
         cfg["random_reply_enabled"] = not cfg.get("random_reply_enabled", False)
     elif action == "random":
         cfg["random_messages_enabled"] = not cfg.get("random_messages_enabled", True)
+    elif action == "websearch":
+        cfg["web_search_enabled"] = not cfg.get("web_search_enabled", True)
     elif action == "reset_prompt":
         cfg["custom_prompt"] = None
         toast = _t(lang, "cfg_prompt_reset")
@@ -2822,14 +3774,10 @@ async def handle_menu_callback(call: telebot.types.CallbackQuery) -> None:
     is_private = (call.message.chat.type == 'private')
 
     if action == "close":
-        gif_id = menu_gif_msgs.pop(chat_id, None)
-        start_gif_id = start_gif_msgs.pop(chat_id, None)
-        for mid in (gif_id, start_gif_id, call.message.message_id):
-            if mid:
-                try:
-                    await tg_bot.delete_message(chat_id, mid)
-                except Exception:
-                    pass
+        try:
+            await tg_bot.delete_message(chat_id, call.message.message_id)
+        except Exception:
+            pass
         await _cleanup_config_children(chat_id, user_id)
         await tg_bot.answer_callback_query(call.id)
         return
@@ -2876,31 +3824,6 @@ async def handle_menu_callback(call: telebot.types.CallbackQuery) -> None:
 # ============================================================
 # TELEGRAM: HELP / MENU / START / DONATE
 # ============================================================
-async def _send_menu_gif(chat_id: int, reply_to: int | None, path: str, fallback_url: str) -> int | None:
-    sent = None
-    if os.path.exists(path):
-        try:
-            with open(path, 'rb') as f:
-                sent = await tg_bot.send_animation(
-                    chat_id,
-                    InputFile(f, file_name=os.path.basename(path)),
-                    reply_to_message_id=reply_to,
-                )
-        except Exception as e:
-            logger.warning(f"send local gif failed ({path}): {e}")
-            sent = None
-    if sent is None:
-        try:
-            sent = await tg_bot.send_animation(
-                chat_id, fallback_url,
-                reply_to_message_id=reply_to,
-            )
-        except Exception as e:
-            logger.warning(f"send fallback gif failed: {e}")
-            return None
-    return sent.message_id
-
-
 @tg_bot.message_handler(commands=['start'])
 async def handle_start(message: telebot.types.Message) -> None:
     args = telebot.util.extract_arguments(message.text or "")
@@ -2931,18 +3854,9 @@ async def handle_start(message: telebot.types.Message) -> None:
     lang = cfg.get("language", "ru")
     is_private = (message.chat.type == 'private')
 
-    gif_msg_id = await _send_menu_gif(
-        chat_id, message.message_id,
-        path=KULSH_GIF_PATH,
-        fallback_url=random.choice(GIF_POOL),
-    )
-    if gif_msg_id:
-        start_gif_msgs[chat_id] = gif_msg_id
-
     start_text = _build_start_text(lang)
     kb = build_start_keyboard(lang, is_private=is_private)
-    reply_to = gif_msg_id if gif_msg_id else message.message_id
-    await send_formatted(chat_id, start_text, reply_to=reply_to, reply_markup=kb)
+    await send_formatted(chat_id, start_text, reply_to=message.message_id, reply_markup=kb)
 
 
 @tg_bot.message_handler(commands=['menu'])
@@ -2955,20 +3869,9 @@ async def handle_menu(message: telebot.types.Message) -> None:
     lang = cfg.get("language", "ru")
     is_private = (message.chat.type == 'private')
 
-    gif_path = MENU_GIF_EN_PATH if lang == "en" else MENU_GIF_RU_PATH
-
-    gif_msg_id = await _send_menu_gif(
-        chat_id, message.message_id,
-        path=gif_path,
-        fallback_url=random.choice(GIF_POOL),
-    )
-    if gif_msg_id:
-        menu_gif_msgs[chat_id] = gif_msg_id
-
     menu_text = _build_menu_text(lang)
     kb = build_menu_keyboard(lang, is_private=is_private)
-    reply_to = gif_msg_id if gif_msg_id else message.message_id
-    await send_formatted(chat_id, menu_text, reply_to=reply_to, reply_markup=kb)
+    await send_formatted(chat_id, menu_text, reply_to=message.message_id, reply_markup=kb)
 
 
 @tg_bot.message_handler(commands=['help'])
@@ -2995,10 +3898,11 @@ async def handle_donate(message: telebot.types.Message) -> None:
     lang = cfg.get("language", "ru")
     text = (
         f"# {_t(lang, 'donate_title')}\n\n"
+        f"✦ 彡 巛 〢 ✦ 彡 巛 〢 ✦\n\n"
         f"{_t(lang, 'donate_intro')}\n\n"
         f"**{_t(lang, 'donate_methods')}**\n"
-        f"- {_t(lang, 'donate_online')}: {DONATE_URL}\n"
-        f"- {_t(lang, 'donate_stars_hint')}\n\n"
+        f"▸ {_t(lang, 'donate_online')}: {DONATE_URL}\n"
+        f"▸ {_t(lang, 'donate_stars_hint')}\n\n"
         f"🔗 GitHub: {GITHUB_URL}"
     )
     try:
@@ -3089,7 +3993,7 @@ async def handle_successful_payment(message: telebot.types.Message) -> None:
     await reply_tg_html(message, _t(lang, "donate_thanks", stars))
 
 # ============================================================
-# TG CONFIG / AVATAR / RECALL
+# TG CONFIG / AVATAR / RECALL / SEARCH / CHART
 # ============================================================
 async def tg_handle_config(message: telebot.types.Message) -> None:
     if message.from_user is None:
@@ -3159,6 +4063,109 @@ async def tg_handle_recall_media(message: telebot.types.Message, chat_id: int, u
         else:
             await send_tg_html(message.chat.id, seg)
 
+
+async def tg_handle_search(message: telebot.types.Message, query: str, chat_id: int, user_id: int) -> None:
+    cfg = get_user_config("tg", chat_id, user_id)
+    lang = cfg.get("language", "ru")
+    if not query.strip():
+        await reply_tg_html(message, _t(lang, "search_need_query"))
+        return
+    status = await tg_bot.send_message(chat_id, _t(lang, "search_starting", query))
+    results = await web_search(query, max_results=6)
+    try:
+        await tg_bot.delete_message(chat_id, status.message_id)
+    except Exception:
+        pass
+    if not results:
+        await reply_tg_html(message, _t(lang, "search_nothing"))
+        return
+    context = _format_search_results(results)
+    # Пусть ИИ сам сформулирует ответ на основе результатов
+    prompt = (
+        f"Пользователь искал в интернете: {query}\n\n"
+        f"Найденные результаты:\n{context}\n\n"
+        f"Сформулируй краткий ответ (3-6 предложений) на основе этих результатов. "
+        f"Если результаты не по теме — скажи об этом. "
+        f"Не выдумывай факты. Ответь в стиле Кульша. "
+        f"Без маркеров !search, !chart, !separate."
+    )
+    answer = await ask_ai_async(prompt=prompt, chat_id=chat_id, user_id=user_id, platform="tg")
+    header = f"🔎 <b>{html.escape(query)}</b>\n"
+    full = header + "\n" + (answer or "")
+    sources = []
+    for i, r in enumerate(results[:4], 1):
+        sources.append(f"{i}. [{html.escape(r.get('title', '')[:60])}]({r.get('url', '')})")
+    if sources:
+        full += "\n\n<b>" + _t(lang, "search_source") + ":</b>\n" + "\n".join(sources)
+    await send_formatted(chat_id, full, reply_to=message.message_id)
+
+
+async def tg_handle_chart_request(message: telebot.types.Message, description: str,
+                                  chat_id: int, user_id: int,
+                                  user_images: list[bytes] | None = None) -> None:
+    cfg = get_user_config("tg", chat_id, user_id)
+    lang = cfg.get("language", "ru")
+    if not description.strip():
+        await reply_tg_html(message, _t(lang, "chart_usage"))
+        return
+    status = await tg_bot.send_message(chat_id, _t(lang, "chart_building"))
+    # Просим AI сгенерировать JSON-спецификацию
+    chart_prompt = (
+        f"Сгенерируй JSON-спецификацию инфографики по описанию:\n\n{description}\n\n"
+        f"Верни ТОЛЬКО JSON-объект без markdown и без текста вокруг. "
+        f"Структура:\n"
+        f'{{"theme": "dark_modern|light_minimal|ocean|retro", "title": "...", "subtitle": "...", '
+        f'"blocks": [{{"type": "heading"|"text"|"divider"|"bar"|"line"|"pie"|"pie3d"|"table"|"image", ...}}]}}\n'
+        f"Используй реальные числовые данные, красивые заголовки. "
+        f"Для изображений с URL — {{'type':'image','url':'https://...'}}."
+    )
+    raw = await ask_ai_async(
+        prompt=chart_prompt,
+        system_instruction_override=(
+            "You are a data-visualization JSON generator. Output ONLY valid JSON. No markdown, no prose."
+        ),
+        chat_id=chat_id, user_id=user_id, platform="tg",
+    )
+    spec = None
+    try:
+        spec = json.loads(clean_json_text(raw))
+    except Exception:
+        # попробуем вытащить JSON из текста
+        m = re.search(r'\{[\s\S]*\}', raw or "")
+        if m:
+            try:
+                spec = json.loads(m.group(0))
+            except Exception:
+                spec = None
+    if not isinstance(spec, dict):
+        try:
+            await tg_bot.edit_message_text(_t(lang, "chart_error", "invalid JSON"), chat_id, status.message_id)
+        except Exception:
+            pass
+        return
+    try:
+        img = await render_infographic(spec, user_images=user_images)
+    except Exception as e:
+        logger.error(f"chart render error: {e}")
+        try:
+            await tg_bot.edit_message_text(_t(lang, "chart_error", str(e)), chat_id, status.message_id)
+        except Exception:
+            pass
+        return
+    try:
+        await tg_bot.delete_message(chat_id, status.message_id)
+    except Exception:
+        pass
+    try:
+        await tg_bot.send_photo(
+            chat_id, InputFile(img, file_name="infographic.png"),
+            caption=spec.get("title") or _t(lang, "chart_built"),
+            reply_to_message_id=message.message_id,
+        )
+    except Exception as e:
+        logger.error(f"chart send error: {e}")
+        await reply_tg_html(message, _t(lang, "chart_error", str(e)))
+
 # ============================================================
 # UTILITY EXECUTION
 # ============================================================
@@ -3209,9 +4216,11 @@ async def _stream_text_via_drafts(chat_id: int, text: str, is_private: bool = Tr
     return True
 
 # ============================================================
-# SEND TG AI RESPONSE
+# SEND TG AI RESPONSE — с обработкой !search и !chart
 # ============================================================
-async def send_tg_ai_response(message: telebot.types.Message, chat_id: int, user_id: int, answer_raw: str) -> None:
+async def send_tg_ai_response(message: telebot.types.Message, chat_id: int, user_id: int,
+                              answer_raw: str, user_text: str | None = None,
+                              user_images: list[bytes] | None = None) -> None:
     cfg = get_user_config("tg", chat_id, user_id)
     lang = cfg.get("language", "ru")
     separate_enabled = cfg.get("separate_enabled", True)
@@ -3219,6 +4228,48 @@ async def send_tg_ai_response(message: telebot.types.Message, chat_id: int, user
 
     if streaming and separate_enabled:
         streaming = False
+
+    # ----- !search -----
+    if cfg.get("web_search_enabled", True):
+        query, remaining = _extract_search_marker(answer_raw or "")
+        if query:
+            # AI хочет поискать. Делаем поиск, отдаём результаты обратно в AI.
+            results = await web_search(query, max_results=6)
+            if results:
+                context = _format_search_results(results)
+                orig = user_text or (message.text or message.caption or "")
+                follow_prompt = (
+                    f"Пользователь спросил: {orig}\n\n"
+                    f"Ты выполнил поиск: {query}\n\n"
+                    f"Результаты поиска:\n{context}\n\n"
+                    f"Ответь на основе этих результатов. Без маркеров !search, !chart. "
+                    f"Дай краткий точный ответ, ссылайся на факты, не выдумывай."
+                )
+                answer_raw = await ask_ai_async(
+                    prompt=follow_prompt,
+                    chat_id=chat_id, user_id=user_id, platform="tg",
+                )
+            else:
+                answer_raw = _t(lang, "search_nothing")
+
+    # ----- !chart -----
+    if premium_functions_enabled:
+        chart_spec, remaining = _extract_chart_marker(answer_raw or "")
+        if chart_spec:
+            try:
+                img = await render_infographic(chart_spec, user_images=user_images)
+                try:
+                    await tg_bot.send_photo(
+                        chat_id, InputFile(img, file_name="infographic.png"),
+                        caption=chart_spec.get("title") or _t(lang, "chart_built"),
+                        reply_to_message_id=message.message_id,
+                    )
+                except Exception as e:
+                    logger.error(f"chart send: {e}")
+                answer_raw = remaining
+            except Exception as e:
+                logger.error(f"chart render: {e}")
+                answer_raw = remaining + "\n" + _t(lang, "chart_error", str(e))
 
     clean_segments, markers = process_ai_response(answer_raw, separate_enabled=separate_enabled)
 
@@ -3653,6 +4704,18 @@ async def handle_tg_media(message: telebot.types.Message) -> None:
         battle_photos[message.media_group_id].append(img_bytes)
         return
 
+    # chart по описанию + фото пользователя
+    if is_dm or re.search(r'(?i)\bкульш\s+(график|chart|инфографика)', caption or ""):
+        m = re.match(r'(?i)кульш\s+(график|chart|инфографика)\s*(.*)', caption or "", re.DOTALL)
+        if m and message.photo:
+            try:
+                img_bytes = await get_tg_file_bytes(tg_bot, message.photo[-1].file_id)
+                await tg_handle_chart_request(message, m.group(2).strip() or "инфографика с этим фото",
+                                              chat_id, user_id, user_images=[img_bytes])
+            except Exception as e:
+                logger.error(f"chart with user image err: {e}")
+            return
+
     is_looksmaxxing = (
         is_looksmaxxing_command(caption) or
         (message.reply_to_message and message.reply_to_message.from_user
@@ -3789,7 +4852,8 @@ async def handle_tg_media(message: telebot.types.Message) -> None:
     answer = await ask_ai_async(messages=messages, image_bytes=image_bytes,
                                 image_mime=image_mime, chat_id=chat_id,
                                 user_id=user_id, platform="tg")
-    await send_tg_ai_response(message, chat_id, user_id, answer)
+    user_imgs = [image_bytes] if image_bytes else None
+    await send_tg_ai_response(message, chat_id, user_id, answer, user_text=prompt, user_images=user_imgs)
     asyncio.create_task(extract_memory(chat_key, f"{display_name}: [медиа] {caption}", answer))
 
 # ============================================================
@@ -3839,6 +4903,18 @@ async def handle_tg_text(message: telebot.types.Message) -> None:
 
     if tl.startswith("кульш конфиг") or tl.startswith("кульш настройки") or tl.startswith("kulsh config"):
         await tg_handle_config(message)
+        return
+
+    # ---- поиск ----
+    m = re.match(r'(?i)^(?:кульш\s+)?(?:поиск|search|найди|найти)\s+(.+)$', text.strip(), re.DOTALL)
+    if m:
+        await tg_handle_search(message, m.group(1).strip(), chat_id, user_id)
+        return
+
+    # ---- график ----
+    m = re.match(r'(?i)^(?:кульш\s+)?(?:график|chart|инфографика|диаграмма)\s+(.+)$', text.strip(), re.DOTALL)
+    if m:
+        await tg_handle_chart_request(message, m.group(1).strip(), chat_id, user_id)
         return
 
     if tl.startswith("кульш донаты") or tl.startswith("kulsh donations"):
@@ -3920,7 +4996,7 @@ async def handle_tg_text(message: telebot.types.Message) -> None:
         add_user_memory(chat_key, "TG", display_name, username, user_id, text, message_id=message.message_id)
         messages = memory_to_messages(get_chat_memory(chat_key))
         answer = await ask_ai_async(messages=messages, chat_id=chat_id, user_id=user_id, platform="tg")
-        await send_tg_ai_response(message, chat_id, user_id, answer)
+        await send_tg_ai_response(message, chat_id, user_id, answer, user_text=text)
         asyncio.create_task(extract_memory(chat_key, f"{display_name}: {text}", answer))
         asyncio.create_task(maybe_reply_to_old_message_tg(message, chat_id, user_id))
         return
@@ -4135,12 +5211,52 @@ async def perform_safe_git_update(repo_path: str) -> tuple[str, str]:
     return "ok", pull_out
 
 # ============================================================
-# DISCORD: SEND AI RESPONSE
+# DISCORD: SEND AI RESPONSE (с обработкой !search и !chart)
 # ============================================================
-async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: int, answer_raw: str) -> None:
+async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: int,
+                              answer_raw: str, user_text: str | None = None) -> None:
     cfg = get_user_config("ds", chat_id, user_id)
     lang = cfg.get("language", "ru")
     separate_enabled = cfg.get("separate_enabled", True)
+
+    # !search
+    if cfg.get("web_search_enabled", True):
+        query, _ = _extract_search_marker(answer_raw or "")
+        if query:
+            results = await web_search(query, max_results=6)
+            if results:
+                context = _format_search_results(results)
+                orig = user_text or message.content
+                follow_prompt = (
+                    f"Пользователь спросил: {orig}\n\n"
+                    f"Ты выполнил поиск: {query}\n\n"
+                    f"Результаты поиска:\n{context}\n\n"
+                    f"Ответь на основе этих результатов. Без маркеров !search, !chart. "
+                    f"Дай краткий точный ответ."
+                )
+                answer_raw = await ask_ai_async(
+                    prompt=follow_prompt,
+                    chat_id=chat_id, user_id=user_id, platform="ds",
+                )
+            else:
+                answer_raw = _t(lang, "search_nothing")
+
+    # !chart
+    if premium_functions_enabled:
+        chart_spec, remaining = _extract_chart_marker(answer_raw or "")
+        if chart_spec:
+            try:
+                img = await render_infographic(chart_spec, user_images=None)
+                try:
+                    await message.reply(file=discord.File(fp=img, filename="infographic.png"),
+                                        content=(chart_spec.get("title") or _t(lang, "chart_built"))[:1900])
+                except Exception as e:
+                    logger.error(f"ds chart send: {e}")
+                answer_raw = remaining
+            except Exception as e:
+                logger.error(f"ds chart render: {e}")
+                answer_raw = remaining + "\n" + _t(lang, "chart_error", str(e))
+
     clean_segments, markers = process_ai_response(answer_raw, separate_enabled=separate_enabled)
 
     extra_segments: list[str] = []
@@ -4203,13 +5319,14 @@ def _ds_config_embed(chat_id: int, user_id: int) -> discord.Embed:
     sep = _t(lang, "on") if cfg.get("separate_enabled", True) else _t(lang, "off")
     autoreply = _t(lang, "on") if cfg.get("random_reply_enabled", False) else _t(lang, "off")
     random_msgs = _t(lang, "on") if cfg.get("random_messages_enabled", True) else _t(lang, "off")
+    websearch = _t(lang, "on") if cfg.get("web_search_enabled", True) else _t(lang, "off")
     prompt = cfg.get("custom_prompt") or ("стандартный" if lang == "ru" else "default")
     if len(prompt) > 900:
         prompt = prompt[:900] + "..."
     theme_disp = _t(lang, "dark") if cfg.get("theme", "dark") == "dark" else _t(lang, "light")
     lang_disp = _t(lang, "russian") if lang == "ru" else _t(lang, "english")
 
-    title = "⚙️ Настройки Кульша" if lang == "ru" else "⚙️ Kulsh Settings"
+    title = "✦ Настройки Кульша ✦" if lang == "ru" else "✦ Kulsh Settings ✦"
     desc = ("Текущие параметры канала. Изменение — текстом через `кульш конфиг <параметр> <значение>`."
             if lang == "ru" else
             "Current channel parameters. Change via text `kulsh config <param> <value>`.")
@@ -4224,6 +5341,7 @@ def _ds_config_embed(chat_id: int, user_id: int) -> discord.Embed:
         embed.add_field(name="🎨 Стикеры/гифки", value=stickers, inline=True)
         embed.add_field(name="🗣 Автоответ", value=autoreply, inline=True)
         embed.add_field(name="📢 Случайные сообщения", value=random_msgs, inline=True)
+        embed.add_field(name="🔎 Веб-поиск", value=websearch, inline=True)
         embed.add_field(name="🎬 Серия", value=series, inline=True)
         embed.add_field(name="📝 Кастомный промпт", value=prompt, inline=False)
         embed.add_field(
@@ -4238,6 +5356,7 @@ def _ds_config_embed(chat_id: int, user_id: int) -> discord.Embed:
                 "`кульш конфиг стикеры вкл|выкл`\n"
                 "`кульш конфиг автоответ вкл|выкл`\n"
                 "`кульш конфиг рандом вкл|выкл`\n"
+                "`кульш конфиг поиск вкл|выкл`\n"
                 "`кульш конфиг промпт <текст|сброс>`\n"
                 "`кульш конфиг серия вкл|выкл`"
             ),
@@ -4252,6 +5371,7 @@ def _ds_config_embed(chat_id: int, user_id: int) -> discord.Embed:
         embed.add_field(name="🎨 Stickers/GIFs", value=stickers, inline=True)
         embed.add_field(name="🗣 Auto-reply", value=autoreply, inline=True)
         embed.add_field(name="📢 Random messages", value=random_msgs, inline=True)
+        embed.add_field(name="🔎 Web search", value=websearch, inline=True)
         embed.add_field(name="🎬 Series reminder", value=series, inline=True)
         embed.add_field(name="📝 Custom prompt", value=prompt, inline=False)
         embed.add_field(
@@ -4266,6 +5386,7 @@ def _ds_config_embed(chat_id: int, user_id: int) -> discord.Embed:
                 "`kulsh config stickers on|off`\n"
                 "`kulsh config autoreply on|off`\n"
                 "`kulsh config random on|off`\n"
+                "`kulsh config search on|off`\n"
                 "`kulsh config prompt <text|reset>`\n"
                 "`kulsh config series on|off`"
             ),
@@ -4332,6 +5453,9 @@ async def ds_handle_config_param(message: discord.Message, user_id: int, parts: 
     elif param in ("рандом", "random"):
         cfg["random_messages_enabled"] = bool_on
         await message.reply(_t(lang, "ds_setting_random", _t(lang, "on") if bool_on else _t(lang, "off")))
+    elif param in ("поиск", "search"):
+        cfg["web_search_enabled"] = bool_on
+        await message.reply(_t(lang, "ds_setting_websearch", _t(lang, "on") if bool_on else _t(lang, "off")))
     elif param in ("температура", "temperature"):
         try:
             t = max(0.0, min(2.0, float(val)))
@@ -4382,60 +5506,64 @@ def _ds_slash_help(lang: str) -> str:
 def _ds_slash_menu(lang: str) -> str:
     if lang == "ru":
         return (
-            "# Кульш AI — меню\n\n"
+            "# ✦ Кульш AI — меню ✦\n\n"
+            "✦彡巛〢 ✦ 彡 巛 〢 ✦\n\n"
             "Открытая языковая модель с набором встроенных инструментов.\n\n"
             "**Основные**\n"
-            "- `/start` — приветствие\n"
-            "- `/help` — полный список команд\n"
-            "- `/config` — настройки канала\n"
-            "- `/donate` — поддержка разработки\n"
-            "- `/credits` — баланс кредитов\n\n"
+            "▸ `/start` — приветствие\n"
+            "▸ `/help` — полный список команд\n"
+            "▸ `/config` — настройки канала\n"
+            "▸ `/donate` — поддержка разработки\n"
+            "▸ `/credits` — баланс кредитов\n\n"
             "**Инструменты**\n"
-            "- `/avatar` — описать аватарку\n"
-            "- `/recall` — вспомнить последние медиа\n"
-            "- `/psl` — оценка внешности\n"
-            "- `/battle` — баттл двух фото\n"
-            "- `/logs` — логи сервера (админам)\n\n"
-            f"🚀 {MINI_APP_URL}"
+            "▸ `/avatar` — описать аватарку\n"
+            "▸ `/recall` — вспомнить последние медиа\n"
+            "▸ `/psl` — оценка внешности\n"
+            "▸ `/battle` — баттл двух фото\n"
+            "▸ `/logs` — логи сервера (админам)\n\n"
+            f"🍷🗿 {MINI_APP_URL}"
         )
     return (
-        "# Kulsh AI — menu\n\n"
-        "An open-source language model with a set of built-in tools.\n\n"
+        "# ✦ Kulsh AI — menu ✦\n\n"
+        "✦彡巛〢 ✦ 彡 巛 〢 ✦\n\n"
+        "An open-source language model with built-in tools.\n\n"
         "**Basics**\n"
-        "- `/start` — greeting\n"
-        "- `/help` — full command list\n"
-        "- `/config` — channel settings\n"
-        "- `/donate` — support development\n"
-        "- `/credits` — credits balance\n\n"
+        "▸ `/start` — greeting\n"
+        "▸ `/help` — command list\n"
+        "▸ `/config` — channel settings\n"
+        "▸ `/donate` — support development\n"
+        "▸ `/credits` — credits balance\n\n"
         "**Tools**\n"
-        "- `/avatar` — describe avatar\n"
-        "- `/recall` — recall recent media\n"
-        "- `/psl` — looksmaxxing\n"
-        "- `/battle` — two-photo battle\n"
-        "- `/logs` — server logs (admins)\n\n"
-        f"🚀 {MINI_APP_URL}"
+        "▸ `/avatar` — describe avatar\n"
+        "▸ `/recall` — recall recent media\n"
+        "▸ `/psl` — looksmaxxing\n"
+        "▸ `/battle` — two-photo battle\n"
+        "▸ `/logs` — server logs (admins)\n\n"
+        f"🍷🗿 {MINI_APP_URL}"
     )
 
 
 def _ds_slash_start(lang: str) -> str:
     if lang == "ru":
         return (
-            "# Кульш на связи\n\n"
+            "# 🍷🗿 Кульш на связи\n\n"
+            "✦彡巛〢 ✦ 彡 巛 〢 ✦\n\n"
             "Открытая языковая модель с анализом изображений и настройкой под себя.\n\n"
-            "**С чего начать**\n"
-            "- `/menu` — все разделы\n"
-            "- `/help` — список команд\n"
-            "- `/config` — настройки канала\n\n"
-            f"🚀 {MINI_APP_URL}"
+            "**🚀 С чего начать**\n"
+            "▸ `/menu` — все разделы\n"
+            "▸ `/help` — список команд\n"
+            "▸ `/config` — настройки канала\n\n"
+            f"🍷🗿 {MINI_APP_URL}"
         )
     return (
-        "# Kulsh is online\n\n"
+        "# 🍷🗿 Kulsh is online\n\n"
+        "✦彡巛〢 ✦ 彡 巛 〢 ✦\n\n"
         "An open-source language model with image analysis and personal configuration.\n\n"
-        "**Get started**\n"
-        "- `/menu` — all sections\n"
-        "- `/help` — command list\n"
-        "- `/config` — channel settings\n\n"
-        f"🚀 {MINI_APP_URL}"
+        "**🚀 Get started**\n"
+        "▸ `/menu` — all sections\n"
+        "▸ `/help` — command list\n"
+        "▸ `/config` — channel settings\n\n"
+        f"🍷🗿 {MINI_APP_URL}"
     )
 
 
@@ -4469,9 +5597,10 @@ async def ds_slash_donate(interaction: discord.Interaction):
     lang = _ds_lang_of(interaction)
     text = (
         f"# {_t(lang, 'donate_title')}\n\n"
+        f"✦ 彡 巛 〢 ✦ 彡 巛 〢 ✦\n\n"
         f"{_t(lang, 'donate_intro')}\n\n"
-        f"{_t(lang, 'donate_online')}: {DONATE_URL}\n"
-        f"GitHub: {GITHUB_URL}"
+        f"▸ {_t(lang, 'donate_online')}: {DONATE_URL}\n"
+        f"🔗 GitHub: {GITHUB_URL}"
     )
     await interaction.response.send_message(text)
 
@@ -4508,11 +5637,11 @@ async def ds_slash_avatar(interaction: discord.Interaction, user: discord.Member
         prompt = (
             f"Ты только что посмотрел аватарку пользователя {target.display_name}. "
             f"Опиши коротко (1-2 предложения) в стиле Кульша. Без markdown. "
-            f"НЕ используй маркеры !separate, !avatar, !recall_media, !sticker, !gif."
+            f"НЕ используй маркеры !separate, !avatar, !recall_media, !sticker, !gif, !search, !chart."
             if lang == "ru" else
             f"You've just seen the avatar of {target.display_name}. "
             f"Describe briefly (1-2 sentences) in Kulsh's style. No markdown. "
-            f"Do NOT use markers !separate, !avatar, !recall_media, !sticker, !gif."
+            f"Do NOT use markers !separate, !avatar, !recall_media, !sticker, !gif, !search, !chart."
         )
         raw = await ask_ai_async(
             prompt=prompt, image_bytes=img_bytes, image_mime="image/jpeg",
@@ -4549,11 +5678,11 @@ async def ds_slash_recall(interaction: discord.Interaction, count: int = 3):
         prompt = (
             f"Ты вспоминаешь недавние медиа. Список:\n{meta}\n\n"
             f"Коротко прокомментируй в стиле Кульша. Без markdown. "
-            f"НЕ используй маркеры !separate, !avatar, !recall_media, !sticker, !gif."
+            f"НЕ используй маркеры !separate, !avatar, !recall_media, !sticker, !gif, !search, !chart."
             if lang == "ru" else
             f"You recall recent media. List:\n{meta}\n\n"
             f"Comment briefly in Kulsh's style. No markdown. "
-            f"Do NOT use markers !separate, !avatar, !recall_media, !sticker, !gif."
+            f"Do NOT use markers !separate, !avatar, !recall_media, !sticker, !gif, !search, !chart."
         )
         raw = await ask_ai_async(
             prompt=prompt, chat_id=chat_id, user_id=user_id, platform="ds",
@@ -4586,6 +5715,83 @@ async def ds_slash_logs(interaction: discord.Interaction):
             await interaction.followup.send(content=content, ephemeral=True)
     except Exception as e:
         await interaction.followup.send(f"Ошибка: {e}", ephemeral=True)
+
+
+@ds_tree.command(name="search", description="Web search / Поиск в интернете")
+@app_commands.describe(query="What to search / Что искать")
+async def ds_slash_search(interaction: discord.Interaction, query: str):
+    await interaction.response.defer()
+    chat_id = interaction.channel_id or 0
+    user_id = interaction.user.id
+    lang = _ds_lang_of(interaction)
+    cfg = get_user_config("ds", chat_id, user_id)
+    if not cfg.get("web_search_enabled", True):
+        await interaction.followup.send(_t(lang, "search_off"))
+        return
+    results = await web_search(query, max_results=6)
+    if not results:
+        await interaction.followup.send(_t(lang, "search_nothing"))
+        return
+    context = _format_search_results(results)
+    prompt = (
+        f"Пользователь искал в интернете: {query}\n\n"
+        f"Найденные результаты:\n{context}\n\n"
+        f"Сформулируй краткий ответ (3-6 предложений) на основе этих результатов. "
+        f"Ответь в стиле Кульша. Без маркеров !search, !chart."
+    )
+    answer = await ask_ai_async(prompt=prompt, chat_id=chat_id, user_id=user_id, platform="ds")
+    full = f"🔎 **{query}**\n\n{answer or ''}"
+    sources = [f"{i}. [{r.get('title', '')[:60]}]({r.get('url', '')})" for i, r in enumerate(results[:4], 1)]
+    if sources:
+        full += "\n\n**" + _t(lang, "search_source") + ":**\n" + "\n".join(sources)
+    await interaction.followup.send(full[:1900])
+
+
+@ds_tree.command(name="chart", description="Generate infographic / Сгенерировать инфографику")
+@app_commands.describe(description="Describe the chart / Опиши график")
+async def ds_slash_chart(interaction: discord.Interaction, description: str):
+    await interaction.response.defer()
+    chat_id = interaction.channel_id or 0
+    user_id = interaction.user.id
+    lang = _ds_lang_of(interaction)
+    chart_prompt = (
+        f"Сгенерируй JSON-спецификацию инфографики по описанию:\n\n{description}\n\n"
+        f"Верни ТОЛЬКО JSON-объект без markdown и текста вокруг. "
+        f'Структура: {{"theme": "dark_modern|light_minimal|ocean|retro", "title": "...", "subtitle": "...", '
+        f'"blocks": [{{"type": "heading"|"text"|"divider"|"bar"|"line"|"pie"|"pie3d"|"table", ...}}]}}'
+    )
+    raw = await ask_ai_async(
+        prompt=chart_prompt,
+        system_instruction_override=(
+            "You are a data-visualization JSON generator. Output ONLY valid JSON. No markdown, no prose."
+        ),
+        chat_id=chat_id, user_id=user_id, platform="ds",
+    )
+    spec = None
+    try:
+        spec = json.loads(clean_json_text(raw))
+    except Exception:
+        m = re.search(r'\{[\s\S]*\}', raw or "")
+        if m:
+            try:
+                spec = json.loads(m.group(0))
+            except Exception:
+                spec = None
+    if not isinstance(spec, dict):
+        await interaction.followup.send(_t(lang, "chart_error", "invalid JSON"))
+        return
+    try:
+        img = await render_infographic(spec, user_images=None)
+    except Exception as e:
+        await interaction.followup.send(_t(lang, "chart_error", str(e)))
+        return
+    try:
+        await interaction.followup.send(
+            content=(spec.get("title") or _t(lang, "chart_built"))[:1900],
+            file=discord.File(fp=img, filename="infographic.png"),
+        )
+    except Exception as e:
+        await interaction.followup.send(f"Ошибка отправки: {e}")
 
 
 @ds_tree.command(name="psl", description="Looksmaxxing analysis / Оценка внешности")
@@ -4709,6 +5915,68 @@ async def on_message(message: discord.Message) -> None:
             await ds_handle_config(message, user_id)
         else:
             await ds_handle_config_param(message, user_id, parts)
+        return
+
+    # ---- поиск ----
+    m = re.match(r'(?i)^(?:кульш\s+)?(?:поиск|search|найди|найти)\s+(.+)$', message.content.strip(), re.DOTALL)
+    if m:
+        if not cfg.get("web_search_enabled", True):
+            await message.reply(_t(lang, "search_off"))
+            return
+        async with message.channel.typing():
+            results = await web_search(m.group(1).strip(), max_results=6)
+            if not results:
+                await message.reply(_t(lang, "search_nothing"))
+                return
+            context = _format_search_results(results)
+            prompt = (
+                f"Пользователь искал: {m.group(1).strip()}\n\n"
+                f"Результаты:\n{context}\n\n"
+                f"Дай краткий ответ. Без маркеров !search, !chart."
+            )
+            answer = await ask_ai_async(prompt=prompt, chat_id=chat_id, user_id=user_id, platform="ds")
+            full = f"🔎 **{m.group(1).strip()}**\n\n{answer or ''}"
+            sources = [f"{i}. [{r.get('title', '')[:60]}]({r.get('url', '')})"
+                       for i, r in enumerate(results[:4], 1)]
+            if sources:
+                full += "\n\n**" + _t(lang, "search_source") + ":**\n" + "\n".join(sources)
+            await message.reply(full[:1900])
+        return
+
+    # ---- график ----
+    m = re.match(r'(?i)^(?:кульш\s+)?(?:график|chart|инфографика|диаграмма)\s+(.+)$',
+                 message.content.strip(), re.DOTALL)
+    if m:
+        async with message.channel.typing():
+            chart_prompt = (
+                f"Сгенерируй JSON-спецификацию инфографики по описанию:\n\n{m.group(1).strip()}\n\n"
+                f"Верни ТОЛЬКО JSON. Структура: {{\"theme\": \"dark_modern|light_minimal|ocean|retro\", "
+                f"\"title\": \"...\", \"blocks\": [{{\"type\": \"bar|line|pie|pie3d|table|heading|text|divider\", ...}}]}}"
+            )
+            raw = await ask_ai_async(
+                prompt=chart_prompt,
+                system_instruction_override="You are a data-viz JSON generator. Output only valid JSON.",
+                chat_id=chat_id, user_id=user_id, platform="ds",
+            )
+            spec = None
+            try:
+                spec = json.loads(clean_json_text(raw))
+            except Exception:
+                mm = re.search(r'\{[\s\S]*\}', raw or "")
+                if mm:
+                    try:
+                        spec = json.loads(mm.group(0))
+                    except Exception:
+                        spec = None
+            if not isinstance(spec, dict):
+                await message.reply(_t(lang, "chart_error", "invalid JSON"))
+                return
+            try:
+                img = await render_infographic(spec, user_images=None)
+                await message.reply(file=discord.File(fp=img, filename="infographic.png"),
+                                    content=(spec.get("title") or _t(lang, "chart_built"))[:1900])
+            except Exception as e:
+                await message.reply(_t(lang, "chart_error", str(e)))
         return
 
     if content_lower.startswith("кульш донаты") or content_lower.startswith("kulsh donations"):
@@ -4914,7 +6182,7 @@ async def on_message(message: discord.Message) -> None:
                 answer = await ask_ai_async(messages=messages, image_bytes=img_bytes,
                                             image_mime=img_mime, chat_id=chat_id,
                                             user_id=user_id, platform="ds")
-                await send_ds_ai_response(message, chat_id, user_id, answer)
+                await send_ds_ai_response(message, chat_id, user_id, answer, user_text=prompt)
                 asyncio.create_task(extract_memory(f"ds_{chat_id}", f"{display_name}: [медиа]", answer))
             except Exception as e:
                 logger.info(f"DS media: {e}")
@@ -4928,7 +6196,7 @@ async def on_message(message: discord.Message) -> None:
             messages = memory_to_messages(get_chat_memory(f"ds_{chat_id}"))
             answer = await ask_ai_async(messages=messages, chat_id=chat_id,
                                         user_id=user_id, platform="ds")
-            await send_ds_ai_response(message, chat_id, user_id, answer)
+            await send_ds_ai_response(message, chat_id, user_id, answer, user_text=message.content)
             asyncio.create_task(extract_memory(f"ds_{chat_id}", f"{display_name}: {message.content}", answer))
         return
 
@@ -5185,7 +6453,7 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    logger.info(f">>> Кульш в эфире. МСК: {msk_datetime_str()}")
+    logger.info(f">>> 🍷🗿 Кульш в эфире. МСК: {msk_datetime_str()}")
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
