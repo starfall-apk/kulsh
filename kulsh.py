@@ -1,6 +1,7 @@
-# Kulsh GPT | v2.37.0 (syntax fix, original emoji placement preserved, original prompt,
-# clean GIF sending, child message cleanup on apply/close, short apply animation,
-# stable rich fallback, full RU/EN localization)
+# Kulsh GPT | v2.38.0 (fixed BUTTON_TYPE_INVALID for web_app in groups,
+# html→markdown bridge for rich, robust fallback without keyboard,
+# original prompt, original emoji placement, clean GIF sending,
+# child message cleanup on apply/close, short apply animation)
 # by (main author):
 #     starfall-apk
 # coauthor & bot hosting:
@@ -154,10 +155,9 @@ AUTHORIZED_UPDATERS = [735217033867821098, 1193627300797878362]
 # ============================================================
 # ЛОКАЛИЗАЦИЯ
 # ------------------------------------------------------------
-# Эмодзи — ТОЛЬКО там, где они были в оригинале.
+# Тексты содержат эмодзи только там, где они были в оригинале.
 # ============================================================
 TEXTS: dict[str, tuple[str, str]] = {
-    # -- конфиг: значения (эмодзи из оригинала) --
     "cfg_title":               ("⚙️ Настройки", "⚙️ Settings"),
     "cfg_lang":                ("🌐 Язык", "🌐 Language"),
     "cfg_theme":               ("🌓 Тема", "🌓 Theme"),
@@ -182,7 +182,6 @@ TEXTS: dict[str, tuple[str, str]] = {
     "cfg_prompt_default":      ("стандартный", "default"),
     "cfg_credits_label":       ("💎 Кредиты", "💎 Credits"),
 
-    # -- тосты (эмодзи из оригинала) --
     "cfg_updated":             ("Обновлено", "Updated"),
     "cfg_model_auto":          ("Модель: авто", "Model: auto"),
     "cfg_model_set":           ("Модель: {0}", "Model: {0}"),
@@ -209,7 +208,6 @@ TEXTS: dict[str, tuple[str, str]] = {
     "prompt_saved":            ("Промпт сохранён ({0} символов)", "Prompt saved ({0} chars)"),
     "prompt_cancelled":        ("Изменение промпта отменено", "Prompt edit cancelled"),
 
-    # -- меню (новая фича, эмодзи можно) --
     "menu_title":              ("Кульш AI — главное меню", "Kulsh AI — Main Menu"),
     "menu_intro": (
         "Открытая языковая модель с набором встроенных инструментов. "
@@ -250,7 +248,6 @@ TEXTS: dict[str, tuple[str, str]] = {
     "btn_github":              ("GitHub", "GitHub"),
     "btn_close":               ("Закрыть", "Close"),
 
-    # -- донат / кредиты --
     "donate_title":            ("Поддержать Кульша", "Support Kulsh"),
     "donate_intro": (
         "Донаты идут на серверы, домены и дальнейшую разработку проекта.",
@@ -272,12 +269,10 @@ TEXTS: dict[str, tuple[str, str]] = {
                                 "No donations yet. Be the first, bro 🍷🗿\n{0}"),
     "top_donators_item":       ("{0}. {1} — {2} очков", "{0}. {1} — {2} points"),
 
-    # -- аватар / recall (без эмодзи, как в оригинале) --
     "avatar_fail":             ("не смог получить аватарку", "failed to fetch avatar"),
     "avatar_none":             ("у {0} аватарки нет, пусто", "{0} has no avatar"),
     "recall_fail":             ("не нашёл ничего в памяти", "nothing found in memory"),
 
-    # -- looksmaxxing / battle --
     "psl_need_photo":          ("📸 Жду фото для анализа. Отправь его с пометкой 'looksmaxxing'.",
                                 "📸 Waiting for a photo. Send it marked 'looksmaxxing'."),
     "psl_analyzing":           ("⏳ Анализирую внешность...", "⏳ Analyzing your face..."),
@@ -302,12 +297,10 @@ TEXTS: dict[str, tuple[str, str]] = {
     "battle_photo1":           ("📊 Фото 1:", "📊 Photo 1:"),
     "battle_photo2":           ("📊 Фото 2:", "📊 Photo 2:"),
 
-    # -- логи --
     "logs_no_access":          ("не для тебя писано", "not for you"),
     "logs_cant_check":         ("не могу проверить права", "cannot verify permissions"),
     "logs_read_error":         ("Ошибка чтения логов: {0}", "Log read error: {0}"),
 
-    # -- tools --
     "tool_unpacking":          ("📦 Распаковываю архив...", "📦 Unpacking archive..."),
     "tool_unpacked":           ("📦 Распаковал.\n\n📄 {0}", "📦 Unpacked.\n\n📄 {0}"),
     "tool_analyzing":          ("🧠 Анализирую {0} файл(ов)...", "🧠 Analyzing {0} file(s)..."),
@@ -325,7 +318,6 @@ TEXTS: dict[str, tuple[str, str]] = {
     "tool_download_fail":      ("не смог скачать файл: {0}", "failed to download file: {0}"),
     "tool_review_empty":       ("что тут?", "what's here?"),
 
-    # -- AI errors (без ❌/🚫, как в оригинале) --
     "ai_error_400":            ("Ошибка запроса к API (400).", "API request error (400)."),
     "ai_error_generic":        ("Ошибка API.", "API error."),
     "ai_blocked":              ("Блокировка контента.", "Content blocked."),
@@ -342,7 +334,6 @@ TEXTS: dict[str, tuple[str, str]] = {
     "russian":                 ("Русский 🇷🇺", "Russian 🇷🇺"),
     "english":                 ("Английский 🇬🇧", "English 🇬🇧"),
 
-    # -- Discord (без лишних эмодзи) --
     "ds_only_admins":          ("только админы могут менять конфиг", "only admins can change config"),
     "ds_need_specify_ru_en":   ("Укажите <code>ru</code> или <code>en</code>.", "Specify <code>ru</code> or <code>en</code>."),
     "ds_need_specify_theme":   ("Укажите <code>тёмная</code> или <code>светлая</code>.", "Specify <code>dark</code> or <code>light</code>."),
@@ -386,7 +377,6 @@ TEXTS: dict[str, tuple[str, str]] = {
     "ds_avatar_none":          ("не смог получить аватарку", "failed to fetch avatar"),
     "ds_logs_content":         ("🍷🗿 Логи сервера:", "🍷🗿 Server logs:"),
 
-    # -- help (без эмодзи на заголовках, только у <b> секций по оригиналу) --
     "help_body": (
         "🍷🗿 <b>Команды Кульша:</b>\n\n"
         "<b>Общие:</b>\n"
@@ -449,6 +439,29 @@ def _t(lang: str, key: str, *args, **kwargs) -> str:
             return text.format(*args, **kwargs)
         except Exception:
             return text
+    return text
+
+
+def _html_to_md(text: str) -> str:
+    """
+    Переводит базовые HTML-теги в markdown-эквиваленты.
+    Нужно, потому что часть текстов (help_body и т.п.) исторически
+    используют HTML, а rich-парсер работает с markdown.
+    """
+    if not text:
+        return text
+    text = re.sub(r'<b>(.*?)</b>', r'**\1**', text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r'<strong>(.*?)</strong>', r'**\1**', text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r'<i>(.*?)</i>', r'*\1*', text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r'<em>(.*?)</em>', r'*\1*', text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r'<u>(.*?)</u>', r'__\1__', text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r'<ins>(.*?)</ins>', r'__\1__', text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r'<s>(.*?)</s>', r'~~\1~~', text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r'<strike>(.*?)</strike>', r'~~\1~~', text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r'<del>(.*?)</del>', r'~~\1~~', text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r'<code>(.*?)</code>', r'`\1`', text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r'<pre>(.*?)</pre>', lambda m: '```\n' + m.group(1) + '\n```', text, flags=re.DOTALL | re.IGNORECASE)
+    text = text.replace('&lt;', '<').replace('&gt;', '>').replace('&amp;', '&')
     return text
 
 # ============================================================
@@ -879,6 +892,7 @@ async def typing_with_delay_ds(channel, text: str, delay: float | None = None) -
 def _parse_inline(text: str) -> Any:
     if not text:
         return ""
+    text = _html_to_md(text)
     parts: list[Any] = []
     buf = ""
 
@@ -974,6 +988,7 @@ def _make_cell(raw: str) -> dict:
 def _text_to_blocks(text: str) -> list[dict]:
     if not text:
         return []
+    text = _html_to_md(text)
     lines = text.split('\n')
     blocks: list[dict] = []
     i = 0
@@ -1125,7 +1140,9 @@ def _looks_like_rich(text: str) -> bool:
         re.search(r'^-\s*\[[ x]\]', text, re.MULTILINE) or
         re.search(r'^>\s', text, re.MULTILINE) or
         '```' in text or
-        re.search(r'\$\$.+?\$\$', text, re.DOTALL)
+        re.search(r'\$\$.+?\$\$', text, re.DOTALL) or
+        # HTML-теги, которые умеет конвертить _html_to_md:
+        re.search(r'<(b|strong|i|em|u|ins|s|strike|del|code|pre|a)\b', text, re.IGNORECASE)
     )
 
 
@@ -1148,6 +1165,10 @@ def build_rich_message(text: str) -> dict[str, Any] | None:
     }
 
 
+def _is_button_type_error(err_text: str) -> bool:
+    return "BUTTON_TYPE_INVALID" in err_text
+
+
 async def send_rich_message(
     chat_id: int,
     text: str,
@@ -1159,23 +1180,33 @@ async def send_rich_message(
     rich = build_rich_message(text)
     if not rich:
         return False
-    payload: dict[str, Any] = {"chat_id": chat_id, "rich_message": rich}
-    if reply_to:
-        payload["reply_parameters"] = {"message_id": reply_to}
-    if reply_markup is not None:
-        try:
-            payload["reply_markup"] = reply_markup.to_dict()
-        except AttributeError:
-            payload["reply_markup"] = reply_markup
-    try:
+
+    async def _try_post(markup):
+        payload: dict[str, Any] = {"chat_id": chat_id, "rich_message": rich}
+        if reply_to:
+            payload["reply_parameters"] = {"message_id": reply_to}
+        if markup is not None:
+            try:
+                payload["reply_markup"] = markup.to_dict()
+            except AttributeError:
+                payload["reply_markup"] = markup
         async with aiohttp.ClientSession() as session:
             url = f"https://api.telegram.org/bot{TG_TOKEN}/sendRichMessage"
             async with session.post(url, json=payload, timeout=30) as resp:
-                if resp.status == 200:
-                    return True
                 body = await resp.text()
-                logger.warning(f"sendRichMessage {resp.status}: {body[:400]}")
-                return False
+                return resp.status, body
+
+    try:
+        status, body = await _try_post(reply_markup)
+        if status == 200:
+            return True
+        if status == 400 and _is_button_type_error(body) and reply_markup is not None:
+            logger.warning("sendRichMessage BUTTON_TYPE_INVALID — повтор без клавиатуры")
+            status, body = await _try_post(None)
+            if status == 200:
+                return True
+        logger.warning(f"sendRichMessage {status}: {body[:400]}")
+        return False
     except Exception as e:
         logger.warning(f"sendRichMessage error: {e}")
         return False
@@ -1192,21 +1223,31 @@ async def edit_rich_message(
     rich = build_rich_message(text)
     if not rich:
         return False
-    payload: dict[str, Any] = {"chat_id": chat_id, "message_id": message_id, "rich_message": rich}
-    if reply_markup is not None:
-        try:
-            payload["reply_markup"] = reply_markup.to_dict()
-        except AttributeError:
-            payload["reply_markup"] = reply_markup
-    try:
+
+    async def _try_edit(markup):
+        payload: dict[str, Any] = {"chat_id": chat_id, "message_id": message_id, "rich_message": rich}
+        if markup is not None:
+            try:
+                payload["reply_markup"] = markup.to_dict()
+            except AttributeError:
+                payload["reply_markup"] = markup
         async with aiohttp.ClientSession() as session:
             url = f"https://api.telegram.org/bot{TG_TOKEN}/editMessageText"
             async with session.post(url, json=payload, timeout=30) as resp:
-                if resp.status == 200:
-                    return True
                 body = await resp.text()
-                logger.warning(f"editMessageText(rich) {resp.status}: {body[:400]}")
-                return False
+                return resp.status, body
+
+    try:
+        status, body = await _try_edit(reply_markup)
+        if status == 200:
+            return True
+        if status == 400 and _is_button_type_error(body) and reply_markup is not None:
+            logger.warning("editMessageText(rich) BUTTON_TYPE_INVALID — повтор без клавиатуры")
+            status, body = await _try_edit(None)
+            if status == 200:
+                return True
+        logger.warning(f"editMessageText(rich) {status}: {body[:400]}")
+        return False
     except Exception as e:
         logger.warning(f"edit_rich_message error: {e}")
         return False
@@ -1228,13 +1269,33 @@ async def send_formatted(
             reply_to_message_id=reply_to, reply_markup=reply_markup,
         )
     except Exception as e:
-        logger.warning(f"html send failed: {e}; trying plain")
+        err = str(e)
+        if _is_button_type_error(err) and reply_markup is not None:
+            logger.warning("HTML send BUTTON_TYPE_INVALID — повтор без клавиатуры")
+            try:
+                await tg_bot.send_message(
+                    chat_id, html_text, parse_mode='HTML',
+                    reply_to_message_id=reply_to, reply_markup=None,
+                )
+                return
+            except Exception as e2:
+                err = str(e2)
+        logger.warning(f"html send failed: {err}; trying plain")
         plain = re.sub(r'<[^>]+>', '', html_text)
         try:
             await tg_bot.send_message(
                 chat_id, plain, reply_to_message_id=reply_to, reply_markup=reply_markup,
             )
         except Exception as e2:
+            if _is_button_type_error(str(e2)) and reply_markup is not None:
+                try:
+                    await tg_bot.send_message(
+                        chat_id, plain, reply_to_message_id=reply_to, reply_markup=None,
+                    )
+                    return
+                except Exception as e3:
+                    logger.error(f"plain fallback fail: {e3}")
+                    return
             logger.error(f"plain fallback fail: {e2}")
 
 
@@ -1292,7 +1353,6 @@ async def play_apply_animation(chat_id: int, message_id: int, step_delay: float 
 
 
 async def _cleanup_config_children(chat_id: int, user_id: int) -> None:
-    """Удаляет дочерние сообщения панели настроек."""
     keys = list(config_children_msgs.keys())
     for key in keys:
         if key[0] != chat_id or key[1] != user_id:
@@ -2356,6 +2416,14 @@ class StyledButton(InlineKeyboardButton):
 def btn(text: str, style: str | None = None, **kwargs) -> StyledButton:
     return StyledButton(text, style=style, **kwargs)
 
+
+def _mini_app_button(lang: str, is_private: bool) -> StyledButton:
+    """web_app работает только в приватных чатах; в группах используем url."""
+    text = _t(lang, "btn_open_mini")
+    if is_private:
+        return btn(text, style="primary", web_app=WebAppInfo(url=MINI_APP_URL))
+    return btn(text, style="primary", url=MINI_APP_URL)
+
 # ============================================================
 # CONFIG TEXT / KEYBOARDS
 # ============================================================
@@ -2534,11 +2602,9 @@ def _build_start_text(lang: str) -> str:
     )
 
 
-def build_menu_keyboard(lang: str) -> InlineKeyboardMarkup:
+def build_menu_keyboard(lang: str, is_private: bool = True) -> InlineKeyboardMarkup:
     kb = InlineKeyboardMarkup()
-    kb.row(
-        btn(_t(lang, "btn_open_mini"), style="primary", web_app=WebAppInfo(url=MINI_APP_URL))
-    )
+    kb.row(_mini_app_button(lang, is_private))
     kb.row(
         btn(_t(lang, "btn_settings"), style="success", callback_data="menu:settings"),
         btn(_t(lang, "btn_commands"), style=None, callback_data="menu:help"),
@@ -2553,11 +2619,9 @@ def build_menu_keyboard(lang: str) -> InlineKeyboardMarkup:
     return kb
 
 
-def build_start_keyboard(lang: str) -> InlineKeyboardMarkup:
+def build_start_keyboard(lang: str, is_private: bool = True) -> InlineKeyboardMarkup:
     kb = InlineKeyboardMarkup()
-    kb.row(
-        btn(_t(lang, "btn_open_mini"), style="primary", web_app=WebAppInfo(url=MINI_APP_URL))
-    )
+    kb.row(_mini_app_button(lang, is_private))
     kb.row(
         btn(_t(lang, "btn_menu"), style="success", callback_data="menu:open"),
         btn(_t(lang, "btn_settings"), style=None, callback_data="menu:settings"),
@@ -2585,9 +2649,7 @@ async def _edit_or_send(call: telebot.types.CallbackQuery, text: str, kb: Inline
 async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
     owner = config_msg_owners.get(call.message.message_id)
     if owner is not None and owner != call.from_user.id:
-        cfg_chat = call.message.chat.id
-        cfg_user = call.from_user.id
-        l = get_user_config("tg", cfg_chat, cfg_user).get("language", "ru")
+        l = get_user_config("tg", call.message.chat.id, call.from_user.id).get("language", "ru")
         await tg_bot.answer_callback_query(call.id, _t(l, "cfg_not_yours"), show_alert=False)
         return
 
@@ -2703,7 +2765,6 @@ async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
                 await tg_bot.delete_message(chat_id, trig_id)
             except Exception:
                 pass
-        # Убираем дочерние сообщения (запрос промпта и т.п.)
         await _cleanup_config_children(chat_id, user_id)
         await tg_bot.answer_callback_query(call.id, _t(lang, "cfg_done"))
         asyncio.create_task(play_apply_animation(chat_id, call.message.message_id))
@@ -2758,6 +2819,7 @@ async def handle_menu_callback(call: telebot.types.CallbackQuery) -> None:
     user_id = call.from_user.id
     cfg = get_user_config("tg", chat_id, user_id)
     lang = cfg.get("language", "ru")
+    is_private = (call.message.chat.type == 'private')
 
     if action == "close":
         gif_id = menu_gif_msgs.pop(chat_id, None)
@@ -2801,7 +2863,7 @@ async def handle_menu_callback(call: telebot.types.CallbackQuery) -> None:
     if action == "open":
         await tg_bot.answer_callback_query(call.id)
         menu_text = _build_menu_text(lang)
-        kb = build_menu_keyboard(lang)
+        kb = build_menu_keyboard(lang, is_private=is_private)
         edited = await edit_rich_message(chat_id, call.message.message_id, menu_text, reply_markup=kb)
         if not edited:
             try:
@@ -2867,6 +2929,7 @@ async def handle_start(message: telebot.types.Message) -> None:
     user_id = message.from_user.id
     cfg = get_user_config("tg", chat_id, user_id)
     lang = cfg.get("language", "ru")
+    is_private = (message.chat.type == 'private')
 
     gif_msg_id = await _send_menu_gif(
         chat_id, message.message_id,
@@ -2877,7 +2940,7 @@ async def handle_start(message: telebot.types.Message) -> None:
         start_gif_msgs[chat_id] = gif_msg_id
 
     start_text = _build_start_text(lang)
-    kb = build_start_keyboard(lang)
+    kb = build_start_keyboard(lang, is_private=is_private)
     reply_to = gif_msg_id if gif_msg_id else message.message_id
     await send_formatted(chat_id, start_text, reply_to=reply_to, reply_markup=kb)
 
@@ -2890,6 +2953,7 @@ async def handle_menu(message: telebot.types.Message) -> None:
     user_id = message.from_user.id
     cfg = get_user_config("tg", chat_id, user_id)
     lang = cfg.get("language", "ru")
+    is_private = (message.chat.type == 'private')
 
     gif_path = MENU_GIF_EN_PATH if lang == "en" else MENU_GIF_RU_PATH
 
@@ -2902,7 +2966,7 @@ async def handle_menu(message: telebot.types.Message) -> None:
         menu_gif_msgs[chat_id] = gif_msg_id
 
     menu_text = _build_menu_text(lang)
-    kb = build_menu_keyboard(lang)
+    kb = build_menu_keyboard(lang, is_private=is_private)
     reply_to = gif_msg_id if gif_msg_id else message.message_id
     await send_formatted(chat_id, menu_text, reply_to=reply_to, reply_markup=kb)
 
