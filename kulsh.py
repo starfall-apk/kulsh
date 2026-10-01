@@ -1,6 +1,6 @@
-# Kulsh GPT | v2.36.0 (fixed duplicated emojis, restored original system prompt, clean GIF sending,
-# removal of child messages on apply/close, short apply animation, stable rich fallback,
-# full RU/EN localization)
+# Kulsh GPT | v2.37.0 (syntax fix, original emoji placement preserved, original prompt,
+# clean GIF sending, child message cleanup on apply/close, short apply animation,
+# stable rich fallback, full RU/EN localization)
 # by (main author):
 #     starfall-apk
 # coauthor & bot hosting:
@@ -154,10 +154,10 @@ AUTHORIZED_UPDATERS = [735217033867821098, 1193627300797878362]
 # ============================================================
 # ЛОКАЛИЗАЦИЯ
 # ------------------------------------------------------------
-# Все значения содержат ведущий эмодзи ровно один раз — шаблон
-# ничего не добавляет сверху.
+# Эмодзи — ТОЛЬКО там, где они были в оригинале.
 # ============================================================
 TEXTS: dict[str, tuple[str, str]] = {
+    # -- конфиг: значения (эмодзи из оригинала) --
     "cfg_title":               ("⚙️ Настройки", "⚙️ Settings"),
     "cfg_lang":                ("🌐 Язык", "🌐 Language"),
     "cfg_theme":               ("🌓 Тема", "🌓 Theme"),
@@ -182,126 +182,134 @@ TEXTS: dict[str, tuple[str, str]] = {
     "cfg_prompt_default":      ("стандартный", "default"),
     "cfg_credits_label":       ("💎 Кредиты", "💎 Credits"),
 
-    "cfg_updated":             ("✅ Обновлено", "✅ Updated"),
-    "cfg_model_auto":          ("🧠 Модель: авто", "🧠 Model: auto"),
-    "cfg_model_set":           ("🧠 Модель: {0}", "🧠 Model: {0}"),
-    "cfg_lang_set_ru":         ("🌐 Язык: русский 🇷🇺", "🌐 Language: Russian 🇷🇺"),
-    "cfg_lang_set_en":         ("🌐 Язык: английский 🇬🇧", "🌐 Language: English 🇬🇧"),
-    "cfg_theme_dark":          ("🌓 Тема: тёмная 🌑", "🌓 Theme: dark 🌑"),
-    "cfg_theme_light":         ("🌓 Тема: светлая ☀️", "🌓 Theme: light ☀️"),
-    "cfg_temp":                ("🎛 Температура: {0}", "🎛 Temperature: {0}"),
-    "cfg_prompt_reset":        ("📝 Промпт сброшен", "📝 Prompt reset"),
-    "cfg_memory_reset":        ("🧹 Память сброшена", "🧹 Memory reset"),
-    "cfg_done":                ("✅ Готово", "✅ Done"),
+    # -- тосты (эмодзи из оригинала) --
+    "cfg_updated":             ("Обновлено", "Updated"),
+    "cfg_model_auto":          ("Модель: авто", "Model: auto"),
+    "cfg_model_set":           ("Модель: {0}", "Model: {0}"),
+    "cfg_lang_set_ru":         ("Язык: русский 🇷🇺", "Language: Russian 🇷🇺"),
+    "cfg_lang_set_en":         ("Язык: английский 🇬🇧", "Language: English 🇬🇧"),
+    "cfg_theme_dark":          ("Тема: тёмная 🌑", "Theme: dark 🌑"),
+    "cfg_theme_light":         ("Тема: светлая ☀️", "Theme: light ☀️"),
+    "cfg_temp":                ("🌡 {0}", "🌡 {0}"),
+    "cfg_prompt_reset":        ("Промпт сброшен", "Prompt reset"),
+    "cfg_memory_reset":        ("Память сброшена", "Memory reset"),
+    "cfg_done":                ("Готово ✅", "Done ✅"),
     "cfg_mutex": (
-        "⚠️ «Разбивка» и «Стриминг» взаимно исключаемы. Сначала отключите вторую настройку.",
-        "⚠️ «Split» and «Streaming» are mutually exclusive. Disable the other first.",
+        "«Разбивка» и «Стриминг» взаимно исключаемы. Сначала отключи вторую настройку.",
+        "Split and Streaming are mutually exclusive. Disable the other first.",
     ),
-    "cfg_premium_off":         ("⚠️ Расширенные функции отключены", "⚠️ Extended features disabled"),
+    "cfg_premium_off":         ("расширенные функции отключены", "extended features disabled"),
+    "cfg_not_yours":           ("это не твои настройки 🤚", "not your settings 🤚"),
     "cfg_edit_prompt_ask": (
-        "✏️ Отправьте новый кастомный промпт ответом на это сообщение.\n"
+        "Отправьте новый кастомный промпт ответом на это сообщение.\n"
         "Для отмены — ответьте <code>отмена</code> или <code>cancel</code>.",
-        "✏️ Send the new custom prompt as a reply to this message.\n"
+        "Send the new custom prompt as a reply to this message.\n"
         "To cancel — reply <code>отмена</code> or <code>cancel</code>.",
     ),
-    "prompt_saved":            ("✅ Промпт сохранён ({0} символов)", "✅ Prompt saved ({0} chars)"),
-    "prompt_cancelled":        ("❌ Изменение промпта отменено", "❌ Prompt edit cancelled"),
+    "prompt_saved":            ("Промпт сохранён ({0} символов)", "Prompt saved ({0} chars)"),
+    "prompt_cancelled":        ("Изменение промпта отменено", "Prompt edit cancelled"),
 
-    "menu_title":              ("🍷🗿 Кульш AI — главное меню", "🍷🗿 Kulsh AI — Main Menu"),
+    # -- меню (новая фича, эмодзи можно) --
+    "menu_title":              ("Кульш AI — главное меню", "Kulsh AI — Main Menu"),
     "menu_intro": (
         "Открытая языковая модель с набором встроенных инструментов. "
         "Ниже — основные разделы и команды.",
         "An open-source language model with a set of built-in tools. "
         "Below are the main sections and commands.",
     ),
-    "menu_available":          ("📋 Доступно:", "📋 Available:"),
-    "menu_mini_app":           ("🚀 Mini App — расширенный чат с ИИ внутри Telegram",
-                                "🚀 Mini App — extended AI chat inside Telegram"),
-    "menu_settings_item":      ("⚙️ Настройки — язык, тема, модель, промпт, автоответы",
-                                "⚙️ Settings — language, theme, model, prompt, auto-replies"),
-    "menu_commands":           ("📖 Команды — полный список возможностей",
-                                "📖 Commands — full feature list"),
-    "menu_donate_item":        ("💎 Донат — поддержка разработки", "💎 Donate — support development"),
-    "menu_github_item":        ("🔗 GitHub — исходный код проекта", "🔗 GitHub — project source code"),
+    "menu_available":          ("Доступно:", "Available:"),
+    "menu_mini_app":           ("Mini App — расширенный чат с ИИ внутри Telegram",
+                                "Mini App — extended AI chat inside Telegram"),
+    "menu_settings_item":      ("Настройки — язык, тема, модель, промпт, автоответы",
+                                "Settings — language, theme, model, prompt, auto-replies"),
+    "menu_commands":           ("Команды — полный список возможностей",
+                                "Commands — full feature list"),
+    "menu_donate_item":        ("Донат — поддержка разработки", "Donate — support development"),
+    "menu_github_item":        ("GitHub — исходный код проекта", "GitHub — project source code"),
 
-    "start_title":             ("🍷🗿 Кульш на связи", "🍷🗿 Kulsh is online"),
+    "start_title":             ("Кульш на связи", "Kulsh is online"),
     "start_intro": (
         "Открытая языковая модель с возможностями анализа изображений, "
         "оценки внешности и настройки под себя. Работает в Telegram и Discord.",
         "An open-source language model with image analysis, looksmaxxing "
         "and personal configuration. Available in Telegram and Discord.",
     ),
-    "start_where":             ("🚀 С чего начать:", "🚀 Where to start:"),
-    "start_mini_app":          ("🚀 Mini App — расширенный чат с ИИ",
-                                "🚀 Mini App — extended AI chat"),
-    "start_menu":              ("📖 Меню — все разделы и настройки",
-                                "📖 Menu — all sections and settings"),
-    "start_config":            ("⚙️ <code>кульш конфиг</code> — тонкая настройка под тебя",
-                                "⚙️ <code>kulsh config</code> — tune the bot"),
+    "start_where":             ("С чего начать:", "Where to start:"),
+    "start_mini_app":          ("Mini App — расширенный чат с ИИ",
+                                "Mini App — extended AI chat"),
+    "start_menu":              ("Меню — все разделы и настройки",
+                                "Menu — all sections and settings"),
+    "start_config":            ("<code>кульш конфиг</code> — тонкая настройка под тебя",
+                                "<code>kulsh config</code> — tune the bot"),
 
-    "btn_open_mini":           ("🚀 Открыть Mini App", "🚀 Open Mini App"),
-    "btn_settings":            ("⚙️ Настройки", "⚙️ Settings"),
-    "btn_commands":            ("📖 Команды", "📖 Commands"),
-    "btn_menu":                ("📖 Меню", "📖 Menu"),
-    "btn_donate":              ("💎 Донат", "💎 Donate"),
-    "btn_github":              ("🔗 GitHub", "🔗 GitHub"),
-    "btn_close":               ("❌ Закрыть", "❌ Close"),
+    "btn_open_mini":           ("Открыть Mini App", "Open Mini App"),
+    "btn_settings":            ("Настройки", "Settings"),
+    "btn_commands":            ("Команды", "Commands"),
+    "btn_menu":                ("Меню", "Menu"),
+    "btn_donate":              ("Донат", "Donate"),
+    "btn_github":              ("GitHub", "GitHub"),
+    "btn_close":               ("Закрыть", "Close"),
 
-    "donate_title":            ("💎 Поддержать Кульша", "💎 Support Kulsh"),
+    # -- донат / кредиты --
+    "donate_title":            ("Поддержать Кульша", "Support Kulsh"),
     "donate_intro": (
-        "💖 Донаты идут на серверы, домены и дальнейшую разработку проекта.",
-        "💖 Donations go to servers, domains and further development of the project.",
+        "Донаты идут на серверы, домены и дальнейшую разработку проекта.",
+        "Donations go to servers, domains and further development of the project.",
     ),
-    "donate_methods":          ("💰 Способы:", "💰 Methods:"),
-    "donate_online":           ("💳 Онлайн-донат", "💳 Online donation"),
-    "donate_stars_hint":       ("⭐ Telegram Stars — <code>/donate_stars &lt;N&gt;</code>",
-                                "⭐ Telegram Stars — <code>/donate_stars &lt;N&gt;</code>"),
+    "donate_methods":          ("Способы:", "Methods:"),
+    "donate_online":           ("Онлайн-донат", "Online donation"),
+    "donate_stars_hint":       ("Telegram Stars — <code>/donate_stars &lt;N&gt;</code>",
+                                "Telegram Stars — <code>/donate_stars &lt;N&gt;</code>"),
     "donate_stars_need":       ("Укажите количество звёзд: <code>/donate_stars 100</code>",
                                 "Specify star amount: <code>/donate_stars 100</code>"),
     "donate_stars_bad":        ("Неверное количество звёзд.", "Invalid star amount."),
-    "donate_thanks":           ("🎉 Спасибо за {0} ⭐, кент!", "🎉 Thanks for {0} ⭐, mate!"),
-    "donate_invoice_fail":     ("❌ Не удалось выставить счёт: {0}", "❌ Failed to create invoice: {0}"),
+    "donate_thanks":           ("🍷🗿 Спасибо за {0} звёзд, кент!", "🍷🗿 Thanks for {0} stars, mate!"),
+    "donate_invoice_fail":     ("Не удалось выставить счёт: {0}", "Failed to create invoice: {0}"),
     "credits_balance":         ("💎 Кредиты: {0}/{1}", "💎 Credits: {0}/{1}"),
 
-    "top_donators_title":      ("🏆 Топ донатеров", "🏆 Top donators"),
-    "top_donators_empty":      ("🥲 Пока никто не донатил. Будь первым!\n{0}",
-                                "🥲 No donations yet. Be the first!\n{0}"),
+    "top_donators_title":      ("🏆 Топ донатеров:", "🏆 Top donators:"),
+    "top_donators_empty":      ("Пока никто не донатил. Будь первым, бро 🍷🗿\n{0}",
+                                "No donations yet. Be the first, bro 🍷🗿\n{0}"),
     "top_donators_item":       ("{0}. {1} — {2} очков", "{0}. {1} — {2} points"),
 
-    "avatar_fail":             ("😕 Не удалось получить аватарку", "😕 Failed to fetch avatar"),
-    "avatar_none":             ("😐 У {0} нет аватарки", "😐 {0} has no avatar"),
-    "recall_fail":             ("😕 Ничего не нашёл в памяти", "😕 Nothing found in memory"),
+    # -- аватар / recall (без эмодзи, как в оригинале) --
+    "avatar_fail":             ("не смог получить аватарку", "failed to fetch avatar"),
+    "avatar_none":             ("у {0} аватарки нет, пусто", "{0} has no avatar"),
+    "recall_fail":             ("не нашёл ничего в памяти", "nothing found in memory"),
 
-    "psl_need_photo":          ("📸 Жду фото для анализа. Отправь его с пометкой <code>кульш psl</code>.",
-                                "📸 Waiting for a photo. Send it with <code>kulsh psl</code>."),
+    # -- looksmaxxing / battle --
+    "psl_need_photo":          ("📸 Жду фото для анализа. Отправь его с пометкой 'looksmaxxing'.",
+                                "📸 Waiting for a photo. Send it marked 'looksmaxxing'."),
     "psl_analyzing":           ("⏳ Анализирую внешность...", "⏳ Analyzing your face..."),
     "psl_report":              ("📊 Результаты looksmaxxing", "📊 Looksmaxxing results"),
     "psl_title":               ("📊 РЕЗУЛЬТАТЫ LOOKSMAXXING", "📊 LOOKSMAXXING RESULTS"),
-    "psl_gender":              ("🧬 Пол", "🧬 Gender"),
-    "psl_score":               ("📈 PSL", "📈 PSL"),
-    "psl_tier":                ("👑 Tier", "👑 Tier"),
-    "psl_potential":           ("🔮 Потенциал", "🔮 Potential"),
-    "psl_analysis":            ("📝 Анализ", "📝 Analysis"),
-    "psl_advice":              ("⚡ Рекомендации", "⚡ Recommendations"),
+    "psl_gender":              ("🧬 Пол:", "🧬 Gender:"),
+    "psl_score":               ("📈 PSL:", "📈 PSL:"),
+    "psl_tier":                ("👑 Tier:", "👑 Tier:"),
+    "psl_potential":           ("🔮 Потенциал:", "🔮 Potential:"),
+    "psl_analysis":            ("📝 Анализ:", "📝 Analysis:"),
+    "psl_advice":              ("⚡ Рекомендации:", "⚡ Recommendations:"),
 
-    "battle_need_photos":      ("⚔️ Для баттла нужно два фото. Отправь их одним альбомом.",
-                                "⚔️ Two photos needed. Send them in a single album."),
+    "battle_need_photos":      ("Для баттла пришлите два фото одним альбомом с командой 'кульш баттл'.",
+                                "For a battle, send two photos in a single album with 'kulsh battle'."),
     "battle_waiting":          ("⚔️ Сравниваю лица...", "⚔️ Comparing faces..."),
     "battle_caption":          ("⚔️ Результат баттла", "⚔️ Battle result"),
     "battle_title":            ("⚔️ РЕЗУЛЬТАТ БАТТЛА", "⚔️ BATTLE RESULT"),
-    "battle_winner":           ("🥇 Победитель", "🥇 Winner"),
+    "battle_winner":           ("🥇 Победитель:", "🥇 Winner:"),
     "battle_first":            ("Первое фото", "First photo"),
     "battle_second":           ("Второе фото", "Second photo"),
-    "battle_reason":           ("🔍 Причина", "🔍 Reason"),
-    "battle_photo1":           ("📊 Фото 1", "📊 Photo 1"),
-    "battle_photo2":           ("📊 Фото 2", "📊 Photo 2"),
+    "battle_reason":           ("🔍 Причина:", "🔍 Reason:"),
+    "battle_photo1":           ("📊 Фото 1:", "📊 Photo 1:"),
+    "battle_photo2":           ("📊 Фото 2:", "📊 Photo 2:"),
 
-    "logs_no_access":          ("🚫 Недостаточно прав", "🚫 Not enough permissions"),
-    "logs_cant_check":         ("🚫 Не удалось проверить права", "🚫 Failed to verify permissions"),
-    "logs_read_error":         ("❌ Ошибка чтения логов: {0}", "❌ Log read error: {0}"),
+    # -- логи --
+    "logs_no_access":          ("не для тебя писано", "not for you"),
+    "logs_cant_check":         ("не могу проверить права", "cannot verify permissions"),
+    "logs_read_error":         ("Ошибка чтения логов: {0}", "Log read error: {0}"),
 
+    # -- tools --
     "tool_unpacking":          ("📦 Распаковываю архив...", "📦 Unpacking archive..."),
-    "tool_unpacked":           ("📦 Распаковано:\n\n{0}", "📦 Unpacked:\n\n{0}"),
+    "tool_unpacked":           ("📦 Распаковал.\n\n📄 {0}", "📦 Unpacked.\n\n📄 {0}"),
     "tool_analyzing":          ("🧠 Анализирую {0} файл(ов)...", "🧠 Analyzing {0} file(s)..."),
     "tool_editing":            ("✏️ Редактирую {0} файл(ов)...", "✏️ Editing {0} file(s)..."),
     "tool_repacking":          ("🗜 Собираю архив обратно...", "🗜 Repacking archive..."),
@@ -309,21 +317,22 @@ TEXTS: dict[str, tuple[str, str]] = {
     "tool_done":               ("✅ Готово", "✅ Done"),
     "tool_error":              ("❌ Ошибка: {0}", "❌ Error: {0}"),
     "tool_no_changes":         ("🤔 ИИ не предложил изменений. {0}", "🤔 AI made no changes. {0}"),
-    "tool_parse_fail":         ("❌ Не удалось распарсить ответ ИИ: {0}", "❌ Failed to parse AI response: {0}"),
+    "tool_parse_fail":         ("❌ Не смог распарсить ответ ИИ: {0}", "❌ Failed to parse AI response: {0}"),
     "tool_no_credits": (
-        "💎 Недостаточно кредитов для редактирования архива.\nНужно {0}, у вас {1}/{2}.",
-        "💎 Not enough credits to edit the archive.\nNeeded {0}, you have {1}/{2}.",
+        "💎 Недостаточно кредитов для редактирования архива.\nНужно {0}, у тебя {1}/{2}.",
+        "💎 Not enough credits to edit the archive.\nNeed {0}, you have {1}/{2}.",
     ),
-    "tool_download_fail":      ("❌ Не удалось скачать файл: {0}", "❌ Failed to download file: {0}"),
-    "tool_review_empty":       ("❓ Что тут?", "❓ What's here?"),
+    "tool_download_fail":      ("не смог скачать файл: {0}", "failed to download file: {0}"),
+    "tool_review_empty":       ("что тут?", "what's here?"),
 
-    "ai_error_400":            ("❌ Ошибка запроса к API (400).", "❌ API request error (400)."),
-    "ai_error_generic":        ("❌ Ошибка API.", "❌ API error."),
-    "ai_blocked":              ("🚫 Блокировка контента.", "🚫 Content blocked."),
-    "ai_unknown":              ("❌ Что-то пошло не так.", "❌ Something went wrong."),
-    "ai_no_models":            ("😴 Все модели и ключи недоступны, попробуй позже 🍷🗿",
-                                "😴 All models and keys are unavailable, try later 🍷🗿"),
-    "ai_json_fail":            ("❌ Не удалось распарсить ответ ИИ.", "❌ Failed to parse AI response."),
+    # -- AI errors (без ❌/🚫, как в оригинале) --
+    "ai_error_400":            ("Ошибка запроса к API (400).", "API request error (400)."),
+    "ai_error_generic":        ("Ошибка API.", "API error."),
+    "ai_blocked":              ("Блокировка контента.", "Content blocked."),
+    "ai_unknown":              ("Ошибка. Что-то пошло не так.", "Error. Something went wrong."),
+    "ai_no_models":            ("Все модели и ключи недоступны, попробуй позже 🍷🗿",
+                                "All models and keys are unavailable, try later 🍷🗿"),
+    "ai_json_fail":            ("Не удалось распарсить ответ ИИ.", "Failed to parse AI response."),
     "ai_custom_prefix":        ("Твои обязательные инструкции: ", "Your mandatory instructions: "),
 
     "on":                      ("вкл", "on"),
@@ -333,98 +342,96 @@ TEXTS: dict[str, tuple[str, str]] = {
     "russian":                 ("Русский 🇷🇺", "Russian 🇷🇺"),
     "english":                 ("Английский 🇬🇧", "English 🇬🇧"),
 
-    "ds_only_admins":          ("🚫 Изменение настроек доступно только администраторам канала.",
-                                "🚫 Only channel administrators can change settings."),
-    "ds_need_specify_ru_en":   ("❗ Укажите <code>ru</code> или <code>en</code>.",
-                                "❗ Specify <code>ru</code> or <code>en</code>."),
-    "ds_need_specify_theme":   ("❗ Укажите <code>тёмная</code> или <code>светлая</code>.",
-                                "❗ Specify <code>dark</code> or <code>light</code>."),
-    "ds_setting_lang":         ("🌐 Язык: {0}", "🌐 Language: {0}"),
-    "ds_setting_theme":        ("🌓 Тема: {0}", "🌓 Theme: {0}"),
-    "ds_setting_series":       ("🎬 Напоминание о серии: {0}", "🎬 Series reminder: {0}"),
-    "ds_setting_stickers":     ("🎨 Стикеры/гифки: {0}", "🎨 Stickers/GIFs: {0}"),
-    "ds_setting_sep":          ("💬 Разбивка на сообщения: {0}", "💬 Message split: {0}"),
-    "ds_setting_autoreply":    ("🗣 Автоответ: {0}", "🗣 Auto-reply: {0}"),
-    "ds_setting_random":       ("📢 Случайные сообщения: {0}", "📢 Random messages: {0}"),
-    "ds_setting_temp":         ("🎛 Температура: {0}", "🎛 Temperature: {0}"),
-    "ds_setting_prompt_reset": ("📝 Промпт сброшен.", "📝 Prompt reset."),
-    "ds_setting_prompt_set":   ("📝 Промпт установлен.", "📝 Prompt set."),
-    "ds_setting_prompt_need":  ("📝 Введите текст или <code>сброс</code>.", "📝 Send text or <code>reset</code>."),
-    "ds_setting_model":        ("🧠 Модель: {0}", "🧠 Model: {0}"),
-    "ds_setting_model_auto":   ("🧠 Модель: авто", "🧠 Model: auto"),
-    "ds_setting_model_bad":    ("❌ Введите номер или <code>авто</code>.", "❌ Enter a number or <code>auto</code>."),
-    "ds_setting_model_badnum": ("❌ Неверный номер.", "❌ Invalid number."),
-    "ds_setting_temp_bad":     ("❌ Введите число от 0.0 до 2.0.", "❌ Enter a number between 0.0 and 2.0."),
-    "ds_unknown_param":        ("❌ Неизвестный параметр. Используйте <code>кульш конфиг</code>.",
-                                "❌ Unknown parameter. Use <code>kulsh config</code>."),
-    "ds_update_no_access":     ("🚫 Недостаточно прав", "🚫 Not enough permissions"),
-    "ds_update_start":         ("⚙️ Обновляюсь с автооткатом при ошибке...",
-                                "⚙️ Updating with auto-rollback on error..."),
-    "ds_update_uptodate":      ("✅ Уже актуальная версия:\n```\n{0}\n```",
-                                "✅ Already up to date:\n```\n{0}\n```"),
-    "ds_update_ok":            ("✅ Изменения подтянуты, перезапускаюсь:\n```\n{0}\n```",
-                                "✅ Changes pulled, restarting:\n```\n{0}\n```"),
+    # -- Discord (без лишних эмодзи) --
+    "ds_only_admins":          ("только админы могут менять конфиг", "only admins can change config"),
+    "ds_need_specify_ru_en":   ("Укажите <code>ru</code> или <code>en</code>.", "Specify <code>ru</code> or <code>en</code>."),
+    "ds_need_specify_theme":   ("Укажите <code>тёмная</code> или <code>светлая</code>.", "Specify <code>dark</code> or <code>light</code>."),
+    "ds_setting_lang":         ("Язык: {0}", "Language: {0}"),
+    "ds_setting_theme":        ("Тема: {0}", "Theme: {0}"),
+    "ds_setting_series":       ("Серия: {0}", "Series: {0}"),
+    "ds_setting_stickers":     ("Стикеры: {0}", "Stickers: {0}"),
+    "ds_setting_sep":          ("Разбивка: {0}", "Split: {0}"),
+    "ds_setting_autoreply":    ("Автоответ: {0}", "Auto-reply: {0}"),
+    "ds_setting_random":       ("Рандом: {0}", "Random: {0}"),
+    "ds_setting_temp":         ("Температура: {0}", "Temperature: {0}"),
+    "ds_setting_prompt_reset": ("Промпт сброшен", "Prompt reset"),
+    "ds_setting_prompt_set":   ("Промпт установлен", "Prompt set"),
+    "ds_setting_prompt_need":  ("Введите текст или 'сброс'", "Send text or 'reset'"),
+    "ds_setting_model":        ("Модель: {0}", "Model: {0}"),
+    "ds_setting_model_auto":   ("Модель: авто", "Model: auto"),
+    "ds_setting_model_bad":    ("Введите номер или 'авто'.", "Enter number or 'auto'."),
+    "ds_setting_model_badnum": ("Неверный номер", "Invalid number"),
+    "ds_setting_temp_bad":     ("Введите число 0.0-2.0", "Enter number 0.0-2.0"),
+    "ds_unknown_param":        ("Неизвестный параметр. Используйте 'кульш конфиг'.",
+                                "Unknown parameter. Use 'kulsh config'."),
+    "ds_update_no_access":     ("ты кто бля, обновлять меня будешь?", "who are you to update me?"),
+    "ds_update_start":         ("ща попробую обновиться (с автооткатом при ошибке)...",
+                                "trying to update (auto-rollback on error)..."),
+    "ds_update_uptodate":      ("я и так свежий:\n```\n{0}\n```", "already up to date:\n```\n{0}\n```"),
+    "ds_update_ok":            ("изменения подтянуты, перезапускаюсь:\n```\n{0}\n```",
+                                "changes pulled, restarting:\n```\n{0}\n```"),
     "ds_update_rolled": (
-        "⚠️ Новый коммит содержит ошибки — откатился к предыдущей версии.\nБот продолжает работу.\n```\n{0}\n```",
-        "⚠️ New commit contains errors — rolled back to the previous version.\nBot continues working.\n```\n{0}\n```",
+        "новый коммит содержит ошибки — я откатился к предыдущей версии. "
+        "Бот продолжает работать.\n```\n{0}\n```",
+        "new commit contains errors — rolled back. Bot continues working.\n```\n{0}\n```",
     ),
-    "ds_update_error":         ("❌ Ошибка обновления:\n```\n{0}\n```",
-                                "❌ Update error:\n```\n{0}\n```"),
-    "ds_voice_not_in":         ("🎧 Вы не в голосовом канале", "🎧 You are not in a voice channel"),
-    "ds_voice_joined":         ("🔊 Подключился к {0}", "🔊 Joined {0}"),
-    "ds_voice_cant_join":      ("❌ Не удалось подключиться.", "❌ Failed to connect."),
-    "ds_voice_left":           ("👋 Отключился", "👋 Disconnected"),
-    "ds_voice_not_in_bot":     ("😐 Я и так не в голосовом", "😐 I'm not in voice anyway"),
-    "ds_attachments_error":    ("❌ Не удалось обработать вложение", "❌ Failed to process attachment"),
-    "ds_no_memory":            ("😕 В памяти нет медиа", "😕 No media in memory"),
-    "ds_avatar_none":          ("😐 Не удалось получить аватарку", "😐 Failed to fetch avatar"),
+    "ds_update_error":         ("ошибка обновления:\n```\n{0}\n```", "update error:\n```\n{0}\n```"),
+    "ds_voice_not_in":         ("ты не в войсе, куда заходить?", "you're not in voice, where should I go?"),
+    "ds_voice_joined":         ("залетел в {0} 🍷🗿", "joined {0} 🍷🗿"),
+    "ds_voice_cant_join":      ("не могу зайти.", "cannot join."),
+    "ds_voice_left":           ("пока кенты", "bye mates"),
+    "ds_voice_not_in_bot":     ("я и так не там", "I'm not there anyway"),
+    "ds_attachments_error":    ("не могу глянуть, сломалась", "cannot look, broken"),
+    "ds_no_memory":            ("не нашёл ничего в памяти", "nothing found in memory"),
+    "ds_avatar_none":          ("не смог получить аватарку", "failed to fetch avatar"),
     "ds_logs_content":         ("🍷🗿 Логи сервера:", "🍷🗿 Server logs:"),
 
+    # -- help (без эмодзи на заголовках, только у <b> секций по оригиналу) --
     "help_body": (
-        "🍷🗿 <b>Команды Кульша</b>\n\n"
-        "📌 <b>Общие</b>\n"
-        "- /start — приветствие\n"
-        "- /menu — интерактивное меню\n"
-        "- /help — эта справка\n"
-        "- /donate — поддержка проекта\n"
-        "- /donate_stars &lt;N&gt; — донат через Telegram Stars\n"
-        "- /credits — баланс кредитов\n\n"
-        "⚙️ <b>Настройки</b>\n"
-        "- <code>кульш конфиг</code> / <code>кульш настройки</code> — панель настроек\n\n"
-        "🛠 <b>Утилиты</b>\n"
-        "- <code>кульш аватарка</code> — описать аватарку собеседника\n"
-        "- <code>кульш вспомни медиа [N]</code> — вспомнить последние N медиа\n"
-        "- <code>кульш логи</code> — логи сервера (админам)\n\n"
-        "🎮 <b>Развлечения</b>\n"
-        "- <code>кульш psl</code> — оценка внешности (looksmaxxing)\n"
-        "- <code>кульш psl совет</code> — оценка с рекомендациями\n"
-        "- <code>кульш battle</code> — баттл двух фото (одним альбомом)\n"
-        "- <code>кульш донаты</code> — топ донатеров\n\n"
-        "🧰 <b>Инструменты (в личных сообщениях)</b>\n"
-        "Отправьте zip-архив или текстовый файл — бот обработает и вернёт результат.\n\n"
+        "🍷🗿 <b>Команды Кульша:</b>\n\n"
+        "<b>Общие:</b>\n"
+        "/start — приветствие\n"
+        "/menu — интерактивное меню\n"
+        "/help — эта справка\n"
+        "/donate — поддержать проект\n"
+        "/donate_stars &lt;N&gt; — донат через Telegram Stars\n"
+        "/credits — баланс кредитов\n\n"
+        "<b>Настройки:</b>\n"
+        "<code>кульш конфиг</code> / <code>кульш настройки</code> — настройки (инлайн)\n\n"
+        "<b>Утилиты:</b>\n"
+        "<code>кульш аватарка</code> — описать аватарку\n"
+        "<code>кульш вспомни медиа [N]</code> — вспомнить N медиа\n"
+        "<code>кульш логи</code> — логи (админам)\n\n"
+        "<b>Развлечения:</b>\n"
+        "<code>кульш psl</code> — looksmaxxing\n"
+        "<code>кульш psl совет</code> — + рекомендации\n"
+        "<code>кульш battle</code> — баттл (альбом)\n"
+        "<code>кульш донаты</code> — топ донатеров\n\n"
+        "<b>Инструменты (ЛС):</b>\n"
+        "Отправь архив/текстовый файл — бот распакует, изменит, соберёт и вернёт.\n\n"
         "🚀 Mini App: {0}\n"
         "🔗 GitHub: {1}",
-        "🍷🗿 <b>Kulsh commands</b>\n\n"
-        "📌 <b>General</b>\n"
-        "- /start — greeting\n"
-        "- /menu — interactive menu\n"
-        "- /help — this help\n"
-        "- /donate — support the project\n"
-        "- /donate_stars &lt;N&gt; — donate via Telegram Stars\n"
-        "- /credits — credits balance\n\n"
-        "⚙️ <b>Settings</b>\n"
-        "- <code>kulsh config</code> / <code>kulsh settings</code> — settings panel\n\n"
-        "🛠 <b>Utilities</b>\n"
-        "- <code>kulsh avatar</code> — describe an avatar\n"
-        "- <code>kulsh recall [N]</code> — recall last N media\n"
-        "- <code>kulsh logs</code> — server logs (admins)\n\n"
-        "🎮 <b>Entertainment</b>\n"
-        "- <code>kulsh psl</code> — looksmaxxing\n"
-        "- <code>kulsh psl advice</code> — with recommendations\n"
-        "- <code>kulsh battle</code> — two-photo battle (single album)\n"
-        "- <code>kulsh donations</code> — top donators\n\n"
-        "🧰 <b>Tools (direct messages)</b>\n"
-        "Send a zip archive or a text file — the bot will process and return the result.\n\n"
+        "🍷🗿 <b>Kulsh commands:</b>\n\n"
+        "<b>General:</b>\n"
+        "/start — greeting\n"
+        "/menu — interactive menu\n"
+        "/help — this help\n"
+        "/donate — support the project\n"
+        "/donate_stars &lt;N&gt; — donate via Telegram Stars\n"
+        "/credits — credits balance\n\n"
+        "<b>Settings:</b>\n"
+        "<code>kulsh config</code> / <code>kulsh settings</code> — settings (inline)\n\n"
+        "<b>Utilities:</b>\n"
+        "<code>kulsh avatar</code> — describe avatar\n"
+        "<code>kulsh recall [N]</code> — recall N media\n"
+        "<code>kulsh logs</code> — logs (admins)\n\n"
+        "<b>Entertainment:</b>\n"
+        "<code>kulsh psl</code> — looksmaxxing\n"
+        "<code>kulsh psl advice</code> — + recommendations\n"
+        "<code>kulsh battle</code> — battle (album)\n"
+        "<code>kulsh donations</code> — top donators\n\n"
+        "<b>Tools (DM):</b>\n"
+        "Send an archive/text file — bot unpacks, edits, repacks and returns it.\n\n"
         "🚀 Mini App: {0}\n"
         "🔗 GitHub: {1}",
     ),
@@ -1285,7 +1292,7 @@ async def play_apply_animation(chat_id: int, message_id: int, step_delay: float 
 
 
 async def _cleanup_config_children(chat_id: int, user_id: int) -> None:
-    """Удаляет дочерние сообщения панели настроек: запросы промпта, ответы и т.д."""
+    """Удаляет дочерние сообщения панели настроек."""
     keys = list(config_children_msgs.keys())
     for key in keys:
         if key[0] != chat_id or key[1] != user_id:
@@ -1297,7 +1304,7 @@ async def _cleanup_config_children(chat_id: int, user_id: int) -> None:
                 pass
 
 # ============================================================
-# SYSTEM PROMPT — ОРИГИНАЛЬНЫЙ
+# SYSTEM PROMPT (ОРИГИНАЛЬНЫЙ)
 # ============================================================
 def build_system_prompt(platform: str, chat_id: int, user_id: int) -> str:
     cfg = get_user_config(platform, chat_id, user_id)
@@ -2578,7 +2585,10 @@ async def _edit_or_send(call: telebot.types.CallbackQuery, text: str, kb: Inline
 async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
     owner = config_msg_owners.get(call.message.message_id)
     if owner is not None and owner != call.from_user.id:
-        await tg_bot.answer_callback_query(call.id, "🚫", show_alert=False)
+        cfg_chat = call.message.chat.id
+        cfg_user = call.from_user.id
+        l = get_user_config("tg", cfg_chat, cfg_user).get("language", "ru")
+        await tg_bot.answer_callback_query(call.id, _t(l, "cfg_not_yours"), show_alert=False)
         return
 
     chat_id = call.message.chat.id
@@ -2693,7 +2703,7 @@ async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
                 await tg_bot.delete_message(chat_id, trig_id)
             except Exception:
                 pass
-        # Убираем дочерние сообщения (промпт и т.п.)
+        # Убираем дочерние сообщения (запрос промпта и т.п.)
         await _cleanup_config_children(chat_id, user_id)
         await tg_bot.answer_callback_query(call.id, _t(lang, "cfg_done"))
         asyncio.create_task(play_apply_animation(chat_id, call.message.message_id))
@@ -2805,10 +2815,6 @@ async def handle_menu_callback(call: telebot.types.CallbackQuery) -> None:
 # TELEGRAM: HELP / MENU / START / DONATE
 # ============================================================
 async def _send_menu_gif(chat_id: int, reply_to: int | None, path: str, fallback_url: str) -> int | None:
-    """
-    Отправляет GIF как анимацию. Если локальный файл есть — грузим его
-    через multipart, иначе — URL из пула. Всегда возвращает message_id.
-    """
     sent = None
     if os.path.exists(path):
         try:
@@ -2934,7 +2940,7 @@ async def handle_donate(message: telebot.types.Message) -> None:
     try:
         await send_formatted(message.chat.id, text, reply_to=message.message_id)
     except Exception:
-        await reply_tg_html(message, f"💎 {DONATE_URL}")
+        await reply_tg_html(message, f"Поддержать Кульша: {DONATE_URL} 🍷🗿")
 
 
 @tg_bot.message_handler(commands=['donate_stars'])
@@ -2946,22 +2952,22 @@ async def handle_donate_stars(message: telebot.types.Message) -> None:
     lang = cfg.get("language", "ru")
     args = telebot.util.extract_arguments(message.text or "").strip()
     if not args:
-        await reply_tg_html(message, f"⭐ {_t(lang, 'donate_stars_need')}")
+        await reply_tg_html(message, _t(lang, "donate_stars_need"))
         return
     try:
         stars = int(args.split()[0])
         if stars <= 0:
             raise ValueError
     except (ValueError, IndexError):
-        await reply_tg_html(message, f"❌ {_t(lang, 'donate_stars_bad')}")
+        await reply_tg_html(message, _t(lang, "donate_stars_bad"))
         return
     pending_donations[chat_id] = stars
-    prices = [telebot.types.LabeledPrice(label="💎 Поддержать Кульша", amount=stars)]
+    prices = [telebot.types.LabeledPrice(label="Поддержать Кульша", amount=stars)]
     try:
         await tg_bot.send_invoice(
             chat_id=chat_id,
-            title="💎 Донат Кульшу",
-            description=f"💖 Поддержка разработки на {stars} ⭐",
+            title="Донат Кульшу",
+            description=f"Поддержка разработки на {stars} ⭐",
             invoice_payload=f"donate_{stars}_stars",
             provider_token="",
             currency="XTR",
@@ -2988,11 +2994,11 @@ async def handle_credits(message: telebot.types.Message) -> None:
 async def handle_toggle_premium(message: telebot.types.Message) -> None:
     global premium_functions_enabled
     if message.from_user is None or message.from_user.id != PREMIUM_ADMIN_ID:
-        await reply_tg_html(message, "🚫 Нет доступа.")
+        await reply_tg_html(message, "⛔ Нет доступа.")
         return
     premium_functions_enabled = not premium_functions_enabled
-    state = "✅ включены" if premium_functions_enabled else "❌ выключены"
-    await reply_tg_html(message, f"⚙️ Расширенные функции: {state}")
+    state = "включены ✅" if premium_functions_enabled else "выключены ❌"
+    await reply_tg_html(message, f"Расширенные функции: {state}")
 
 
 @tg_bot.pre_checkout_query_handler(func=lambda query: True)
@@ -3011,7 +3017,7 @@ async def handle_successful_payment(message: telebot.types.Message) -> None:
     except Exception:
         stars = 0
     name = message.from_user.full_name or message.from_user.username or str(user_id)
-    logger.info(f"🎉 {user_id} задонатил {stars} звёзд")
+    logger.info(f"{user_id} задонатил {stars} звёзд")
     add_donation('tg', user_id, stars, name)
     await send_donation_alert('tg', name, stars)
     cfg = get_user_config("tg", message.chat.id, user_id)
@@ -3301,7 +3307,8 @@ def _safe_join(base: str, rel: str) -> str | None:
     target = os.path.realpath(os.path.join(base, rel))
     base_real = os.path.realpath(base)
     if not target.startswith(base_real + os.sep) and target != base_real:
-        return None    return target
+        return None
+    return target
 
 
 def _list_files(base: str) -> list[str]:
@@ -3503,7 +3510,7 @@ async def tool_review_file(message: telebot.types.Message, user_request: str,
     try:
         text = file_bytes.decode('utf-8', errors='replace')
     except Exception:
-        await reply_tg_html(message, _t(lang, "tool_download_fail", "decode error"))
+        await reply_tg_html(message, "не могу прочитать файл как текст")
         return
     if len(text) > MAX_FILE_SIZE:
         text = text[:MAX_FILE_SIZE] + "\n...[обрезано]"
@@ -3602,20 +3609,20 @@ async def handle_tg_media(message: telebot.types.Message) -> None:
             theme = cfg.get("theme", "dark")
             ai_data = await get_looksmaxxing_data(img_bytes, include_advice, lang=lang)
             if "error" in ai_data:
-                await tg_bot.edit_message_text(f"❌ {ai_data['error']}", chat_id, status.message_id)
+                await tg_bot.edit_message_text(ai_data['error'], chat_id, status.message_id)
                 return
             infographic = await create_infographic(img_bytes, ai_data, theme=theme, lang=lang)
             report_text = (
                 f"<b>{_t(lang, 'psl_title')}</b>\n\n"
-                f"{_t(lang, 'psl_gender')}: {ai_data.get('gender', '?')}\n"
-                f"{_t(lang, 'psl_score')}: <code>{ai_data.get('psl', '?')}/8.0</code>\n"
-                f"{_t(lang, 'psl_tier')}: <code>{ai_data.get('tier', '?')}</code>\n"
+                f"{_t(lang, 'psl_gender')} {ai_data.get('gender', '?')}\n"
+                f"{_t(lang, 'psl_score')} <code>{ai_data.get('psl', '?')}/8.0</code>\n"
+                f"{_t(lang, 'psl_tier')} <code>{ai_data.get('tier', '?')}</code>\n"
             )
             if ai_data.get("potential"):
-                report_text += f"{_t(lang, 'psl_potential')}: <code>{ai_data['potential']}</code>\n"
-            report_text += f"\n<b>{_t(lang, 'psl_analysis')}:</b>\n{html.escape(ai_data.get('summary', ''))}"
+                report_text += f"{_t(lang, 'psl_potential')} <code>{ai_data['potential']}</code>\n"
+            report_text += f"\n<b>{_t(lang, 'psl_analysis')}</b>\n{html.escape(ai_data.get('summary', ''))}"
             if include_advice and ai_data.get("advice"):
-                report_text += f"\n\n<b>{_t(lang, 'psl_advice')}:</b>\n{html.escape(ai_data['advice'])}"
+                report_text += f"\n\n<b>{_t(lang, 'psl_advice')}</b>\n{html.escape(ai_data['advice'])}"
             try:
                 await tg_bot.send_photo(chat_id, InputFile(infographic),
                                         caption=_t(lang, "psl_report"))
@@ -3632,7 +3639,7 @@ async def handle_tg_media(message: telebot.types.Message) -> None:
             add_bot_memory(chat_key, "[looksmaxxing отчёт]")
         except Exception as e:
             logger.error(f"looksmaxxing: {e}")
-            await reply_tg_html(message, _t(lang, "tool_error", str(e)))
+            await reply_tg_html(message, f"🌋 Ошибка: {e}")
         return
 
     if is_dm and message.document:
@@ -3709,7 +3716,7 @@ async def handle_tg_media(message: telebot.types.Message) -> None:
     except Exception as e:
         logger.warning(f"download media: {e}")
 
-    default_prompt = "что на этом?" if lang == "ru" else "what's this?"
+    default_prompt = "че на этом?" if lang == "ru" else "what's this?"
     prompt = caption.strip() or default_prompt
     add_user_memory(chat_key, "TG", display_name, username, user_id,
                     f"{prompt} [с медиа: {media_tag}]", [media_tag or "медиа"],
@@ -3775,7 +3782,7 @@ async def handle_tg_text(message: telebot.types.Message) -> None:
         if not top:
             await reply_tg_html(message, _t(lang, "top_donators_empty", DONATE_URL))
             return
-        lines = [f"# {_t(lang, 'top_donators_title')}\n"]
+        lines = [f"{_t(lang, 'top_donators_title')}\n"]
         for i, (name, total) in enumerate(top, 1):
             lines.append(_t(lang, "top_donators_item", i, html.escape(name), total))
         await send_formatted(chat_id, "\n".join(lines), reply_to=message.message_id)
@@ -3895,7 +3902,7 @@ async def process_battle_media_group(media_group_id: str, tg_chat_id: int, user_
     status = await tg_bot.send_message(tg_chat_id, _t(lang, "battle_waiting"))
     ai_data = await get_battle_data(photo1_bytes, photo2_bytes, lang=lang)
     if "error" in ai_data:
-        await tg_bot.edit_message_text(f"❌ {ai_data['error']}", tg_chat_id, status.message_id)
+        await tg_bot.edit_message_text(ai_data['error'], tg_chat_id, status.message_id)
         return
     battle_img = await create_battle_infographic(photo1_bytes, photo2_bytes, ai_data,
                                                   theme=theme, lang=lang)
@@ -3903,11 +3910,11 @@ async def process_battle_media_group(media_group_id: str, tg_chat_id: int, user_
     winner_label = _t(lang, "battle_first") if winner_num == "1" else _t(lang, "battle_second")
     report_text = (
         f"<b>{_t(lang, 'battle_title')}</b>\n\n"
-        f"{_t(lang, 'battle_winner')}: <b>{winner_label}</b>\n"
-        f"{_t(lang, 'battle_reason')}: {html.escape(ai_data.get('reason', ''))}\n\n"
-        f"{_t(lang, 'battle_photo1')}: PSL {ai_data.get('photo1', {}).get('psl', '?')} | "
+        f"{_t(lang, 'battle_winner')} <b>{winner_label}</b>\n"
+        f"{_t(lang, 'battle_reason')} {html.escape(ai_data.get('reason', ''))}\n\n"
+        f"{_t(lang, 'battle_photo1')} PSL {ai_data.get('photo1', {}).get('psl', '?')} | "
         f"Tier {html.escape(ai_data.get('photo1', {}).get('tier', '?'))}\n"
-        f"{_t(lang, 'battle_photo2')}: PSL {ai_data.get('photo2', {}).get('psl', '?')} | "
+        f"{_t(lang, 'battle_photo2')} PSL {ai_data.get('photo2', {}).get('psl', '?')} | "
         f"Tier {html.escape(ai_data.get('photo2', {}).get('tier', '?'))}\n"
     )
     try:
@@ -4311,15 +4318,15 @@ def _ds_slash_help(lang: str) -> str:
 def _ds_slash_menu(lang: str) -> str:
     if lang == "ru":
         return (
-            "# 🍷🗿 Меню Кульш AI\n\n"
+            "# Кульш AI — меню\n\n"
             "Открытая языковая модель с набором встроенных инструментов.\n\n"
-            "**📋 Основные**\n"
+            "**Основные**\n"
             "- `/start` — приветствие\n"
             "- `/help` — полный список команд\n"
             "- `/config` — настройки канала\n"
             "- `/donate` — поддержка разработки\n"
             "- `/credits` — баланс кредитов\n\n"
-            "**🛠 Инструменты**\n"
+            "**Инструменты**\n"
             "- `/avatar` — описать аватарку\n"
             "- `/recall` — вспомнить последние медиа\n"
             "- `/psl` — оценка внешности\n"
@@ -4328,15 +4335,15 @@ def _ds_slash_menu(lang: str) -> str:
             f"🚀 {MINI_APP_URL}"
         )
     return (
-        "# 🍷🗿 Kulsh AI Menu\n\n"
+        "# Kulsh AI — menu\n\n"
         "An open-source language model with a set of built-in tools.\n\n"
-        "**📋 Basics**\n"
+        "**Basics**\n"
         "- `/start` — greeting\n"
         "- `/help` — full command list\n"
         "- `/config` — channel settings\n"
         "- `/donate` — support development\n"
         "- `/credits` — credits balance\n\n"
-        "**🛠 Tools**\n"
+        "**Tools**\n"
         "- `/avatar` — describe avatar\n"
         "- `/recall` — recall recent media\n"
         "- `/psl` — looksmaxxing\n"
@@ -4349,18 +4356,18 @@ def _ds_slash_menu(lang: str) -> str:
 def _ds_slash_start(lang: str) -> str:
     if lang == "ru":
         return (
-            "# 🍷🗿 Кульш на связи\n\n"
+            "# Кульш на связи\n\n"
             "Открытая языковая модель с анализом изображений и настройкой под себя.\n\n"
-            "**🚀 С чего начать**\n"
+            "**С чего начать**\n"
             "- `/menu` — все разделы\n"
             "- `/help` — список команд\n"
             "- `/config` — настройки канала\n\n"
             f"🚀 {MINI_APP_URL}"
         )
     return (
-        "# 🍷🗿 Kulsh is online\n\n"
+        "# Kulsh is online\n\n"
         "An open-source language model with image analysis and personal configuration.\n\n"
-        "**🚀 Get started**\n"
+        "**Get started**\n"
         "- `/menu` — all sections\n"
         "- `/help` — command list\n"
         "- `/config` — channel settings\n\n"
@@ -4400,7 +4407,7 @@ async def ds_slash_donate(interaction: discord.Interaction):
         f"# {_t(lang, 'donate_title')}\n\n"
         f"{_t(lang, 'donate_intro')}\n\n"
         f"{_t(lang, 'donate_online')}: {DONATE_URL}\n"
-        f"🔗 GitHub: {GITHUB_URL}"
+        f"GitHub: {GITHUB_URL}"
     )
     await interaction.response.send_message(text)
 
@@ -4449,13 +4456,13 @@ async def ds_slash_avatar(interaction: discord.Interaction, user: discord.Member
         )
         segments = clean_extra_text(raw) if raw else []
         if not segments:
-            await interaction.followup.send(_t(lang, "ds_avatar_none"))
+            await interaction.followup.send(_t(lang, "avatar_fail"))
             return
         for seg in segments:
             await interaction.followup.send(seg)
     except Exception as e:
         logger.error(f"DS slash avatar: {e}")
-        await interaction.followup.send(_t(lang, "tool_error", str(e)))
+        await interaction.followup.send(f"Ошибка: {e}")
 
 
 @ds_tree.command(name="recall", description="Recall recent media / Вспомнить недавние медиа")
@@ -4468,7 +4475,7 @@ async def ds_slash_recall(interaction: discord.Interaction, count: int = 3):
     n = max(1, min(10, count))
     history = list(chat_media_history.get(f"ds_{chat_id}", []))
     if not history:
-        await interaction.followup.send(_t(lang, "ds_no_memory"))
+        await interaction.followup.send(_t(lang, "recall_fail"))
         return
     last = history[-n:]
     lines = [f"- {it.get('type', 'media')} {it.get('sender', '?')}: {(it.get('caption') or '')[:120]}"
@@ -4495,7 +4502,7 @@ async def ds_slash_recall(interaction: discord.Interaction, count: int = 3):
             await interaction.followup.send(seg)
     except Exception as e:
         logger.error(f"DS slash recall: {e}")
-        await interaction.followup.send(_t(lang, "tool_error", str(e)))
+        await interaction.followup.send(f"Ошибка: {e}")
 
 
 @ds_tree.command(name="logs", description="Server logs (admins) / Логи сервера (админам)")
@@ -4514,7 +4521,7 @@ async def ds_slash_logs(interaction: discord.Interaction):
         except FileNotFoundError:
             await interaction.followup.send(content=content, ephemeral=True)
     except Exception as e:
-        await interaction.followup.send(_t(lang, "tool_error", str(e)), ephemeral=True)
+        await interaction.followup.send(f"Ошибка: {e}", ephemeral=True)
 
 
 @ds_tree.command(name="psl", description="Looksmaxxing analysis / Оценка внешности")
@@ -4530,20 +4537,20 @@ async def ds_slash_psl(interaction: discord.Interaction, image: discord.Attachme
         theme = cfg.get("theme", "dark")
         ai_data = await get_looksmaxxing_data(img_bytes, advice, lang=lang)
         if "error" in ai_data:
-            await interaction.followup.send(f"❌ {ai_data['error']}")
+            await interaction.followup.send(ai_data['error'])
             return
         infographic = await create_infographic(img_bytes, ai_data, theme=theme, lang=lang)
         report = (
             f"**{_t(lang, 'psl_title')}**\n"
-            f"{_t(lang, 'psl_gender')}: {ai_data.get('gender', '?')}\n"
-            f"{_t(lang, 'psl_score')}: `{ai_data.get('psl', '?')}/8.0`\n"
-            f"{_t(lang, 'psl_tier')}: `{ai_data.get('tier', '?')}`\n"
+            f"{_t(lang, 'psl_gender')} {ai_data.get('gender', '?')}\n"
+            f"{_t(lang, 'psl_score')} `{ai_data.get('psl', '?')}/8.0`\n"
+            f"{_t(lang, 'psl_tier')} `{ai_data.get('tier', '?')}`\n"
         )
         if ai_data.get("potential"):
-            report += f"{_t(lang, 'psl_potential')}: `{ai_data['potential']}`\n"
+            report += f"{_t(lang, 'psl_potential')} `{ai_data['potential']}`\n"
         report += f"\n{ai_data.get('summary', '')}"
         if advice and ai_data.get("advice"):
-            report += f"\n\n**{_t(lang, 'psl_advice')}:**\n{ai_data['advice']}"
+            report += f"\n\n**{_t(lang, 'psl_advice')}**\n{ai_data['advice']}"
         await interaction.followup.send(
             content=report[:1900],
             file=discord.File(fp=infographic, filename="psl.png"),
@@ -4552,7 +4559,7 @@ async def ds_slash_psl(interaction: discord.Interaction, image: discord.Attachme
             await interaction.followup.send(report[1900:])
     except Exception as e:
         logger.error(f"DS slash psl: {e}")
-        await interaction.followup.send(_t(lang, "tool_error", str(e)))
+        await interaction.followup.send(f"Ошибка: {e}")
 
 
 @ds_tree.command(name="battle", description="Two-photo battle / Баттл двух фото")
@@ -4569,18 +4576,18 @@ async def ds_slash_battle(interaction: discord.Interaction, image1: discord.Atta
         theme = cfg.get("theme", "dark")
         ai_data = await get_battle_data(p1, p2, lang=lang)
         if "error" in ai_data:
-            await interaction.followup.send(f"❌ {ai_data['error']}")
+            await interaction.followup.send(ai_data['error'])
             return
         img = await create_battle_infographic(p1, p2, ai_data, theme=theme, lang=lang)
         winner_num = str(ai_data.get("winner", "1"))
         winner_label = _t(lang, "battle_first") if winner_num == "1" else _t(lang, "battle_second")
         report = (
             f"**{_t(lang, 'battle_title')}**\n\n"
-            f"{_t(lang, 'battle_winner')}: **{winner_label}**\n"
-            f"{_t(lang, 'battle_reason')}: {ai_data.get('reason', '')}\n\n"
-            f"{_t(lang, 'battle_photo1')}: PSL {ai_data.get('photo1', {}).get('psl', '?')} | "
+            f"{_t(lang, 'battle_winner')} **{winner_label}**\n"
+            f"{_t(lang, 'battle_reason')} {ai_data.get('reason', '')}\n\n"
+            f"{_t(lang, 'battle_photo1')} PSL {ai_data.get('photo1', {}).get('psl', '?')} | "
             f"{ai_data.get('photo1', {}).get('tier', '?')}\n"
-            f"{_t(lang, 'battle_photo2')}: PSL {ai_data.get('photo2', {}).get('psl', '?')} | "
+            f"{_t(lang, 'battle_photo2')} PSL {ai_data.get('photo2', {}).get('psl', '?')} | "
             f"{ai_data.get('photo2', {}).get('tier', '?')}"
         )
         await interaction.followup.send(
@@ -4589,7 +4596,7 @@ async def ds_slash_battle(interaction: discord.Interaction, image1: discord.Atta
         )
     except Exception as e:
         logger.error(f"DS slash battle: {e}")
-        await interaction.followup.send(_t(lang, "tool_error", str(e)))
+        await interaction.followup.send(f"Ошибка: {e}")
 
 # ============================================================
 # DISCORD: MESSAGE HANDLER
@@ -4686,7 +4693,7 @@ async def on_message(message: discord.Message) -> None:
                 for chunk in chunk_text(tail, 1900):
                     await message.channel.send(f"```\n{chunk}\n```")
         except Exception as e:
-            await message.reply(_t(lang, "tool_error", str(e)))
+            await message.reply(f"Ошибка: {e}")
         return
 
     if not is_dm and ("кульш зайди в войс" in content_lower or "kulsh join voice" in content_lower):
@@ -4752,18 +4759,18 @@ async def on_message(message: discord.Message) -> None:
                 theme = cfg.get("theme", "dark")
                 ai_data = await get_battle_data(p1, p2, lang=lang)
                 if "error" in ai_data:
-                    await status.edit(content=f"❌ {ai_data['error']}")
+                    await status.edit(content=ai_data['error'])
                     return
                 img = await create_battle_infographic(p1, p2, ai_data, theme=theme, lang=lang)
                 winner_num = str(ai_data.get("winner", "1"))
                 winner_label = _t(lang, "battle_first") if winner_num == "1" else _t(lang, "battle_second")
                 report = (
                     f"**{_t(lang, 'battle_title')}**\n\n"
-                    f"{_t(lang, 'battle_winner')}: **{winner_label}**\n"
-                    f"{_t(lang, 'battle_reason')}: {ai_data.get('reason', '')}\n\n"
-                    f"{_t(lang, 'battle_photo1')}: PSL {ai_data.get('photo1', {}).get('psl', '?')} | "
+                    f"{_t(lang, 'battle_winner')} **{winner_label}**\n"
+                    f"{_t(lang, 'battle_reason')} {ai_data.get('reason', '')}\n\n"
+                    f"{_t(lang, 'battle_photo1')} PSL {ai_data.get('photo1', {}).get('psl', '?')} | "
                     f"{ai_data.get('photo1', {}).get('tier', '?')}\n"
-                    f"{_t(lang, 'battle_photo2')}: PSL {ai_data.get('photo2', {}).get('psl', '?')} | "
+                    f"{_t(lang, 'battle_photo2')} PSL {ai_data.get('photo2', {}).get('psl', '?')} | "
                     f"{ai_data.get('photo2', {}).get('tier', '?')}"
                 )
                 await message.reply(file=discord.File(fp=img, filename="battle.png"),
@@ -4774,7 +4781,7 @@ async def on_message(message: discord.Message) -> None:
                 add_bot_memory(f"ds_{chat_id}", "[battle результат]")
             except Exception as e:
                 logger.error(f"DS battle: {e}")
-                await status.edit(content=_t(lang, "tool_error", str(e)))
+                await status.edit(content=f"Ошибка: {e}")
         return
 
     has_looksmaxxing_cmd = is_looksmaxxing_command(message.content)
@@ -4786,27 +4793,27 @@ async def on_message(message: discord.Message) -> None:
                 theme = cfg.get("theme", "dark")
                 ai_data = await get_looksmaxxing_data(img_bytes, include_advice, lang=lang)
                 if "error" in ai_data:
-                    await message.reply(f"❌ {ai_data['error']}")
+                    await message.reply(ai_data['error'])
                     return
                 infographic = await create_infographic(img_bytes, ai_data, theme=theme, lang=lang)
                 report = (
                     f"**{_t(lang, 'psl_title')}**\n"
-                    f"{_t(lang, 'psl_gender')}: {ai_data.get('gender', '?')}\n"
-                    f"{_t(lang, 'psl_score')}: `{ai_data.get('psl', '?')}/8.0`\n"
-                    f"{_t(lang, 'psl_tier')}: `{ai_data.get('tier', '?')}`\n"
+                    f"{_t(lang, 'psl_gender')} {ai_data.get('gender', '?')}\n"
+                    f"{_t(lang, 'psl_score')} `{ai_data.get('psl', '?')}/8.0`\n"
+                    f"{_t(lang, 'psl_tier')} `{ai_data.get('tier', '?')}`\n"
                 )
                 if ai_data.get("potential"):
-                    report += f"{_t(lang, 'psl_potential')}: `{ai_data['potential']}`\n"
+                    report += f"{_t(lang, 'psl_potential')} `{ai_data['potential']}`\n"
                 report += f"\n{ai_data.get('summary', '')}"
                 if include_advice and ai_data.get("advice"):
-                    report += f"\n\n**{_t(lang, 'psl_advice')}:**\n{ai_data['advice']}"
+                    report += f"\n\n**{_t(lang, 'psl_advice')}**\n{ai_data['advice']}"
                 await message.reply(file=discord.File(fp=infographic, filename="psl.png"),
                                     content=report[:1900])
                 if len(report) > 1900:
                     await message.channel.send(report[1900:])
             except Exception as e:
                 logger.error(f"DS looksmaxxing: {e}")
-                await message.reply(_t(lang, "tool_error", str(e)))
+                await message.reply(f"Ошибка: {e}")
         return
 
     for att in image_attachments:
@@ -4834,7 +4841,7 @@ async def on_message(message: discord.Message) -> None:
                     frame = await extract_video_frame(vid, ".mp4")
                     if frame:
                         img_bytes = frame
-                prompt = message.content.strip() or ("что на этом?" if lang == "ru" else "what's this?")
+                prompt = message.content.strip() or ("че на этом?" if lang == "ru" else "what's this?")
                 add_user_memory(f"ds_{chat_id}", "DS", display_name, username, user_id,
                                 f"{prompt} [с медиа]",
                                 ["photo" if image_attachments else "video"],
@@ -4881,9 +4888,9 @@ async def on_message(message: discord.Message) -> None:
 # ============================================================
 async def send_donation_alert(platform: str, name: str, amount: int, message_text: str = '') -> None:
     if platform == 'tg':
-        text = f"🍷🗿 {name} задонатил {amount} звёзд! Спасибо за поддержку!"
+        text = f"🍷🗿 {name} задонатил {amount} звёзд! Спасибо!"
         if message_text:
-            text += f"\n💬 Сообщение: {message_text}"
+            text += f"\nСообщение: {message_text}"
         try:
             await send_tg_html(TG_TARGET_CHAT, text)
         except Exception as e:
@@ -5067,7 +5074,7 @@ async def series_reminder_loop() -> None:
         return
     while True:
         try:
-            prompt = ("Попроси Антона отправить Фолзу сообщение в TikTok, чтобы продлить серию. "
+            prompt = ("Попроси Антона отправить Фолзу сообщение в TikTok чтобы продлить серию. "
                       "Одно короткое сообщение в стиле Кульша.")
             answer = await ask_ai_async(prompt=prompt, context_type="default",
                                         chat_id=DS_SERIES_CHANNEL_ID, user_id=0, platform="ds")
@@ -5096,7 +5103,7 @@ async def main() -> None:
             guild = discord.Object(id=DS_ALLOWED_GUILD_ID)
             ds_tree.copy_global_to(guild=guild)
             synced = await ds_tree.sync(guild=guild)
-            logger.info(f"✅ Синхронизировано slash-команд: {len(synced)}")
+            logger.info(f"Синхронизировано slash-команд: {len(synced)}")
         except Exception as e:
             logger.error(f"Не удалось синхронизировать slash-команды: {e}")
 
@@ -5114,7 +5121,7 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    logger.info(f">>> 🍷🗿 Кульш в эфире. МСК: {msk_datetime_str()}")
+    logger.info(f">>> Кульш в эфире. МСК: {msk_datetime_str()}")
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
