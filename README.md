@@ -91,7 +91,7 @@ REPO_PATH=/path/to/bot/folder
 
 ### 4. Launch
 ```bash
-python kulsh.py
+python -m src.app
 ```
 
 ---
@@ -123,7 +123,7 @@ After=network.target
 Type=simple
 User=your_username
 WorkingDirectory=/path/to/bot/folder
-ExecStart=/usr/bin/python3 /path/to/bot/folder/kulsh.py
+ExecStart=/path/to/bot/folder/venv/bin/python -m src.app
 Restart=always
 RestartSec=5
 

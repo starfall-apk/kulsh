@@ -1,0 +1,483 @@
+# Kulsh GPT | v2.39.0
+# by (main author): starfall-apk
+# coauthor & bot hosting: pomidorka1515
+
+"""Discord message handler and voice sink."""
+
+import asyncio
+import json
+import os
+import re
+import random
+import time
+from io import BytesIO
+from typing import Any, cast
+
+import discord
+
+from src.ai import format_search_results, ask_ai_async, extract_memory, web_search
+from src.charts import render_infographic
+from src.discord_cmds import (
+    ds_handle_config,
+    ds_handle_config_param,
+    get_avatar_description_ds,
+    send_ds_ai_response,
+)
+from src.looks import (
+    create_battle_infographic,
+    create_infographic,
+    get_battle_data,
+    get_looksmaxxing_data,
+)
+from src.telegram import should_random_reply
+from src.util import (
+    perform_safe_git_update,
+    voice_recognition_enabled,
+    voice_recv_available,
+    AudioSegment,
+    tr,
+    voice_client,
+    add_bot_memory,
+    add_media_history,
+    add_user_memory,
+    download_image_bytes,
+    get_chat_memory,
+    get_top_donators,
+    get_user_config,
+    last_random_reply,
+    logger,
+    memory_to_messages,
+    read_log_tail,
+    sr,
+    voice_recv,
+    voice_text_channels,
+
+    AUTHORIZED_UPDATERS,
+    DONATE_URL,
+    chunk_text,
+    clean_extra_text,
+    clean_json_text,
+    extract_video_frame,
+    is_battle_command,
+    is_looksmaxxing_command,)
+from src import discord_cmds as dcmd
+
+async def on_message(message: discord.Message) -> None:
+    if message.author == dcmd.ds_bot.user or message.author.bot:
+        return
+    guild = message.guild
+    is_dm = guild is None
+    chat_id = message.author.id if guild is None else guild.id
+    user_id = message.author.id
+    content_lower = message.content.lower()
+    display_name = str(getattr(message.author, "display_name", message.author.name))
+    username = message.author.name
+    cfg = get_user_config("ds", chat_id, user_id)
+    lang_raw = cfg.get("language", "ru")
+    lang = lang_raw if isinstance(lang_raw, str) else "ru"
+
+    if not is_dm and (content_lower.startswith("кульш обновись") or content_lower.startswith("kulsh update")):
+        if message.author.id not in AUTHORIZED_UPDATERS:
+            await message.reply(tr(lang, "ds_update_no_access"))
+            return
+        await message.reply(tr(lang, "ds_update_start"))
+        try:
+            repo_path = os.getenv('REPO_PATH', os.getcwd())
+            status, info = await perform_safe_git_update(repo_path)
+            if status == "up_to_date":
+                await message.reply(tr(lang, "ds_update_uptodate", info[:1500]))
+            elif status == "ok":
+                await message.reply(tr(lang, "ds_update_ok", info[:1500]))
+                await asyncio.sleep(2)
+                os._exit(0)
+            elif status == "rolled_back":
+                await message.reply(tr(lang, "ds_update_rolled", info[:1500]))
+            else:
+                await message.reply(tr(lang, "ds_update_error", info[:1500]))
+        except Exception as e:
+            logger.exception("update error")
+            await message.reply(tr(lang, "ds_update_error", str(e)))
+        return
+
+    if (content_lower.startswith("кульш конфиг") or
+            content_lower.startswith("кульш настройки") or
+            content_lower.startswith("kulsh config")):
+        parts = message.content.split()
+        if len(parts) == 2:
+            await ds_handle_config(message, user_id)
+        else:
+            await ds_handle_config_param(message, user_id, parts)
+        return
+
+    # ---- поиск ----
+    m = re.match(r'(?i)^(?:кульш\s+)?(?:поиск|search|найди|найти)\s+(.+)$', message.content.strip(), re.DOTALL)
+    if m:
+        if not cfg.get("web_search_enabled", True):
+            await message.reply(tr(lang, "search_off"))
+            return
+        async with message.channel.typing():
+            results = await web_search(m.group(1).strip(), max_results=6)
+            if not results:
+                await message.reply(tr(lang, "search_nothing"))
+                return
+            context = format_search_results(results)
+            prompt = (
+                f"Пользователь искал: {m.group(1).strip()}\n\n"
+                f"Результаты:\n{context}\n\n"
+                f"Дай краткий ответ. Без маркеров !search, !chart."
+            )
+            answer = await ask_ai_async(prompt=prompt, chat_id=chat_id, user_id=user_id, platform="ds")
+            full = f"🔎 **{m.group(1).strip()}**\n\n{answer or ''}"
+            sources = [f"{i}. [{r.get('title', '')[:60]}]({r.get('url', '')})"
+                       for i, r in enumerate(results[:4], 1)]
+            if sources:
+                full += "\n\n**" + tr(lang, "search_source") + ":**\n" + "\n".join(sources)
+            await message.reply(full[:1900])
+        return
+
+    # ---- график ----
+    m = re.match(r'(?i)^(?:кульш\s+)?(?:график|chart|инфографика|диаграмма)\s+(.+)$',
+                 message.content.strip(), re.DOTALL)
+    if m:
+        async with message.channel.typing():
+            chart_prompt = (
+                f"Сгенерируй JSON-спецификацию инфографики по описанию:\n\n{m.group(1).strip()}\n\n"
+                f"Верни ТОЛЬКО JSON. Структура: {{\"theme\": \"dark_modern|light_minimal|ocean|retro\", "
+                f"\"title\": \"...\", \"blocks\": [{{\"type\": \"bar|line|pie|pie3d|table|heading|text|divider\", ...}}]}}"
+            )
+            raw = await ask_ai_async(
+                prompt=chart_prompt,
+                system_instruction_override="You are a data-viz JSON generator. Output only valid JSON.",
+                chat_id=chat_id, user_id=user_id, platform="ds",
+            )
+            spec = None
+            try:
+                spec = json.loads(clean_json_text(raw))
+            except Exception:
+                mm = re.search(r'\{[\s\S]*\}', raw or "")
+                if mm:
+                    try:
+                        spec = json.loads(mm.group(0))
+                    except Exception:
+                        spec = None
+            if not isinstance(spec, dict):
+                await message.reply(tr(lang, "chart_error", "invalid JSON"))
+                return
+            try:
+                img = await render_infographic(spec, user_images=None)
+                await message.reply(file=discord.File(fp=img, filename="infographic.png"),
+                                    content=(spec.get("title") or tr(lang, "chart_built"))[:1900])
+            except Exception as e:
+                await message.reply(tr(lang, "chart_error", str(e)))
+        return
+
+    if content_lower.startswith("кульш донаты") or content_lower.startswith("kulsh donations"):
+        top = get_top_donators()
+        if not top:
+            await message.reply(tr(lang, "top_donators_empty", DONATE_URL))
+            return
+        embed = discord.Embed(title=tr(lang, "top_donators_title"), color=0x10B981)
+        for i, (name, total) in enumerate(top, 1):
+            embed.add_field(name=f"{i}. {name}", value=f"{total}", inline=False)
+        await message.reply(embed=embed)
+        return
+
+    if (content_lower.startswith("кульш аватарк") or
+            content_lower.startswith("кульш аватар") or
+            content_lower.startswith("kulsh avatar")):
+        avatar_raw: str | None = await get_avatar_description_ds(message, chat_id, user_id, lang=str(lang))
+        if not avatar_raw:
+            await message.reply(tr(lang, "avatar_fail"))
+            return
+        for seg in clean_extra_text(avatar_raw):
+            try:
+                await message.channel.send(seg)
+            except Exception as e:
+                logger.warning(f"DS avatar: {e}")
+        return
+
+    if not is_dm and ("кульш логи" in content_lower or "kulsh logs" in content_lower):
+        if message.author.id not in AUTHORIZED_UPDATERS:
+            await message.reply(tr(lang, "ds_update_no_access"))
+            return
+        try:
+            tail = read_log_tail(20)
+            intro = tr(lang, "ds_logs_content")
+            try:
+                await message.reply(
+                    content=f"{intro}\n```\n{tail}\n```" if len(tail) <= 1900 else intro,
+                    file=discord.File('bot.log'),
+                )
+            except FileNotFoundError:
+                await message.reply(
+                    f"{intro}\n```\n{tail}\n```" if len(tail) <= 1900 else f"{intro}\n\n{tail}"
+                )
+                return
+            if len(tail) > 1900:
+                for chunk in chunk_text(tail, 1900):
+                    await message.channel.send(f"```\n{chunk}\n```")
+        except Exception as e:
+            await message.reply(f"Ошибка: {e}")
+        return
+
+    if not is_dm and ("кульш зайди в войс" in content_lower or "kulsh join voice" in content_lower):
+        author = cast(discord.Member, message.author)
+        if not (author.voice and author.voice.channel):
+            await message.reply(tr(lang, "ds_voice_not_in"))
+            return
+        voice_channel = author.voice.channel
+        if guild is None:
+            return
+        try:
+            vc = voice_client(guild)
+            if vc and vc.is_connected():
+                await vc.move_to(voice_channel)
+            else:
+                if voice_recognition_enabled and voice_recv_available:
+                    vc = cast(discord.VoiceClient, await voice_channel.connect(cls=voice_recv.VoiceRecvClient))
+                else:
+                    vc = await voice_channel.connect()
+            voice_text_channels[guild.id] = message.channel
+            await message.reply(tr(lang, "ds_voice_joined", voice_channel.name))
+            if voice_recognition_enabled and voice_recv_available:
+                sink = RecognitionSink(dcmd.ds_bot, guild, message.channel)
+                cast(Any, vc).listen(sink)
+                setattr(vc, "_recognition_sink", sink)
+        except Exception as e:
+            logger.error(f"voice: {e}")
+            await message.reply(tr(lang, "ds_voice_cant_join"))
+        return
+
+    if not is_dm and ("кульш выйди из войса" in content_lower or "kulsh leave voice" in content_lower):
+        vc = voice_client(guild)
+        if vc and vc.is_connected():
+            if hasattr(vc, "_recognition_sink"):
+                getattr(vc, "_recognition_sink").cleanup()
+            await vc.disconnect()
+            if guild is not None:
+                voice_text_channels.pop(guild.id, None)
+            await message.reply(tr(lang, "ds_voice_left"))
+        else:
+            await message.reply(tr(lang, "ds_voice_not_in_bot"))
+        return
+
+    if is_looksmaxxing_command(message.content) and len(message.attachments) == 0:
+        add_user_memory(f"ds_{chat_id}", "DS", display_name, username, user_id,
+                        message.content, message_id=message.id)
+        await message.reply(tr(lang, "psl_need_photo"))
+        return
+
+    if is_battle_command(message.content) and len(message.attachments) == 0:
+        add_user_memory(f"ds_{chat_id}", "DS", display_name, username, user_id,
+                        message.content, message_id=message.id)
+        await message.reply(tr(lang, "battle_need_photos"))
+        return
+
+    image_attachments = [a for a in message.attachments if a.content_type and a.content_type.startswith('image/')]
+    video_attachments = [a for a in message.attachments if a.content_type and a.content_type.startswith('video/')]
+    has_battle_cmd = is_battle_command(message.content)
+
+    if has_battle_cmd and len(image_attachments) >= 2:
+        async with message.channel.typing():
+            status_msg = await message.reply(tr(lang, "battle_waiting"))
+            try:
+                p1 = await download_image_bytes(image_attachments[0].url)
+                p2 = await download_image_bytes(image_attachments[1].url)
+                theme = cfg.get("theme", "dark")
+                ai_data = await get_battle_data(p1, p2, lang=lang)
+                if "error" in ai_data:
+                    await status_msg.edit(content=str(ai_data['error']))
+                    return
+                img = await create_battle_infographic(p1, p2, ai_data, theme=theme, lang=lang)
+                winner_num = str(ai_data.get("winner", "1"))
+                winner_label = tr(lang, "battle_first") if winner_num == "1" else tr(lang, "battle_second")
+                report = (
+                    f"**{tr(lang, 'battle_title')}**\n\n"
+                    f"{tr(lang, 'battle_winner')} **{winner_label}**\n"
+                    f"{tr(lang, 'battle_reason')} {ai_data.get('reason', '')}\n\n"
+                    f"{tr(lang, 'battle_photo1')} PSL {ai_data.get('photo1', {}).get('psl', '?')} | "
+                    f"{ai_data.get('photo1', {}).get('tier', '?')}\n"
+                    f"{tr(lang, 'battle_photo2')} PSL {ai_data.get('photo2', {}).get('psl', '?')} | "
+                    f"{ai_data.get('photo2', {}).get('tier', '?')}"
+                )
+                await message.reply(file=discord.File(fp=img, filename="battle.png"),
+                                    content=report[:1900])
+                await status_msg.delete()
+                add_user_memory(f"ds_{chat_id}", "DS", display_name, username, user_id,
+                                "[battle]", message_id=message.id)
+                add_bot_memory(f"ds_{chat_id}", "[battle результат]")
+            except Exception as e:
+                logger.error(f"DS battle: {e}")
+                await status_msg.edit(content=f"Ошибка: {e}")
+        return
+
+    has_looksmaxxing_cmd = is_looksmaxxing_command(message.content)
+    if has_looksmaxxing_cmd and len(image_attachments) > 0:
+        async with message.channel.typing():
+            try:
+                psl_bytes = await download_image_bytes(image_attachments[0].url)
+                include_advice = "совет" in content_lower or "advice" in content_lower
+                theme = cfg.get("theme", "dark")
+                ai_data = await get_looksmaxxing_data(psl_bytes, include_advice, lang=lang)
+                if "error" in ai_data:
+                    await message.reply(ai_data['error'])
+                    return
+                infographic = await create_infographic(psl_bytes, ai_data, theme=theme, lang=lang)
+                report = (
+                    f"**{tr(lang, 'psl_title')}**\n"
+                    f"{tr(lang, 'psl_gender')} {ai_data.get('gender', '?')}\n"
+                    f"{tr(lang, 'psl_score')} `{ai_data.get('psl', '?')}/8.0`\n"
+                    f"{tr(lang, 'psl_tier')} `{ai_data.get('tier', '?')}`\n"
+                )
+                if ai_data.get("potential"):
+                    report += f"{tr(lang, 'psl_potential')} `{ai_data['potential']}`\n"
+                report += f"\n{ai_data.get('summary', '')}"
+                if include_advice and ai_data.get("advice"):
+                    report += f"\n\n**{tr(lang, 'psl_advice')}**\n{ai_data['advice']}"
+                await message.reply(file=discord.File(fp=infographic, filename="psl.png"),
+                                    content=report[:1900])
+                if len(report) > 1900:
+                    await message.channel.send(report[1900:])
+            except Exception as e:
+                logger.error(f"DS looksmaxxing: {e}")
+                await message.reply(f"Ошибка: {e}")
+        return
+
+    for att in image_attachments:
+        add_media_history(f"ds_{chat_id}", att.url, "photo", display_name, caption=message.content[:200])
+    for att in video_attachments:
+        add_media_history(f"ds_{chat_id}", att.url, "video", display_name, caption=message.content[:200])
+
+    is_reply_to_bot = False
+    if message.reference and message.reference.resolved and isinstance(message.reference.resolved, discord.Message):
+        if message.reference.resolved.author == dcmd.ds_bot.user:
+            is_reply_to_bot = True
+
+    addressed = bool(is_reply_to_bot or re.search(r'(?i)\bкульш\b', message.content) or is_dm)
+
+    if (image_attachments or video_attachments) and addressed:
+        async with message.channel.typing():
+            try:
+                media_bytes: bytes | None = None
+                img_mime = "image/jpeg"
+                if image_attachments:
+                    media_bytes = await download_image_bytes(image_attachments[0].url)
+                    img_mime = image_attachments[0].content_type or "image/jpeg"
+                elif video_attachments:
+                    vid = await download_image_bytes(video_attachments[0].url)
+                    frame = await extract_video_frame(vid, ".mp4")
+                    if frame:
+                        media_bytes = frame
+                prompt = message.content.strip() or ("че на этом?" if lang == "ru" else "what's this?")
+                add_user_memory(f"ds_{chat_id}", "DS", display_name, username, user_id,
+                                f"{prompt} [с медиа]",
+                                ["photo" if image_attachments else "video"],
+                                message_id=message.id)
+                messages = memory_to_messages(get_chat_memory(f"ds_{chat_id}"))
+                answer = await ask_ai_async(messages=messages, image_bytes=media_bytes,
+                                            image_mime=img_mime, chat_id=chat_id,
+                                            user_id=user_id, platform="ds")
+                await send_ds_ai_response(message, chat_id, user_id, answer, user_text=prompt)
+                asyncio.create_task(extract_memory(f"ds_{chat_id}", f"{display_name}: [медиа]", answer))
+            except Exception as e:
+                logger.info(f"DS media: {e}")
+                await message.reply(tr(lang, "ds_attachments_error"))
+        return
+
+    if addressed:
+        async with message.channel.typing():
+            add_user_memory(f"ds_{chat_id}", "DS", display_name, username, user_id,
+                            message.content, message_id=message.id)
+            messages = memory_to_messages(get_chat_memory(f"ds_{chat_id}"))
+            answer = await ask_ai_async(messages=messages, chat_id=chat_id,
+                                        user_id=user_id, platform="ds")
+            await send_ds_ai_response(message, chat_id, user_id, answer, user_text=message.content)
+            asyncio.create_task(extract_memory(f"ds_{chat_id}", f"{display_name}: {message.content}", answer))
+        return
+
+    add_user_memory(f"ds_{chat_id}", "DS", display_name, username, user_id,
+                    message.content, message_id=message.id)
+    if await should_random_reply("ds", chat_id, user_id):
+        try:
+            answer = await ask_ai_async(
+                context_type="observer",
+                messages=memory_to_messages(get_chat_memory(f"ds_{chat_id}")),
+                chat_id=chat_id, user_id=user_id, platform="ds",
+            )
+            if answer and answer.strip() and answer.strip().upper() not in ("НЕТ", "NO"):
+                last_random_reply[f"ds_{chat_id}"] = time.time()
+                await send_ds_ai_response(message, chat_id, user_id, answer)
+        except Exception as e:
+            logger.warning(f"DS random reply: {e}")
+
+
+if voice_recognition_enabled and voice_recv_available:
+    class RecognitionSink(voice_recv.AudioSink):  # type: ignore[misc]
+        def __init__(
+            self,
+            bot: discord.Client,
+            guild: discord.Guild,
+            text_channel: discord.abc.Messageable,
+        ) -> None:
+            super().__init__()
+            self.bot = bot
+            self.guild = guild
+            self.text_channel = text_channel
+            self.buffers: dict[int | str, bytearray] = {}
+            self.recognizer = sr.Recognizer()
+            self.processing_tasks: dict[int | str, Any] = {}
+
+        def wants_opus(self) -> bool:
+            return False
+
+        def write(self, user: discord.User | None, data: Any) -> None:
+            user_id = user.id if user else "unknown_session"
+            user_name = user.name if user else "Аноним"
+            if user and user.bot:
+                return
+            if user_id not in self.buffers:
+                self.buffers[user_id] = bytearray()
+            self.buffers[user_id].extend(cast(bytes, data.pcm))
+            if len(self.buffers[user_id]) > 380000:
+                if user_id in self.processing_tasks:
+                    self.processing_tasks[user_id].cancel()
+                self.processing_tasks[user_id] = asyncio.run_coroutine_threadsafe(
+                    self.wait_and_process(user_id, user_name), self.bot.loop
+                )
+
+        def _sync_recognize(self, pcm_data: bytes) -> str | None:
+            try:
+                audio = AudioSegment(data=pcm_data, sample_width=2, frame_rate=48000,
+                                     channels=2).set_channels(1).set_frame_rate(16000)
+                wav_io = BytesIO()
+                audio.export(wav_io, format="wav")
+                wav_io.seek(0)
+                with sr.AudioFile(wav_io) as source:
+                    recognized = self.recognizer.recognize_google(
+                        self.recognizer.record(source), language="ru-RU"
+                    )
+                    return recognized if isinstance(recognized, str) else None
+            except sr.UnknownValueError:
+                return None
+            except Exception as e:
+                logger.error(f"recognize: {e}")
+                return None
+
+        async def wait_and_process(self, user_id: int | str, user_name: str) -> None:
+            try:
+                await asyncio.sleep(1.5)
+                if user_id in self.buffers:
+                    pcm_data = bytes(self.buffers.pop(user_id))
+                    text = await asyncio.to_thread(self._sync_recognize, pcm_data)
+                    if text and random.random() <= 0.65:
+                        logger.info(f"🎤 Распознано: {text}")
+            except asyncio.CancelledError:
+                pass
+
+        def cleanup(self) -> None:
+            for task in self.processing_tasks.values():
+                task.cancel()
+            self.buffers.clear()
+else:
+    class RecognitionSink:  # type: ignore[no-redef]
+        pass

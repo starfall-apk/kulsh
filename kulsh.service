@@ -1,0 +1,18 @@
+[Unit]
+Description=kulsh
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/var/www/kulsh
+ExecStart=/var/www/kulsh/venv/bin/python -m src.app
+Restart=always
+RestartSec=5
+KillMode=mixed
+TimeoutStopSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

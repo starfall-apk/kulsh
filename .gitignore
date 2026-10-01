@@ -4,3 +4,9 @@
 !README.md
 !LICENSE
 !pyproject.toml
+!kulsh.service
+!src/
+!src/**
+!src/**/*.py
+__pycache__/
+*.py[cod]

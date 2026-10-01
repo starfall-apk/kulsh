@@ -1,0 +1,929 @@
+# Kulsh GPT | v2.39.0
+# by (main author): starfall-apk
+# coauthor & bot hosting: pomidorka1515
+
+"""Shared helpers: time, i18n, typing, persistence, memory, text, media bytes."""
+
+import asyncio
+import base64
+import datetime
+import html
+import json
+import logging
+import os
+import random
+import re
+import subprocess
+import sys
+import tempfile
+from collections import defaultdict, deque
+from datetime import timedelta, timezone
+from logging.handlers import RotatingFileHandler
+from typing import Any, Callable, Protocol, TypeAlias, TypeVar, cast
+
+import aiohttp
+import discord
+import telebot
+from dotenv import load_dotenv
+from PIL import ImageFont
+from telebot.async_telebot import AsyncTeleBot
+
+# ============================================================
+# ЛОГГЕР
+# ============================================================
+logger = logging.getLogger('KulshBot')
+logger.setLevel(logging.DEBUG)
+log_formatter = logging.Formatter('%(asctime)s | %(levelname)s | %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+file_handler = RotatingFileHandler('bot.log', maxBytes=5 * 1024 * 1024, backupCount=1, encoding='utf-8')
+file_handler.setFormatter(log_formatter)
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(log_formatter)
+logger.addHandler(file_handler)
+logger.addHandler(console_handler)
+
+# ============================================================
+# ВРЕМЯ
+# ============================================================
+MSK = timezone(timedelta(hours=3))
+
+
+def msk_now() -> datetime.datetime:
+    return datetime.datetime.now(MSK)
+
+
+def msk_time_str() -> str:
+    return msk_now().strftime('%H:%M')
+
+
+def msk_datetime_str() -> str:
+    return msk_now().strftime('%d.%m.%Y %H:%M:%S МСК')
+
+# ============================================================
+# КОНФИГ .env
+# ============================================================
+load_dotenv()
+TG_TOKEN: str = os.getenv('TG_TOKEN') or ""
+DISCORD_TOKEN: str = os.getenv('DISCORD_TOKEN') or ""
+AI_KEY = os.getenv('AI_KEY')
+AI_KEY_1 = os.getenv('AI_KEY_1')
+AI_KEY_2 = os.getenv('AI_KEY_2')
+AI_KEY_3 = os.getenv('AI_KEY_3')
+TG_TARGET_CHAT = int(os.getenv('TG_TARGET_CHAT') or "0")
+DS_ALLOWED_GUILD_ID = int(os.getenv('DS_ALLOWED_GUILD_ID') or "0")
+DS_DONATION_CHANNEL_ID = int(os.getenv('DONATIONALERTS_CHANNEL_ID', '0'))
+DONATIONALERTS_TOKEN = os.getenv('DONATIONALERTS_TOKEN', '')
+
+AI_KEYS = [k for k in [AI_KEY_1, AI_KEY_2, AI_KEY_3] if k]
+if not AI_KEYS and AI_KEY:
+    AI_KEYS.append(AI_KEY)
+
+# ============================================================
+# КОНСТАНТЫ
+# ============================================================
+DS_SERIES_GUILD_ID = 1403828466075304036
+DS_SERIES_CHANNEL_ID = 1403828467014832270
+DS_SERIES_TARGET_USER_ID = 1364588699589021890
+
+MINI_APP_URL = "https://kulsh.vercel.app"
+DONATE_URL = "https://kulsh.vercel.app/donate"
+GITHUB_URL = "https://github.com/starfall-apk/kulsh"
+
+MODEL_LIST = [
+    "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
+    "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-2.5-flash",
+    "gemini-2.5-flash-lite", "gemini-flash-latest", "gemini-flash-lite-latest",
+    "gemini-3-flash-preview", "gemini-3.1-flash-lite-preview",
+]
+MODEL_DISPLAY: dict[str, str] = {
+    "gemini-3.8-flash": "🚀 3.8 Flash",
+    "gemini-3.7-flash": "⚡ 3.7 Flash",
+    "gemini-3.6-flash": "🌠 3.6 Flash",
+    "gemini-3.5-flash": "💫 3.5 Flash",
+    "gemini-3.5-flash-lite": "✨ 3.5 Flash Lite",
+    "gemini-2.5-flash": "🌟 2.5 Flash",
+    "gemini-2.5-flash-lite": "💡 2.5 Flash Lite",
+    "gemini-flash-latest": "🔥 Flash Latest",
+    "gemini-flash-lite-latest": "🌱 Flash Lite Latest",
+    "gemini-3-flash-preview": "🧪 3 Flash Preview",
+    "gemini-3.1-flash-lite-preview": "🧬 3.1 Flash Lite Preview",
+}
+
+
+def model_display_name(model: str | None, lang: str = "ru") -> str:
+    if not model:
+        return "🎲 авто (все подряд)" if lang == "ru" else "🎲 auto (all models)"
+    return MODEL_DISPLAY.get(model, model)
+
+
+LOG_INTRO = "🍷🗿 Вот логи сервера, босс:"
+PREMIUM_ADMIN_ID = 1420898868
+premium_functions_enabled: bool = True
+AUTHORIZED_UPDATERS = [735217033867821098, 1193627300797878362]
+
+# Декоративные символы для красивого оформления
+DECO = {
+    "sparkle": "✦",
+    "wave": "彡",
+    "rivers": "巛",
+    "stroke": "〢",
+    "line": "─",
+    "dline": "═",
+    "dot": "▪",
+    "hollow": "▫",
+    "arrow": "▸",
+    "diamond": "◈",
+    "star": "★",
+    "star_hollow": "☆",
+    "flower": "❋",
+    "dash": "─",
+    "bul": "•",
+}
+
+
+def deco_divider(length: int = 20, char: str = "─") -> str:
+    return char * length
+
+
+def deco_title(text: str, lang: str = "ru") -> str:
+    return f"✦彡巛〢 {text} 〢巛彡✦"
+
+
+premium_functions_enabled: bool = True
+
+# ============================================================
+# VOICE / TTS
+# ============================================================
+voice_recv: Any = None
+sr: Any = None
+AudioSegment: Any = None
+edge_tts: Any = None
+voice_recv_available: bool = False
+voice_recognition_enabled: bool = False
+voice_enabled: bool = False
+try:
+    from discord.ext import voice_recv as _voice_recv
+    voice_recv = _voice_recv
+    voice_recv_available = True
+except ImportError:
+    voice_recv_available = False
+
+DISCORD_VERSION = tuple(map(int, discord.__version__.split('.')))
+voice_recognition_enabled = DISCORD_VERSION >= (2, 0, 0) and voice_recv_available
+if voice_recognition_enabled:
+    try:
+        import speech_recognition as _sr
+        from pydub import AudioSegment as _AudioSegment
+        sr = _sr
+        AudioSegment = _AudioSegment
+    except ImportError:
+        voice_recognition_enabled = False
+        logger.info("⚠️ speech_recognition/pydub не найдены")
+else:
+    logger.info(f"⚠️ discord.py {discord.__version__}, voice_recv недоступен")
+
+try:
+    import edge_tts as _edge_tts
+    from discord import FFmpegPCMAudio as _FFmpegPCMAudio
+    edge_tts = _edge_tts
+    FFmpegPCMAudio = _FFmpegPCMAudio
+    voice_enabled = True
+except ImportError:
+    voice_enabled = False
+    logger.info("⚠️ edge_tts/FFmpeg не найдены")
+
+# ============================================================
+# TYPING HELPERS
+# ============================================================
+JsonDict: TypeAlias = dict[str, Any]
+Color: TypeAlias = str | tuple[int, int, int]
+Font: TypeAlias = ImageFont.FreeTypeFont | ImageFont.ImageFont
+SearchHit: TypeAlias = dict[str, str]
+ChartTheme: TypeAlias = dict[str, Any]
+SeriesSpec: TypeAlias = dict[str, Any]
+HandlerT = TypeVar("HandlerT", bound=Callable[..., Any])
+
+
+class _TypedHandler(Protocol):
+    def __call__(self, handler: HandlerT) -> HandlerT: ...
+
+
+def typed_decorator(decorator: Callable[..., Any]) -> Callable[..., _TypedHandler]:
+    """pyTelegramBotAPI decorators are untyped; preserve the wrapped callable."""
+    return cast(Callable[..., _TypedHandler], decorator)
+
+
+def cb_id(call: telebot.types.CallbackQuery) -> int:
+    """Library stubs type callback query ids as int; the API sends strings."""
+    return cast(int, call.id)
+
+
+def tg_msg(call: telebot.types.CallbackQuery) -> telebot.types.Message:
+    message = call.message
+    if not isinstance(message, telebot.types.Message):
+        raise RuntimeError("callback has no accessible message")
+    return message
+
+
+def ds_user(bot: discord.Client) -> discord.ClientUser:
+    user = bot.user
+    if user is None:
+        raise RuntimeError("discord bot is not ready")
+    return user
+
+
+def as_member(user: discord.abc.User) -> discord.Member | None:
+    return user if isinstance(user, discord.Member) else None
+
+
+def voice_client(guild: discord.Guild | None) -> discord.VoiceClient | None:
+    if guild is None or guild.voice_client is None:
+        return None
+    client = guild.voice_client
+    return client if isinstance(client, discord.VoiceClient) else None
+
+
+def messageable(channel: discord.abc.Messageable | None) -> discord.abc.Messageable | None:
+    if channel is None:
+        return None
+    send = getattr(channel, "send", None)
+    return channel if callable(send) else None
+
+
+def json_dict(value: Any) -> JsonDict:
+    if isinstance(value, dict):
+        return cast(JsonDict, value)
+    return {}
+
+
+def json_str(value: Any, default: str = "") -> str:
+    return value if isinstance(value, str) else default
+
+
+def theme_str(theme: ChartTheme, key: str, default: str = "#000000") -> str:
+    value = theme.get(key, default)
+    return value if isinstance(value, str) else default
+
+# ============================================================
+# ГЛОБАЛЬНЫЕ СТРУКТУРЫ
+# ============================================================
+chat_memories: dict[str, deque[dict[str, Any]]] = {}
+voice_text_channels: dict[int, Any] = {}
+donations_data: dict[str, Any] = {}
+user_configs: defaultdict[str, dict[str, Any]] = defaultdict(dict)
+config_msg_owners: dict[int, int] = {}
+config_trigger_msgs: dict[str, int] = {}
+prompt_waiting: dict[int, int] = {}
+config_children_msgs: dict[tuple[int, int], list[int]] = {}
+credits_data: dict[str, dict[str, Any]] = {}
+tools_sessions: dict[int, dict[str, Any]] = {}
+chat_media_history: dict[str, deque[dict[str, Any]]] = defaultdict(lambda: deque(maxlen=50))
+last_random_reply: dict[str, float] = {}
+last_old_reply: dict[str, float] = {}
+battle_media_groups: dict[str, asyncio.Task[None]] = {}
+battle_photos: dict[str, list[bytes]] = {}
+pending_donations: dict[int, int] = {}
+user_looksmaxxing_state: defaultdict[int, bool] = defaultdict(lambda: False)
+
+DONATIONS_FILE = 'donations.json'
+MEMORY_FILE = 'long_term_memory.json'
+CREDITS_FILE = 'credits.json'
+DAILY_CREDITS = 500
+COST_ARCHIVE_EDIT = 500
+COST_CONSOLE_CMD = 25
+MAX_FILE_SIZE = 500 * 1024
+MAX_TOTAL_UNPACKED = 5 * 1024 * 1024
+MAX_FILES = 100
+
+# ============================================================
+# ФАЙЛЫ СОСТОЯНИЯ
+# ============================================================
+def load_json_file(path: str) -> JsonDict:
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            return json_dict(json.load(f))
+    except Exception:
+        return {}
+
+
+def save_json_file(path: str, data: Any) -> None:
+    try:
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"save_json_file error: {e}")
+
+
+donations_data = load_json_file(DONATIONS_FILE)
+long_term_memory = load_json_file(MEMORY_FILE)
+credits_data = load_json_file(CREDITS_FILE)
+
+
+def save_donations() -> None:
+    save_json_file(DONATIONS_FILE, donations_data)
+
+
+def save_long_term_memory(data: JsonDict) -> None:
+    save_json_file(MEMORY_FILE, data)
+
+
+def save_credits() -> None:
+    save_json_file(CREDITS_FILE, credits_data)
+
+
+def add_donation(platform: str, user_id: int, amount: int, name: str = "Аноним") -> None:
+    key = f"{platform}_{user_id}"
+    donations_data[key] = donations_data.get(key, 0) + amount
+    if 'names' not in donations_data:
+        donations_data['names'] = {}
+    donations_data['names'][key] = name
+    save_donations()
+
+
+def get_top_donators(top_n: int = 10) -> list[tuple[str, int]]:
+    totals: dict[str, int] = {}
+    names: dict[str, str] = donations_data.get('names', {})
+    for key, total in donations_data.items():
+        if key == 'names':
+            continue
+        name = names.get(key, key)
+        totals[name] = totals.get(name, 0) + total
+    return sorted(totals.items(), key=lambda x: x[1], reverse=True)[:top_n]
+
+# ============================================================
+# КРЕДИТЫ
+# ============================================================
+def today_str() -> str:
+    return msk_now().strftime('%Y-%m-%d')
+
+
+def get_user_credits(platform: str, user_id: int) -> int:
+    key = f"{platform}_{user_id}"
+    today = today_str()
+    entry = credits_data.get(key)
+    if not entry or entry.get("last_reset") != today:
+        entry = {"credits": DAILY_CREDITS, "last_reset": today}
+        credits_data[key] = entry
+        save_credits()
+    return int(entry["credits"])
+
+
+def spend_credits(platform: str, user_id: int, amount: int) -> bool:
+    key = f"{platform}_{user_id}"
+    today = today_str()
+    entry = credits_data.get(key)
+    if not entry or entry.get("last_reset") != today:
+        entry = {"credits": DAILY_CREDITS, "last_reset": today}
+    if entry["credits"] < amount:
+        credits_data[key] = entry
+        save_credits()
+        return False
+    entry["credits"] -= amount
+    credits_data[key] = entry
+    save_credits()
+    return True
+
+# ============================================================
+# PER-USER CONFIG
+# ============================================================
+DEFAULT_USER_CONFIG = {
+    "series_reminder_enabled": True,
+    "stickers_enabled": True,
+    "custom_prompt": None,
+    "random_reply_enabled": False,
+    "random_messages_enabled": True,
+    "model": None,
+    "language": "ru",
+    "theme": "dark",
+    "temperature": 0.9,
+    "separate_enabled": True,
+    "streaming_enabled": False,
+    "tools_enabled": False,
+    "web_search_enabled": True,
+}
+
+
+def get_user_config(platform: str, chat_id: int, user_id: int) -> JsonDict:
+    key = f"{platform}_{chat_id}_{user_id}"
+    cfg = user_configs.get(key)
+    if cfg is None:
+        cfg = DEFAULT_USER_CONFIG.copy()
+        user_configs[key] = cfg
+    else:
+        for k, v in DEFAULT_USER_CONFIG.items():
+            if k not in cfg:
+                cfg[k] = v
+    if cfg.get("separate_enabled", True) and cfg.get("streaming_enabled", False):
+        cfg["streaming_enabled"] = False
+    return cfg
+
+
+def get_chat_key(platform: str, chat_id: int) -> str:
+    return f"{platform}_{chat_id}"
+
+# ============================================================
+# LOG TAIL / CHUNK
+# ============================================================
+def read_log_tail(max_lines: int = 20) -> str:
+    try:
+        with open('bot.log', 'r', encoding='utf-8', errors='replace') as f:
+            lines = f.readlines()
+        if not lines:
+            return "Логи пусты."
+        return "".join(lines[-max_lines:]).rstrip('\n')
+    except FileNotFoundError:
+        return "Файл bot.log не найден."
+    except Exception as e:
+        return f"Ошибка чтения логов: {e}"
+
+
+def chunk_text(text: str, size: int) -> list[str]:
+    if not text:
+        return [""]
+    if len(text) <= size:
+        return [text]
+    chunks: list[str] = []
+    current = ""
+    for line in text.splitlines(keepends=True):
+        if len(current) + len(line) <= size:
+            current += line
+        else:
+            if current:
+                chunks.append(current)
+            while len(line) > size:
+                chunks.append(line[:size])
+                line = line[size:]
+            current = line
+    if current:
+        chunks.append(current)
+    return chunks
+
+# ============================================================
+# ПАМЯТЬ ЧАТА
+# ============================================================
+def get_chat_memory(chat_id: str) -> deque[dict[str, Any]]:
+    if chat_id not in chat_memories:
+        chat_memories[chat_id] = deque(maxlen=20)
+    return chat_memories[chat_id]
+
+
+def add_user_memory(
+    chat_id: str,
+    platform: str,
+    display_name: str | None,
+    username: str | None,
+    user_id: int,
+    text: str | None,
+    media: list[str] | None = None,
+    message_id: int | None = None,
+) -> None:
+    mem = get_chat_memory(chat_id)
+    mem.append({
+        "type": "user", "time": msk_time_str(), "platform": platform,
+        "display": display_name or "Unknown", "username": username or "",
+        "id": str(user_id), "text": text or "",
+        "media": media or [], "message_id": message_id,
+    })
+
+
+def add_bot_memory(chat_id: str, text: str, message_id: int | None = None) -> None:
+    mem = get_chat_memory(chat_id)
+    mem.append({"type": "bot", "time": msk_time_str(), "text": text or "", "message_id": message_id})
+
+
+def memory_to_messages(mem_deque: deque[dict[str, Any]]) -> list[dict[str, Any]]:
+    messages: list[dict[str, Any]] = []
+    for entry in mem_deque:
+        if entry.get("type") == "bot":
+            messages.append({"role": "model", "text": entry.get("text", "")})
+        else:
+            uname = f"@{entry['username']}" if entry.get("username") else "no-username"
+            media_str = ""
+            if entry.get("media"):
+                media_str = f" [прикрепил: {', '.join(entry['media'])}]"
+            prefix = (f"[{entry.get('time','')}] [{entry.get('platform','')}] "
+                      f"{entry.get('display','?')} ({uname}, id:{entry.get('id','?')})")
+            messages.append({"role": "user", "text": f"{prefix}{media_str}: {entry.get('text','')}"})
+    return messages
+
+
+def add_media_history(
+    chat_id: str,
+    url: str | None,
+    media_type: str,
+    sender: str,
+    file_id: str | None = None,
+    caption: str = "",
+) -> None:
+    chat_media_history[chat_id].append({
+        "url": url, "type": media_type, "sender": sender,
+        "file_id": file_id, "caption": caption,
+        "time": msk_now().strftime('%d.%m %H:%M'),
+    })
+
+# ============================================================
+# HTML / MARKDOWN (fallback)
+# ============================================================
+def markdown_like_to_telegram_html(text: str) -> str:
+    if not text:
+        return ""
+    text = html.escape(text, quote=False)
+    text = re.sub(r'```([\s\S]*?)```', lambda m: '<pre>' + m.group(1) + '</pre>', text)
+    text = re.sub(r'`([^`\n]+?)`', r'<code>\1</code>', text)
+    text = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text, flags=re.DOTALL)
+    text = re.sub(r'__(.+?)__', r'<b>\1</b>', text, flags=re.DOTALL)
+    text = re.sub(r'(?<!\*)\*(?!\*)([^*\n]+?)(?<!\*)\*(?!\*)', r'<i>\1</i>', text)
+    text = re.sub(r'(?<!_)_(?!_)([^_\n]+?)(?<!_)_(?!_)', r'<i>\1</i>', text)
+    text = re.sub(r'~~(.+?)~~', r'<s>\1</s>', text, flags=re.DOTALL)
+    for tag in ("code", "b", "i", "u", "s", "pre"):
+        text = text.replace(f'&lt;{tag}&gt;', f'<{tag}>').replace(f'&lt;/{tag}&gt;', f'</{tag}>')
+    text = text.replace('&lt;a href=', '<a href=').replace('&lt;/a&gt;', '</a>')
+    return text
+
+async def download_image_bytes(url: str) -> bytes:
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as resp:
+            if resp.status == 200:
+                return await resp.read()
+            raise Exception(f"Failed to download file: {resp.status}")
+
+
+async def get_tg_file_bytes(bot: AsyncTeleBot, file_id: str) -> bytes:
+    file_info = await bot.get_file(file_id)
+    file_path = file_info.file_path
+    url = f"https://api.telegram.org/file/bot{TG_TOKEN}/{file_path}"
+    return await download_image_bytes(url)
+
+
+def image_bytes_to_base64(image_bytes: bytes, mime_type: str = "image/jpeg") -> tuple[str, str]:
+    encoded = base64.b64encode(image_bytes).decode('utf-8')
+    return encoded, mime_type
+
+
+async def extract_video_frame(video_bytes: bytes, ext_hint: str = ".mp4") -> bytes | None:
+    path = None
+    out_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=ext_hint, delete=False) as f:
+            f.write(video_bytes)
+            path = f.name
+        out_path = path + ".jpg"
+        await asyncio.to_thread(
+            subprocess.run,
+            ["ffmpeg", "-y", "-i", path, "-vf", "select=eq(n\\,0)",
+             "-vframes", "1", "-q:v", "3", out_path],
+            capture_output=True, timeout=40,
+        )
+        if os.path.exists(out_path):
+            with open(out_path, 'rb') as f:
+                data = f.read()
+            return data if data else None
+        return None
+    except Exception as e:
+        logger.warning(f"extract_video_frame: {e}")
+        return None
+    finally:
+        for p in (path, out_path):
+            if p and os.path.exists(p):
+                try:
+                    os.unlink(p)
+                except Exception:
+                    pass
+
+# ============================================================
+# TYPING
+# ============================================================
+TYPING_MS_PER_CHAR_MIN = 0.018
+TYPING_MS_PER_CHAR_MAX = 0.050
+TYPING_MIN_DELAY = 0.35
+TYPING_MAX_DELAY = 5.0
+TYPING_JITTER_MIN = 0.85
+TYPING_JITTER_MAX = 1.25
+
+
+def calc_typing_delay(text: str) -> float:
+    if not text:
+        return TYPING_MIN_DELAY
+    n = len(text)
+    per_char = random.uniform(TYPING_MS_PER_CHAR_MIN, TYPING_MS_PER_CHAR_MAX)
+    delay = n * per_char
+    delay *= random.uniform(TYPING_JITTER_MIN, TYPING_JITTER_MAX)
+    return max(TYPING_MIN_DELAY, min(TYPING_MAX_DELAY, delay))
+
+# ============================================================
+# MEMORY EXTRACTION
+# ============================================================
+def clean_json_text(text: str) -> str:
+    text = text.strip()
+    if text.startswith("```json"):
+        text = text[7:]
+    if text.startswith("```"):
+        text = text[3:]
+    if text.endswith("```"):
+        text = text[:-3]
+    return text.strip()
+
+# ============================================================
+# УТИЛИТЫ-МАРКЕРЫ
+# ============================================================
+UTILITY_PATTERNS = {
+    "avatar": re.compile(r'!\s*avatar|(?<![A-Za-z])avatar(?![A-Za-z])', re.IGNORECASE),
+    "recall_media": re.compile(r'!\s*recall[\s_]*media|(?<![A-Za-z])recall[\s_]*media(?![A-Za-z])', re.IGNORECASE),
+    "sticker": re.compile(r'!\s*sticker|(?<![A-Za-z])sticker(?![A-Za-z])', re.IGNORECASE),
+    "gif": re.compile(r'!\s*gif|(?<![A-Za-z])gif(?![A-Za-z])', re.IGNORECASE),
+}
+SEPARATOR_PATTERN = re.compile(r'!\s*sep[ae]rate|(?<![A-Za-z])sep[ae]rate(?![A-Za-z])', re.IGNORECASE)
+
+
+def split_by_separator(text: str) -> list[str]:
+    if not text:
+        return []
+    parts = SEPARATOR_PATTERN.split(text)
+    return [p.strip() for p in parts if p and p.strip()]
+
+
+def extract_utility_markers(text: str) -> tuple[str, list[str]]:
+    text = text or ""
+    markers: list[str] = []
+    for name, pat in UTILITY_PATTERNS.items():
+        if pat.search(text):
+            markers.append(name)
+        text = pat.sub(' ', text)
+    text = re.sub(r'[ \t]{2,}', ' ', text)
+    text = re.sub(r'[ \t]+([,.!?;:])', r'\1', text)
+    text = re.sub(r'[ \t]+\n', '\n', text)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text.strip(), markers
+
+
+def dedupe_markers(markers: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for m in markers:
+        if m not in seen:
+            seen.add(m)
+            out.append(m)
+    return out
+
+
+def process_ai_response(raw: str, separate_enabled: bool = True) -> tuple[list[str], list[str]]:
+    raw_clean, markers = extract_utility_markers(raw or "")
+    markers = dedupe_markers(markers)
+    if separate_enabled:
+        segments = split_by_separator(raw_clean)
+    else:
+        raw_clean = SEPARATOR_PATTERN.sub(' ', raw_clean)
+        raw_clean = re.sub(r'[ \t]{2,}', ' ', raw_clean).strip()
+        segments = [raw_clean]
+    clean_segments = [s.strip() for s in segments if s and s.strip()]
+    return clean_segments, markers
+
+
+def clean_extra_text(raw: str) -> list[str]:
+    if not raw:
+        return []
+    cleaned, _ = extract_utility_markers(raw)
+    cleaned = SEPARATOR_PATTERN.sub(' ', cleaned)
+    cleaned = re.sub(r'[ \t]{2,}', ' ', cleaned).strip()
+    return [s.strip() for s in cleaned.split('\n\n') if s and s.strip()]
+
+# ============================================================
+# STICKERS/GIFS
+# ============================================================
+STICKER_POOL = [
+    "CAACAgEAAxkBAAEXkj1qd6YOMXAHLciofztbliRFn-qf5gACvAIAAmIaIUTfm-IZfGZGmj0E",
+    "CAACAgEAAxkBAAEXkj9qd6YSbqnaV0Cy2lJdQZxWgfdYNAACCQIAAvGaoUbqHGwx5EW7xT0E",
+    "CAACAgIAAxkBAAEXkkFqd6Yk_g5UWkBESTIlZCT9MM7lZwACBVMAAlXDoUv4ZxNfrA5v8D0E",
+    "CAACAgIAAxkBAAEXkkNqd6YlWmX_v6vxFgVS-5u8SMFqGwACJ0wAAlzgmUtxWCk2-pvTsT0E",
+    "CAACAgIAAxkBAAEXkkVqd6YmKSS74hvpUNctJPyOg80O2wAC1EgAAsKvmUsRFrgOElSDWz0E",
+]
+GIF_POOL = [
+    "https://cdn.discordapp.com/attachments/1494583947664035913/1535766838695301150/moai_20260808214829.gif",
+    "https://cdn.discordapp.com/attachments/1494583947664035913/1535766152716882030/wine_20260808214547.gif",
+    "https://cdn.discordapp.com/attachments/1494583947664035913/1535766838384791592/moai2_20260808214836.gif",
+    "https://cdn.discordapp.com/attachments/1494583947664035913/1535766838070345829/freedom_20260808214842.gif",
+    "https://cdn.discordapp.com/attachments/1494583947664035913/1535766837772427294/octopus_20260808214849.gif",
+]
+
+# ============================================================
+# LOOKSMAXXING TIERS
+# ============================================================
+TIER_DISTRIBUTION: list[dict[str, str | float]] = [
+    {"key": "sub3",     "short": "S3",  "full_m": "SUB 3",     "full_f": "SUB 3",     "psl_low": 1.0, "psl_high": 2.4},
+    {"key": "sub5",     "short": "S5",  "full_m": "SUB 5",     "full_f": "SUB 5",     "psl_low": 2.5, "psl_high": 3.9},
+    {"key": "ltn",      "short": "LTN", "full_m": "LTN",       "full_f": "LTB",       "psl_low": 4.0, "psl_high": 5.5},
+    {"key": "mtn",      "short": "MTN", "full_m": "MTN",       "full_f": "MTB",       "psl_low": 5.6, "psl_high": 6.3},
+    {"key": "htn",      "short": "HTN", "full_m": "HTN",       "full_f": "HTB",       "psl_low": 6.4, "psl_high": 6.9},
+    {"key": "chadlite", "short": "CL",  "full_m": "CHADLITE",  "full_f": "STACYLITE", "psl_low": 7.0, "psl_high": 7.4},
+    {"key": "chad",     "short": "CH",  "full_m": "CHAD",      "full_f": "STACY",     "psl_low": 7.5, "psl_high": 7.6},
+    {"key": "adamlite", "short": "AL",  "full_m": "ADAMLITE",  "full_f": "EVELITE",   "psl_low": 7.7, "psl_high": 7.8},
+    {"key": "trueadam", "short": "TA",  "full_m": "TRUE ADAM", "full_f": "TRUE EVE",  "psl_low": 7.9, "psl_high": 8.0},
+]
+
+
+def find_tier_key(tier_name: str) -> str | None:
+    if not tier_name:
+        return None
+    tn = tier_name.strip().upper().replace("_", " ").replace("-", " ")
+    for tr in TIER_DISTRIBUTION:
+        candidates = [str(tr["key"]).upper(), str(tr["short"]).upper(), str(tr["full_m"]).upper(), str(tr["full_f"]).upper()]
+        if tn in candidates or tn.replace(" ", "") in [c.replace(" ", "") for c in candidates]:
+            return str(tr["key"])
+    return None
+
+
+def get_tier_color(tier_key_or_name: str) -> str:
+    key = find_tier_key(tier_key_or_name) or (tier_key_or_name or "").strip().lower()
+    if key in ("sub3", "sub5"):
+        return "#E53E3E"
+    if key in ("ltn", "mtn"):
+        return "#ECC94B"
+    if key in ("htn", "chadlite", "chad", "adamlite"):
+        return "#38A169"
+    if key == "trueadam":
+        return "#9F7AEA"
+    return "#38A169"
+
+
+def is_looksmaxxing_command(text: str) -> bool:
+    t = (text or "").strip().lower()
+    return bool(re.match(r'^(кульш\s+)?psl(\s+(совет|advice))?$', t))
+
+
+def is_battle_command(text: str) -> bool:
+    t = (text or "").strip().lower()
+    return bool(re.match(r'^(кульш\s+)?(battle|баттл|батл)$', t))
+
+# ============================================================
+# LOOKSMAXXING AI DATA
+# ============================================================
+TIER_RULES_M = "SUB 3, SUB 5, LTN, MTN, HTN, CHADLITE, CHAD, ADAMLITE, TRUE ADAM"
+TIER_RULES_F = "SUB 3, SUB 5, LTB, MTB, HTB, STACYLITE, STACY, EVELITE, TRUE EVE"
+TIER_RULES_STRICT = (
+    f"Мужские тиры (СТРОГО): {TIER_RULES_M}.\n"
+    f"Женские тиры (СТРОГО): {TIER_RULES_F}.\n"
+    "ИСПОЛЬЗУЙ ТОЛЬКО ЭТИ НАЗВАНИЯ. КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО писать 'High Normie', 'Low Tier Normie', "
+    "'Subhuman', 'Sub-five', 'Sub-5 (Canine)', 'Animal' и любые другие выдуманные варианты. "
+    "Если на фото не человек — верни tier 'N/A' и gender 'N/A'."
+)
+
+# ============================================================
+# SAFE GIT UPDATE
+# ============================================================
+
+TEXT_EXTS = {
+    "txt", "py", "json", "html", "htm", "js", "css", "cs", "cpp", "c", "h", "hpp",
+    "java", "php", "rb", "go", "rs", "ts", "tsx", "jsx", "xml", "yml", "yaml",
+    "toml", "ini", "cfg", "conf", "sh", "bash", "bat", "ps1", "sql", "md",
+    "log", "env", "gitignore", "dockerfile", "makefile", "vue", "svelte",
+    "scss", "sass", "less", "kt", "swift", "dart", "lua", "pl", "r", "m", "mm",
+}
+
+SAFE_COMMANDS = {"ls", "cat", "head", "tail", "wc", "grep", "find", "file", "stat", "du", "tree", "pwd"}
+
+def run_git(args: list[str], cwd: str, timeout: int = 60) -> tuple[int, str, str]:
+    try:
+        r = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, timeout=timeout)
+        return r.returncode, r.stdout or "", r.stderr or ""
+    except subprocess.TimeoutExpired:
+        return 124, "", "timeout"
+    except FileNotFoundError:
+        return 127, "", "git not found"
+    except Exception as e:
+        return 1, "", str(e)
+
+
+def check_python_syntax(fpath: str) -> str | None:
+    try:
+        with open(fpath, 'r', encoding='utf-8') as fp:
+            src = fp.read()
+    except Exception as e:
+        return f"read error: {type(e).__name__}: {e}"
+    try:
+        compile(src, fpath, 'exec')
+    except SyntaxError as se:
+        return f"SyntaxError: {se.msg} (line {se.lineno})"
+    except Exception as e:
+        return f"{type(e).__name__}: {e}"
+    return None
+
+
+
+def repo_root(fpath: str) -> str:
+    """Directory that should be on sys.path when importing the bot."""
+    directory = os.path.dirname(os.path.abspath(fpath)) or os.getcwd()
+    if os.path.basename(directory) == "src":
+        return os.path.dirname(directory) or directory
+    return directory
+
+
+def safe_check_import(fpath: str, timeout: int = 45) -> str | None:
+    if not os.path.isfile(fpath):
+        return None
+    script = (
+        "import importlib.util, sys, os\n"
+        f"p = {fpath!r}\n"
+        "spec = importlib.util.spec_from_file_location('_kulsh_check_mod', p)\n"
+        "mod = importlib.util.module_from_spec(spec)\n"
+        "try:\n"
+        "    spec.loader.exec_module(mod)\n"
+        "except SystemExit:\n"
+        "    pass\n"
+        "except BaseException as e:\n"
+        "    sys.stderr.write(f'{type(e).__name__}: {e}')\n"
+        "    sys.exit(2)\n"
+    )
+    try:
+        r = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True, text=True, timeout=timeout,
+            cwd=repo_root(fpath),
+        )
+        if r.returncode != 0:
+            err = (r.stderr or r.stdout or "unknown").strip()
+            return err[:800]
+    except subprocess.TimeoutExpired:
+        return "timeout при проверке импорта"
+    except Exception as e:
+        return f"{type(e).__name__}: {e}"
+    return None
+
+
+def find_entry_file(repo_path: str) -> str | None:
+    for cand in ("src/app.py", "kulsh.py", "main.py", "app.py", "bot.py"):
+        p = os.path.join(repo_path, cand)
+        if os.path.isfile(p):
+            return p
+    try:
+        for f in os.listdir(repo_path):
+            if f.endswith(".py") and not f.startswith("_"):
+                return os.path.join(repo_path, f)
+    except Exception:
+        pass
+    return None
+
+
+async def perform_safe_git_update(repo_path: str) -> tuple[str, str]:
+    rc, out, err = run_git(["rev-parse", "HEAD"], cwd=repo_path, timeout=10)
+    if rc != 0 or not out.strip():
+        return "error", f"git rev-parse: {err or out or 'unknown error'}"
+    prev_hash = out.strip()
+
+    rc, out, err = run_git(["fetch", "origin", "main"], cwd=repo_path, timeout=60)
+    if rc != 0:
+        return "error", f"git fetch: {err or out or 'unknown error'}"
+
+    rc, out, err = run_git(["pull", "origin", "main", "--ff-only"], cwd=repo_path, timeout=60)
+    pull_out = (out or "") + (err or "")
+    if rc != 0:
+        rc2, out2, err2 = run_git(["pull", "origin", "main"], cwd=repo_path, timeout=60)
+        pull_out += "\n" + (out2 or "") + (err2 or "")
+        if rc2 != 0:
+            return "error", f"git pull fail:\n{pull_out[:1500]}"
+
+    if "Already up to date" in pull_out or "Already up-to-date" in pull_out:
+        return "up_to_date", pull_out
+
+    syntax_errors: list[str] = []
+    try:
+        for root, dirs, files in os.walk(repo_path):
+            if '.git' in root.split(os.sep):
+                continue
+            for fname in files:
+                if not fname.endswith('.py'):
+                    continue
+                fpath = os.path.join(root, fname)
+                err_s = check_python_syntax(fpath)
+                if err_s:
+                    rel = os.path.relpath(fpath, repo_path)
+                    syntax_errors.append(f"{rel}: {err_s}")
+    except Exception as e:
+        syntax_errors.append(f"walk error: {type(e).__name__}: {e}")
+
+    if syntax_errors:
+        rc_reset, out_r, err_r = run_git(["reset", "--hard", prev_hash], cwd=repo_path, timeout=30)
+        if rc_reset != 0:
+            return "error", (
+                "ошибки в новом коде, но git reset --hard не удался:\n"
+                + (err_r or out_r or "unknown")
+                + "\n\nОшибки:\n" + "\n".join(syntax_errors[:10])
+            )
+        return "rolled_back", "\n".join(syntax_errors[:10])
+
+    entry = find_entry_file(repo_path)
+    if entry:
+        import_err = await asyncio.to_thread(safe_check_import, entry)
+        if import_err:
+            rc_reset, out_r, err_r = run_git(["reset", "--hard", prev_hash], cwd=repo_path, timeout=30)
+            if rc_reset != 0:
+                return "error", (
+                    f"ошибка импорта: {import_err}\n"
+                    f"git reset --hard не удался: {err_r or out_r or 'unknown'}"
+                )
+            return "rolled_back", f"import error:\n{import_err[:800]}"
+
+    return "ok", pull_out
+
+
+from src.i18n import TEXTS, html_to_md, tr

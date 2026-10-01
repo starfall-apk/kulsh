@@ -14,6 +14,8 @@ dependencies = [
     "pydub>=0.25.1",
     "edge-tts>=7.0.0",
     "python-socketio>=5.11.0",
+    "Pillow>=10.0.0",
+    "deep-translator>=1.11.0",
 ]
 
 [project.optional-dependencies]
@@ -29,7 +31,7 @@ dev = [
 pythonVersion = "3.10"
 venvPath = "."
 venv = "venv"
-include = ["kulsh.py"]
+include = ["kulsh.py", "src"]
 exclude = ["venv/**", ".venv/**"]
 typeCheckingMode = "strict"
 reportMissingImports = true
@@ -37,7 +39,7 @@ reportMissingImports = true
 
 [tool.mypy]
 python_version = "3.10"
-files = ["kulsh.py"]
+files = ["kulsh.py", "src"]
 exclude = ["venv", ".venv", "stubs/telebot"]
 mypy_path = "stubs/vendor"
 warn_return_any = true
@@ -55,6 +57,14 @@ show_error_codes = true
 strict_equality = true
 strict_concatenate = true
 strict = true
+
+
+[project.scripts]
+kulsh = "src.app:run"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
 
 [build-system]
 requires = ["setuptools>=61.0"]
