@@ -1,11 +1,8 @@
-# Kulsh GPT | v2.33.0 (Discord slash commands + neutral texts + fixed rich table marks +
-# new apply animation + custom prompt editor + /donate_stars command +
-# Discord config parity + language-aware menu gif + safe git rollback +
-# rich messages + colored buttons)
-# by (main author):
-#     starfall-apk
-# coauthor & bot hosting:
-#     pomidorka1515
+# Kulsh GPT | v2.35.0 (blocks-based RichMessage: правильная заливка ячеек через
+# is_header, полная локализация RU/EN, фикс отправки GIF, удаление GIF с меню,
+# надёжная apply-анимация, Discord slash parity)
+# by (main author): starfall-apk
+# coauthor & bot hosting: pomidorka1515
 
 import asyncio
 import aiohttp
@@ -92,7 +89,7 @@ AI_KEYS = [k for k in [AI_KEY_1, AI_KEY_2, AI_KEY_3] if k]
 if not AI_KEYS and AI_KEY:
     AI_KEYS.append(AI_KEY)
 if not AI_KEYS:
-    logger.critical("Не найден ни один API ключ Gemini!")
+    logger.critical("❌ Не найден ни один API ключ Gemini!")
     exit(1)
 
 # ============================================================
@@ -127,30 +124,311 @@ MODEL_LIST = [
     "gemini-3-flash-preview", "gemini-3.1-flash-lite-preview",
 ]
 MODEL_DISPLAY: dict[str, str] = {
-    "gemini-3.8-flash": "3.8 Flash",
-    "gemini-3.7-flash": "3.7 Flash",
-    "gemini-3.6-flash": "3.6 Flash",
-    "gemini-3.5-flash": "3.5 Flash",
-    "gemini-3.5-flash-lite": "3.5 Flash Lite",
-    "gemini-2.5-flash": "2.5 Flash",
-    "gemini-2.5-flash-lite": "2.5 Flash Lite",
-    "gemini-flash-latest": "Flash Latest",
-    "gemini-flash-lite-latest": "Flash Lite Latest",
-    "gemini-3-flash-preview": "3 Flash Preview",
-    "gemini-3.1-flash-lite-preview": "3.1 Flash Lite Preview",
+    "gemini-3.8-flash": "🚀 3.8 Flash",
+    "gemini-3.7-flash": "⚡ 3.7 Flash",
+    "gemini-3.6-flash": "🌠 3.6 Flash",
+    "gemini-3.5-flash": "💫 3.5 Flash",
+    "gemini-3.5-flash-lite": "✨ 3.5 Flash Lite",
+    "gemini-2.5-flash": "🌟 2.5 Flash",
+    "gemini-2.5-flash-lite": "💡 2.5 Flash Lite",
+    "gemini-flash-latest": "🔥 Flash Latest",
+    "gemini-flash-lite-latest": "🌱 Flash Lite Latest",
+    "gemini-3-flash-preview": "🧪 3 Flash Preview",
+    "gemini-3.1-flash-lite-preview": "🧬 3.1 Flash Lite Preview",
 }
 
 
-def model_display_name(model: str | None) -> str:
+def model_display_name(model: str | None, lang: str = "ru") -> str:
     if not model:
-        return "авто (перебор)"
+        return "🎲 авто (перебор)" if lang == "ru" else "🎲 auto (all models)"
     return MODEL_DISPLAY.get(model, model)
 
 
-LOG_INTRO = "Логи сервера:"
+LOG_INTRO = "🍷🗿 Вот логи сервера, босс:"
 PREMIUM_ADMIN_ID = 1420898868
 premium_functions_enabled: bool = True
 AUTHORIZED_UPDATERS = [735217033867821098, 1193627300797878362]
+
+# ============================================================
+# ЛОКАЛИЗАЦИЯ
+# ============================================================
+TEXTS: dict[str, tuple[str, str]] = {
+    "cfg_title":                    ("⚙️ Настройки", "⚙️ Settings"),
+    "cfg_updated":                  ("✅ Обновлено", "✅ Updated"),
+    "cfg_model_auto":               ("🧠 Модель: авто", "🧠 Model: auto"),
+    "cfg_model_set":                ("🧠 Модель: {0}", "🧠 Model: {0}"),
+    "cfg_lang_set_ru":              ("🌐 Язык: русский 🇷🇺", "🌐 Language: Russian 🇷🇺"),
+    "cfg_lang_set_en":              ("🌐 Язык: английский 🇬🇧", "🌐 Language: English 🇬🇧"),
+    "cfg_theme_dark":               ("🌓 Тема: тёмная 🌑", "🌓 Theme: dark 🌑"),
+    "cfg_theme_light":              ("🌓 Тема: светлая ☀️", "🌓 Theme: light ☀️"),
+    "cfg_temp":                     ("🎛 Температура: {0}", "🎛 Temperature: {0}"),
+    "cfg_prompt_reset":             ("📝 Промпт сброшен", "📝 Prompt reset"),
+    "cfg_memory_reset":             ("🧹 Память сброшена", "🧹 Memory reset"),
+    "cfg_done":                     ("✅ Готово", "✅ Done"),
+    "cfg_mutex": (
+        "⚠️ «Разбивка» и «Стриминг» взаимно исключаемы. Сначала отключите вторую настройку.",
+        "⚠️ «Split» and «Streaming» are mutually exclusive. Disable the other first.",
+    ),
+    "cfg_premium_off":              ("⚠️ Расширенные функции отключены", "⚠️ Extended features disabled"),
+    "cfg_edit_prompt_ask": (
+        "✏️ Отправьте новый кастомный промпт ответом на это сообщение.\n"
+        "Для отмены — ответьте `отмена` или `cancel`.",
+        "✏️ Send the new custom prompt as a reply to this message.\n"
+        "To cancel — reply `отмена` or `cancel`.",
+    ),
+    "cfg_lang":                     ("🌐 Язык", "🌐 Language"),
+    "cfg_theme":                    ("🌓 Тема", "🌓 Theme"),
+    "cfg_model":                    ("🧠 Модель", "🧠 Model"),
+    "cfg_temp_short":               ("🎛 Темп.", "🎛 Temp"),
+    "cfg_sep":                      ("💬 Разбивка", "💬 Split"),
+    "cfg_stream":                   ("📡 Стриминг", "📡 Streaming"),
+    "cfg_stickers":                 ("🎨 Стикеры", "🎨 Stickers"),
+    "cfg_autoreply":                ("🗣 Автоотв.", "🗣 Auto-reply"),
+    "cfg_random":                   ("📢 Рандом", "📢 Random"),
+    "cfg_edit_prompt":              ("📝 Изменить промпт", "📝 Edit prompt"),
+    "cfg_reset_memory":             ("🧹 Сбросить память", "🧹 Reset memory"),
+    "cfg_reset_prompt":             ("♻️ Сбросить промпт", "♻️ Reset prompt"),
+    "cfg_apply_close":              ("✅ Применить и закрыть", "✅ Apply & close"),
+    "cfg_back":                     ("🔙 Назад", "🔙 Back"),
+    "cfg_back_slash":               ("🔙 Назад / Back", "🔙 Back"),
+    "cfg_auto":                     ("🎲 Авто", "🎲 Auto"),
+    "cfg_choose_model":             ("🧠 Выбор модели", "🧠 Model selection"),
+    "cfg_current":                  ("Текущая", "Current"),
+    "cfg_auto_hint":                ("перебор всех моделей", "try all models"),
+    "cfg_on":                       ("✅", "✅"),
+    "cfg_off":                      ("❌", "❌"),
+    "cfg_prompt_label":             ("📝 Кастомный промпт", "📝 Custom prompt"),
+    "cfg_prompt_default":           ("стандартный", "default"),
+    "cfg_credits_label":            ("💎 Кредиты", "💎 Credits"),
+    "menu_title":                   ("🍷🗿 Кульш AI — главное меню", "🍷🗿 Kulsh AI — Main Menu"),
+    "menu_intro": (
+        "Открытая языковая модель с набором встроенных инструментов. "
+        "Ниже — основные разделы и команды.",
+        "An open-source language model with a set of built-in tools. "
+        "Below are the main sections and commands.",
+    ),
+    "menu_available":               ("📋 Доступно:", "📋 Available:"),
+    "menu_mini_app":                ("🚀 Mini App — расширенный чат с ИИ внутри Telegram",
+                                     "🚀 Mini App — extended AI chat inside Telegram"),
+    "menu_settings_item":           ("⚙️ Настройки — язык, тема, модель, промпт, автоответы",
+                                     "⚙️ Settings — language, theme, model, prompt, auto-replies"),
+    "menu_commands":                ("📖 Команды — полный список возможностей",
+                                     "📖 Commands — full feature list"),
+    "menu_donate_item":             ("💎 Донат — поддержка разработки", "💎 Donate — support development"),
+    "menu_github_item":             ("🔗 GitHub — исходный код проекта", "🔗 GitHub — project source code"),
+    "start_title":                  ("🍷🗿 Кульш на связи", "🍷🗿 Kulsh is online"),
+    "start_intro": (
+        "Открытая языковая модель с возможностями анализа изображений, "
+        "оценки внешности и настройки под себя. Работает в Telegram и Discord.",
+        "An open-source language model with image analysis, looksmaxxing "
+        "and personal configuration. Available in Telegram and Discord.",
+    ),
+    "start_where":                  ("🚀 С чего начать:", "🚀 Where to start:"),
+    "start_mini_app":               ("🚀 Mini App — расширенный чат с ИИ",
+                                     "🚀 Mini App — extended AI chat"),
+    "start_menu":                   ("📖 Меню — все разделы и настройки",
+                                     "📖 Menu — all sections and settings"),
+    "start_config":                 ("⚙️ `кульш конфиг` — тонкая настройка под тебя",
+                                     "⚙️ `kulsh config` — tune the bot"),
+    "btn_open_mini":                ("🚀 Открыть Mini App", "🚀 Open Mini App"),
+    "btn_settings":                 ("⚙️ Настройки", "⚙️ Settings"),
+    "btn_commands":                 ("📖 Команды", "📖 Commands"),
+    "btn_menu":                     ("📖 Меню", "📖 Menu"),
+    "btn_donate":                   ("💎 Донат", "💎 Donate"),
+    "btn_github":                   ("🔗 GitHub", "🔗 GitHub"),
+    "btn_close":                    ("❌ Закрыть", "❌ Close"),
+    "donate_title":                 ("💎 Поддержать Кульша", "💎 Support Kulsh"),
+    "donate_intro": (
+        "💖 Донаты идут на серверы, домены и дальнейшую разработку проекта.",
+        "💖 Donations go to servers, domains and further development of the project.",
+    ),
+    "donate_methods":               ("💰 Способы:", "💰 Methods:"),
+    "donate_online":                ("💳 Онлайн-донат", "💳 Online donation"),
+    "donate_stars_hint":            ("⭐ Telegram Stars — `/donate_stars <количество>`",
+                                     "⭐ Telegram Stars — `/donate_stars <amount>`"),
+    "donate_stars_need":            ("Укажите количество звёзд: `/donate_stars 100`",
+                                     "Specify star amount: `/donate_stars 100`"),
+    "donate_stars_bad":             ("Неверное количество звёзд.", "Invalid star amount."),
+    "donate_thanks":                ("🎉 Спасибо за {0} ⭐, кент!", "🎉 Thanks for {0} ⭐, mate!"),
+    "donate_stars_invoice_fail":    ("❌ Не удалось выставить счёт: {0}", "❌ Failed to create invoice: {0}"),
+    "credits_balance":              ("💎 Кредиты: {0}/{1}", "💎 Credits: {0}/{1}"),
+    "top_donators_title":           ("🏆 Топ донатеров", "🏆 Top donators"),
+    "top_donators_empty": (
+        "🥲 Пока никто не донатил. Будь первым!\n{0}",
+        "🥲 No donations yet. Be the first!\n{0}",
+    ),
+    "top_donators_item":            ("{0}. {1} — {2} очков", "{0}. {1} — {2} points"),
+    "avatar_fail":                  ("😕 Не удалось получить аватарку", "😕 Failed to fetch avatar"),
+    "avatar_none":                  ("😐 У {0} нет аватарки", "😐 {0} has no avatar"),
+    "recall_fail":                  ("😕 Ничего не нашёл в памяти", "😕 Nothing found in memory"),
+    "psl_need_photo":               ("📸 Жду фото для анализа. Отправь его с пометкой `кульш psl`.",
+                                     "📸 Waiting for a photo. Send it with `kulsh psl`."),
+    "psl_analyzing":                ("⏳ Анализирую внешность...", "⏳ Analyzing your face..."),
+    "psl_report":                   ("📊 Результаты looksmaxxing", "📊 Looksmaxxing results"),
+    "psl_title":                    ("📊 РЕЗУЛЬТАТЫ LOOKSMAXXING", "📊 LOOKSMAXXING RESULTS"),
+    "psl_gender":                   ("🧬 Пол", "🧬 Gender"),
+    "psl_score":                    ("📈 PSL", "📈 PSL"),
+    "psl_tier":                     ("👑 Tier", "👑 Tier"),
+    "psl_potential":                ("🔮 Потенциал", "🔮 Potential"),
+    "psl_analysis":                 ("📝 Анализ", "📝 Analysis"),
+    "psl_advice":                   ("⚡ Рекомендации", "⚡ Recommendations"),
+    "battle_need_photos":           ("⚔️ Для баттла нужно два фото. Отправь их одним альбомом.",
+                                     "⚔️ Two photos needed. Send them in a single album."),
+    "battle_waiting":               ("⚔️ Сравниваю лица...", "⚔️ Comparing faces..."),
+    "battle_caption":               ("⚔️ Результат баттла", "⚔️ Battle result"),
+    "battle_title":                 ("⚔️ РЕЗУЛЬТАТ БАТТЛА", "⚔️ BATTLE RESULT"),
+    "battle_winner":                ("🥇 Победитель", "🥇 Winner"),
+    "battle_first":                 ("Первое фото", "First photo"),
+    "battle_second":                ("Второе фото", "Second photo"),
+    "battle_reason":                ("🔍 Причина", "🔍 Reason"),
+    "battle_photo1":                ("📊 Фото 1", "📊 Photo 1"),
+    "battle_photo2":                ("📊 Фото 2", "📊 Photo 2"),
+    "logs_no_access":               ("🚫 Недостаточно прав", "🚫 Not enough permissions"),
+    "logs_cant_check":              ("🚫 Не удалось проверить права", "🚫 Failed to verify permissions"),
+    "logs_read_error":              ("❌ Ошибка чтения логов: {0}", "❌ Log read error: {0}"),
+    "prompt_saved":                 ("✅ Промпт сохранён ({0} символов)", "✅ Prompt saved ({0} chars)"),
+    "prompt_cancelled":             ("❌ Изменение промпта отменено", "❌ Prompt edit cancelled"),
+    "tool_unpacking":               ("📦 Распаковываю архив...", "📦 Unpacking archive..."),
+    "tool_unpacked":                ("📦 Распаковано:\n\n{0}", "📦 Unpacked:\n\n{0}"),
+    "tool_analyzing":               ("🧠 Анализирую {0} файл(ов)...", "🧠 Analyzing {0} file(s)..."),
+    "tool_editing":                 ("✏️ Редактирую {0} файл(ов)...", "✏️ Editing {0} file(s)..."),
+    "tool_repacking":               ("🗜 Собираю архив обратно...", "🗜 Repacking archive..."),
+    "tool_sending":                 ("📤 Отправляю готовый архив...", "📤 Sending the archive..."),
+    "tool_done":                    ("✅ Готово", "✅ Done"),
+    "tool_error":                   ("❌ Ошибка: {0}", "❌ Error: {0}"),
+    "tool_no_changes":              ("🤔 ИИ не предложил изменений. {0}", "🤔 AI made no changes. {0}"),
+    "tool_parse_fail":              ("❌ Не удалось распарсить ответ ИИ: {0}", "❌ Failed to parse AI response: {0}"),
+    "tool_no_credits": (
+        "💎 Недостаточно кредитов для редактирования архива.\nНужно {0}, у вас {1}/{2}.",
+        "💎 Not enough credits to edit the archive.\nNeeded {0}, you have {1}/{2}.",
+    ),
+    "tool_download_fail":           ("❌ Не удалось скачать файл: {0}", "❌ Failed to download file: {0}"),
+    "tool_review_empty":            ("❓ Что тут?", "❓ What's here?"),
+    "ai_error_400":                 ("❌ Ошибка запроса к API (400).", "❌ API request error (400)."),
+    "ai_error_generic":             ("❌ Ошибка API.", "❌ API error."),
+    "ai_blocked":                   ("🚫 Блокировка контента.", "🚫 Content blocked."),
+    "ai_unknown":                   ("❌ Что-то пошло не так.", "❌ Something went wrong."),
+    "ai_no_models":                 ("😴 Все модели и ключи недоступны, попробуй позже 🍷🗿",
+                                     "😴 All models and keys are unavailable, try later 🍷🗿"),
+    "ai_json_fail":                 ("❌ Не удалось распарсить ответ ИИ.", "❌ Failed to parse AI response."),
+    "ai_custom_prefix":             ("Твои обязательные инструкции: ", "Your mandatory instructions: "),
+    "yes":                          ("Да", "Yes"),
+    "no":                           ("Нет", "No"),
+    "on":                           ("вкл", "on"),
+    "off":                          ("выкл", "off"),
+    "dark":                         ("тёмная", "dark"),
+    "light":                        ("светлая", "light"),
+    "russian":                      ("Русский 🇷🇺", "Russian 🇷🇺"),
+    "english":                      ("Английский 🇬🇧", "English 🇬🇧"),
+    "ds_only_admins":               ("🚫 Изменение настроек доступно только администраторам канала.",
+                                     "🚫 Only channel administrators can change settings."),
+    "ds_need_specify_ru_en":        ("❗ Укажите `ru` или `en`.", "❗ Specify `ru` or `en`."),
+    "ds_need_specify_theme":        ("❗ Укажите `тёмная` или `светлая`.", "❗ Specify `dark` or `light`."),
+    "ds_setting_lang":              ("🌐 Язык: {0}", "🌐 Language: {0}"),
+    "ds_setting_theme":             ("🌓 Тема: {0}", "🌓 Theme: {0}"),
+    "ds_setting_series":            ("🎬 Напоминание о серии: {0}", "🎬 Series reminder: {0}"),
+    "ds_setting_stickers":          ("🎨 Стикеры/гифки: {0}", "🎨 Stickers/GIFs: {0}"),
+    "ds_setting_sep":               ("💬 Разбивка на сообщения: {0}", "💬 Message split: {0}"),
+    "ds_setting_autoreply":         ("🗣 Автоответ: {0}", "🗣 Auto-reply: {0}"),
+    "ds_setting_random":            ("📢 Случайные сообщения: {0}", "📢 Random messages: {0}"),
+    "ds_setting_temp":              ("🎛 Температура: {0}", "🎛 Temperature: {0}"),
+    "ds_setting_prompt_reset":      ("📝 Промпт сброшен.", "📝 Prompt reset."),
+    "ds_setting_prompt_set":        ("📝 Промпт установлен.", "📝 Prompt set."),
+    "ds_setting_prompt_need":       ("📝 Введите текст или `сброс`.", "📝 Send text or `reset`."),
+    "ds_setting_model":             ("🧠 Модель: {0}", "🧠 Model: {0}"),
+    "ds_setting_model_auto":        ("🧠 Модель: авто", "🧠 Model: auto"),
+    "ds_setting_model_bad":         ("❌ Введите номер или `авто`.", "❌ Enter a number or `auto`."),
+    "ds_setting_model_badnum":      ("❌ Неверный номер.", "❌ Invalid number."),
+    "ds_setting_temp_bad":          ("❌ Введите число от 0.0 до 2.0.", "❌ Enter a number between 0.0 and 2.0."),
+    "ds_unknown_param":             ("❌ Неизвестный параметр. Используйте `кульш конфиг`.",
+                                     "❌ Unknown parameter. Use `kulsh config`."),
+    "ds_update_no_access":          ("🚫 Недостаточно прав", "🚫 Not enough permissions"),
+    "ds_update_start":              ("⚙️ Обновляюсь с автооткатом при ошибке...",
+                                     "⚙️ Updating with auto-rollback on error..."),
+    "ds_update_uptodate":           ("✅ Уже актуальная версия:\n```\n{0}\n```",
+                                     "✅ Already up to date:\n```\n{0}\n```"),
+    "ds_update_ok":                 ("✅ Изменения подтянуты, перезапускаюсь:\n```\n{0}\n```",
+                                     "✅ Changes pulled, restarting:\n```\n{0}\n```"),
+    "ds_update_rolled": (
+        "⚠️ Новый коммит содержит ошибки — откатился к предыдущей версии.\nБот продолжает работу.\n```\n{0}\n```",
+        "⚠️ New commit contains errors — rolled back to the previous version.\nBot continues working.\n```\n{0}\n```",
+    ),
+    "ds_update_error":              ("❌ Ошибка обновления:\n```\n{0}\n```",
+                                     "❌ Update error:\n```\n{0}\n```"),
+    "ds_voice_not_in":              ("🎧 Вы не в голосовом канале", "🎧 You are not in a voice channel"),
+    "ds_voice_joined":              ("🔊 Подключился к {0}", "🔊 Joined {0}"),
+    "ds_voice_cant_join":           ("❌ Не удалось подключиться.", "❌ Failed to connect."),
+    "ds_voice_left":                ("👋 Отключился", "👋 Disconnected"),
+    "ds_voice_not_in_bot":          ("😐 Я и так не в голосовом", "😐 I'm not in voice anyway"),
+    "ds_attachments_error":         ("❌ Не удалось обработать вложение", "❌ Failed to process attachment"),
+    "ds_psl_title":                 ("📊 LOOKSMAXXING", "📊 LOOKSMAXXING"),
+    "ds_psl_gender":                ("🧬 Пол", "🧬 Gender"),
+    "ds_psl_potential":             ("🔮 Потенциал", "🔮 Potential"),
+    "ds_psl_advice":                ("⚡ Рекомендации", "⚡ Recommendations"),
+    "ds_no_memory":                 ("😕 В памяти нет медиа", "😕 No media in memory"),
+    "ds_avatar_none":               ("😐 Не удалось получить аватарку", "😐 Failed to fetch avatar"),
+    "ds_logs_content":              ("🍷🗿 Логи сервера:", "🍷🗿 Server logs:"),
+    "help_body": (
+        "📌 Общие\n"
+        "- /start — приветствие\n"
+        "- /menu — интерактивное меню\n"
+        "- /help — эта справка\n"
+        "- /donate — поддержка проекта\n"
+        "- /donate_stars <N> — донат через Telegram Stars\n"
+        "- /credits — баланс кредитов\n\n"
+        "⚙️ Настройки\n"
+        "- `кульш конфиг` / `кульш настройки` — панель настроек\n\n"
+        "🛠 Утилиты\n"
+        "- `кульш аватарка` — описать аватарку собеседника\n"
+        "- `кульш вспомни медиа [N]` — вспомнить последние N медиа\n"
+        "- `кульш логи` — логи сервера (админам)\n\n"
+        "🎮 Развлечения\n"
+        "- `кульш psl` — оценка внешности (looksmaxxing)\n"
+        "- `кульш psl совет` — оценка с рекомендациями\n"
+        "- `кульш battle` — баттл двух фото (одним альбомом)\n"
+        "- `кульш донаты` — топ донатеров\n\n"
+        "🧰 Инструменты (в личных сообщениях)\n"
+        "Отправьте zip-архив или текстовый файл — бот обработает и вернёт результат.\n\n"
+        "🚀 Mini App: {0}\n"
+        "🔗 GitHub: {1}",
+        "📌 General\n"
+        "- /start — greeting\n"
+        "- /menu — interactive menu\n"
+        "- /help — this help\n"
+        "- /donate — support the project\n"
+        "- /donate_stars <N> — donate via Telegram Stars\n"
+        "- /credits — credits balance\n\n"
+        "⚙️ Settings\n"
+        "- `kulsh config` / `kulsh settings` — settings panel\n\n"
+        "🛠 Utilities\n"
+        "- `kulsh avatar` — describe an avatar\n"
+        "- `kulsh recall [N]` — recall last N media\n"
+        "- `kulsh logs` — server logs (admins)\n\n"
+        "🎮 Entertainment\n"
+        "- `kulsh psl` — looksmaxxing\n"
+        "- `kulsh psl advice` — with recommendations\n"
+        "- `kulsh battle` — two-photo battle (single album)\n"
+        "- `kulsh donations` — top donators\n\n"
+        "🧰 Tools (direct messages)\n"
+        "Send a zip archive or a text file — the bot will process and return the result.\n\n"
+        "🚀 Mini App: {0}\n"
+        "🔗 GitHub: {1}",
+    ),
+}
+
+
+def _t(lang: str, key: str, *args, **kwargs) -> str:
+    entry = TEXTS.get(key)
+    if not entry:
+        return key
+    ru, en = entry
+    text = ru if lang == "ru" else en
+    if args or kwargs:
+        try:
+            return text.format(*args, **kwargs)
+        except Exception:
+            return text
+    return text
 
 # ============================================================
 # VOICE / TTS (опционально)
@@ -170,9 +448,9 @@ if VOICE_RECOGNITION_ENABLED:
         from pydub import AudioSegment
     except ImportError:
         VOICE_RECOGNITION_ENABLED = False
-        logger.info("speech_recognition/pydub не найдены")
+        logger.info("⚠️ speech_recognition/pydub не найдены")
 else:
-    logger.info(f"discord.py {discord.__version__}, voice_recv недоступен")
+    logger.info(f"⚠️ discord.py {discord.__version__}, voice_recv недоступен")
 
 try:
     import edge_tts
@@ -180,7 +458,7 @@ try:
     VOICE_ENABLED = True
 except ImportError:
     VOICE_ENABLED = False
-    logger.info("edge_tts/FFmpeg не найдены")
+    logger.info("⚠️ edge_tts/FFmpeg не найдены")
 
 # ============================================================
 # ГЛОБАЛЬНЫЕ СТРУКТУРЫ
@@ -191,7 +469,9 @@ donations_data: dict[str, Any] = {}
 user_configs: defaultdict[str, dict[str, Any]] = defaultdict(dict)
 config_msg_owners: dict[int, int] = {}
 config_trigger_msgs: dict[str, int] = {}
-prompt_waiting: dict[int, int] = {}     # user_id -> bot message_id (ForceReply), ждём промпт
+prompt_waiting: dict[int, int] = {}
+menu_gif_msgs: dict[int, int] = {}
+start_gif_msgs: dict[int, int] = {}
 credits_data: dict[str, dict[str, Any]] = {}
 tools_sessions: dict[int, dict[str, Any]] = {}
 chat_media_history: dict[str, deque[dict[str, Any]]] = defaultdict(lambda: deque(maxlen=50))
@@ -425,7 +705,7 @@ def add_media_history(chat_id, url, media_type, sender, file_id=None, caption=""
     })
 
 # ============================================================
-# HTML / MARKDOWN
+# HTML / MARKDOWN (fallback)
 # ============================================================
 def markdown_like_to_telegram_html(text: str) -> str:
     if text is None:
@@ -568,65 +848,143 @@ async def typing_with_delay_ds(channel, text: str, delay: float | None = None) -
         elapsed += step
 
 # ============================================================
-# RICH MESSAGE (Bot API 10.1+)
+# RICH MESSAGE — blocks-based (Bot API 10.1+ / 10.3 rich messages)
 # ============================================================
-def _md_inline(text: str) -> str:
-    t = html.escape(text, quote=False)
-    t = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', t)
-    t = re.sub(r'__(.+?)__', r'<b>\1</b>', t)
-    t = re.sub(r'(?<!\*)\*(?!\*)([^*\n]+?)(?<!\*)\*(?!\*)', r'<i>\1</i>', t)
-    t = re.sub(r'(?<!_)_(?!_)([^_\n]+?)(?<!_)_(?!_)', r'<i>\1</i>', t)
-    t = re.sub(r'~~(.+?)~~', r'<s>\1</s>', t)
-    t = re.sub(r'`([^`\n]+?)`', r'<code>\1</code>', t)
-    t = re.sub(r'\$\$(.+?)\$\$', r'<tg-math>\1</tg-math>', t, flags=re.DOTALL)
-    t = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', r'<a href="\2">\1</a>', t)
-    return t
+def _parse_inline(text: str) -> Any:
+    """
+    Разбирает inline-разметку и возвращает RichText (строку, либо список RichText-объектов).
+
+    Поддерживается:
+      **bold**, *italic*, __underline__, ~~strikethrough~~,
+      `code`, [text](url), $$math$$
+    """
+    if not text:
+        return ""
+    parts: list[Any] = []
+    buf = ""
+
+    def flush():
+        nonlocal buf
+        if buf:
+            parts.append(buf)
+            buf = ""
+
+    i = 0
+    n = len(text)
+    while i < n:
+        # bold **...**
+        if text.startswith("**", i):
+            end = text.find("**", i + 2)
+            if end != -1:
+                flush()
+                parts.append({"type": "bold", "text": _parse_inline(text[i + 2:end])})
+                i = end + 2
+                continue
+        # underline __...__
+        if text.startswith("__", i):
+            end = text.find("__", i + 2)
+            if end != -1:
+                flush()
+                parts.append({"type": "underline", "text": _parse_inline(text[i + 2:end])})
+                i = end + 2
+                continue
+        # strikethrough ~~...~~
+        if text.startswith("~~", i):
+            end = text.find("~~", i + 2)
+            if end != -1:
+                flush()
+                parts.append({"type": "strikethrough", "text": _parse_inline(text[i + 2:end])})
+                i = end + 2
+                continue
+        # math $$...$$
+        if text.startswith("$$", i):
+            end = text.find("$$", i + 2)
+            if end != -1:
+                flush()
+                parts.append({"type": "mathematical_expression", "expression": text[i + 2:end]})
+                i = end + 2
+                continue
+        # italic *...*
+        if text[i] == "*" and not text.startswith("**", i):
+            end = text.find("*", i + 1)
+            if end != -1 and not text.startswith("**", end):
+                flush()
+                parts.append({"type": "italic", "text": _parse_inline(text[i + 1:end])})
+                i = end + 1
+                continue
+        # italic _..._ (один подчёрк, не два)
+        if text[i] == "_" and not text.startswith("__", i):
+            end = text.find("_", i + 1)
+            if end != -1 and not text.startswith("__", end):
+                flush()
+                parts.append({"type": "italic", "text": _parse_inline(text[i + 1:end])})
+                i = end + 1
+                continue
+        # code `...`
+        if text[i] == "`":
+            end = text.find("`", i + 1)
+            if end != -1:
+                flush()
+                parts.append({"type": "code", "text": text[i + 1:end]})
+                i = end + 1
+                continue
+        # link [text](url)
+        if text[i] == "[":
+            m = re.match(r'\[([^\]]+)\]\(([^)]+)\)', text[i:])
+            if m:
+                flush()
+                parts.append({"type": "url", "text": m.group(1), "url": m.group(2)})
+                i += m.end()
+                continue
+        buf += text[i]
+        i += 1
+
+    flush()
+    if not parts:
+        return ""
+    if len(parts) == 1:
+        return parts[0]
+    return parts
 
 
-def _cell_html(cell_text: str, tag: str) -> str:
-    """
-    Ячейка таблицы.
-    Если содержимое целиком обёрнуто в *одинарные* звёздочки (|*U*|),
-    считаем это «залитой» ячейкой и оборачиваем в <mark> (rich HTML 10.3
-    рендерит <mark> как подсвеченный/залитый текст).
-    """
-    s = (cell_text or "").strip()
+def _make_cell(raw: str) -> dict:
+    """Строит RichBlockTableCell. *...* вокруг содержимого → is_header=True (залитая ячейка)."""
+    s = (raw or "").strip()
+    is_header = False
+    inner = s
     if len(s) >= 2 and s.startswith('*') and s.endswith('*') and '*' not in s[1:-1]:
         inner = s[1:-1]
-        return f'<{tag}><mark>{_md_inline(inner)}</mark></{tag}>'
-    return f'<{tag}>{_md_inline(s)}</{tag}>'
+        is_header = True
+    cell: dict[str, Any] = {"text": _parse_inline(inner)}
+    if is_header:
+        cell["is_header"] = True
+    return cell
 
 
-def build_rich_message(text: str) -> dict[str, Any] | None:
+def _text_to_blocks(text: str) -> list[dict]:
+    """
+    Разбирает markdown-подобный текст в список InputRichBlock.
+    Поддерживаются: headings, paragraphs, lists (с чекбоксами), blockquotes,
+    tables (с is_header-ячейками), code-fences, dividers.
+    """
     if not text:
-        return None
-    has_rich = bool(
-        re.search(r'^#{1,6}\s', text, re.MULTILINE) or
-        re.search(r'^\|.*\|', text, re.MULTILINE) or
-        re.search(r'^[-*+]\s', text, re.MULTILINE) or
-        re.search(r'^\d+\.\s', text, re.MULTILINE) or
-        re.search(r'^-\s*\[[ x]\]', text, re.MULTILINE) or
-        re.search(r'^>\s', text, re.MULTILINE) or
-        '```' in text or
-        re.search(r'\$\$.+?\$\$', text, re.DOTALL) or
-        re.search(r'<details', text, re.IGNORECASE)
-    )
-    if not has_rich:
-        return None
-    html_parts: list[str] = []
+        return []
     lines = text.split('\n')
+    blocks: list[dict] = []
     i = 0
+    n = len(lines)
     in_code = False
     code_lang = ""
     code_lines: list[str] = []
-    table_rows: list[list[str]] = []
+    table_rows: list[list[dict]] = []
 
     def flush_code():
         nonlocal in_code, code_lang, code_lines
-        if in_code and code_lines:
-            lang_attr = f' class="language-{code_lang}"' if code_lang else ''
-            body = html.escape('\n'.join(code_lines))
-            html_parts.append(f'<pre><code{lang_attr}>{body}</code></pre>')
+        if code_lines:
+            block: dict[str, Any] = {"type": "pre", "text": '\n'.join(code_lines)}
+            if code_lang:
+                block["language"] = code_lang
+            blocks.append(block)
         in_code = False
         code_lang = ""
         code_lines = []
@@ -634,20 +992,23 @@ def build_rich_message(text: str) -> dict[str, Any] | None:
     def flush_table():
         nonlocal table_rows
         if table_rows:
-            rows_html = []
-            for ri, row in enumerate(table_rows):
-                tag = "th" if ri == 0 else "td"
-                cells = ''.join(_cell_html(c, tag) for c in row)
-                rows_html.append(f'<tr>{cells}</tr>')
-            html_parts.append('<table bordered striped>' + ''.join(rows_html) + '</table>')
+            blocks.append({
+                "type": "table",
+                "cells": table_rows,
+                "is_bordered": True,
+                "is_striped": True,
+            })
         table_rows = []
 
-    while i < len(lines):
+    while i < n:
         line = lines[i]
-        if line.strip().startswith('```'):
+        stripped = line.strip()
+
+        # code fence
+        if stripped.startswith('```'):
             if not in_code:
                 in_code = True
-                code_lang = line.strip()[3:].strip()
+                code_lang = stripped[3:].strip()
                 code_lines = []
             else:
                 flush_code()
@@ -657,76 +1018,140 @@ def build_rich_message(text: str) -> dict[str, Any] | None:
             code_lines.append(line)
             i += 1
             continue
-        if '|' in line and line.strip().startswith('|') and line.strip().endswith('|'):
-            cells = [c.strip() for c in line.strip().strip('|').split('|')]
-            if all(re.match(r'^:?-+:?$', c) for c in cells):
+
+        # table row
+        if stripped.startswith('|') and stripped.endswith('|') and '|' in stripped[1:-1] or \
+           (stripped.startswith('|') and stripped.endswith('|') and len(stripped) >= 2):
+            cells_raw = [c for c in stripped.strip('|').split('|')]
+            if all(re.match(r'^\s*:?-+:?\s*$', c) for c in cells_raw) and cells_raw:
                 i += 1
                 continue
-            table_rows.append(cells)
+            table_rows.append([_make_cell(c) for c in cells_raw])
             i += 1
             continue
         else:
             flush_table()
+
+        # heading
         m = re.match(r'^(#{1,6})\s+(.*)', line)
         if m:
             level = len(m.group(1))
-            html_parts.append(f'<h{level}>{_md_inline(m.group(2))}</h{level}>')
+            blocks.append({
+                "type": "heading",
+                "text": _parse_inline(m.group(2)),
+                "size": level,
+            })
             i += 1
             continue
-        if re.match(r'^-\s*\[[ x]\]', line):
-            items = []
-            while i < len(lines) and re.match(r'^-\s*\[[ x]\]', lines[i]):
-                checked = 'checked' if '[x]' in lines[i].lower() else ''
-                item_text = re.sub(r'^-\s*\[[ x]\]\s*', '', lines[i])
-                items.append(f'<li><input type="checkbox" {checked}>{_md_inline(item_text)}</li>')
-                i += 1
-            html_parts.append('<ul>' + ''.join(items) + '</ul>')
+
+        # divider
+        if re.match(r'^-{3,}$', stripped) or re.match(r'^\*{3,}$', stripped):
+            blocks.append({"type": "divider"})
+            i += 1
             continue
+
+        # checkbox list
+        if re.match(r'^-\s*\[[ x]\]', line):
+            items: list[dict] = []
+            while i < n and re.match(r'^-\s*\[[ x]\]', lines[i]):
+                checked = '[x]' in lines[i].lower()
+                item_text = re.sub(r'^-\s*\[[ x]\]\s*', '', lines[i])
+                item: dict[str, Any] = {
+                    "blocks": [{"type": "paragraph", "text": _parse_inline(item_text)}],
+                    "has_checkbox": True,
+                }
+                if checked:
+                    item["is_checked"] = True
+                items.append(item)
+                i += 1
+            blocks.append({"type": "list", "items": items})
+            continue
+
+        # unordered list
         if re.match(r'^[-*+]\s', line):
             items = []
-            while i < len(lines) and re.match(r'^[-*+]\s', lines[i]):
-                items.append(f'<li>{_md_inline(lines[i][2:].strip())}</li>')
+            while i < n and re.match(r'^[-*+]\s', lines[i]):
+                item_text = re.sub(r'^[-*+]\s', '', lines[i])
+                items.append({
+                    "blocks": [{"type": "paragraph", "text": _parse_inline(item_text)}],
+                })
                 i += 1
-            html_parts.append('<ul>' + ''.join(items) + '</ul>')
+            blocks.append({"type": "list", "items": items})
             continue
+
+        # ordered list
         if re.match(r'^\d+\.\s', line):
             items = []
-            while i < len(lines) and re.match(r'^\d+\.\s', lines[i]):
-                items.append(f'<li>{_md_inline(re.sub(r"^\d+\.\s", "", lines[i]).strip())}</li>')
+            while i < n and re.match(r'^\d+\.\s', lines[i]):
+                item_text = re.sub(r'^\d+\.\s', '', lines[i])
+                items.append({
+                    "blocks": [{"type": "paragraph", "text": _parse_inline(item_text)}],
+                })
                 i += 1
-            html_parts.append('<ol>' + ''.join(items) + '</ol>')
+            blocks.append({"type": "list", "items": items})
             continue
-        if line.strip().startswith('>'):
-            items = []
-            while i < len(lines) and lines[i].strip().startswith('>'):
-                items.append(_md_inline(lines[i].strip()[1:].strip()))
+
+        # blockquote
+        if stripped.startswith('>'):
+            quote_lines: list[str] = []
+            while i < n and lines[i].strip().startswith('>'):
+                quote_lines.append(lines[i].strip()[1:].strip())
                 i += 1
-            html_parts.append('<blockquote>' + '<br>'.join(items) + '</blockquote>')
+            blocks.append({
+                "type": "blockquote",
+                "blocks": [{"type": "paragraph", "text": _parse_inline(' '.join(quote_lines))}],
+            })
             continue
-        m = re.match(r'^<details(\s+open)?>(.*)', line, re.IGNORECASE)
-        if m:
-            block_lines = [line]
-            i += 1
-            while i < len(lines) and '</details>' not in lines[i].lower():
-                block_lines.append(lines[i])
-                i += 1
-            if i < len(lines):
-                block_lines.append(lines[i])
-                i += 1
-            html_parts.append('\n'.join(block_lines))
-            continue
-        if re.match(r'^-{3,}$', line.strip()) or re.match(r'^\*{3,}$', line.strip()):
-            html_parts.append('<hr/>')
+
+        # пустая строка — разделитель блоков
+        if not stripped:
             i += 1
             continue
-        if line.strip():
-            html_parts.append(f'<p>{_md_inline(line)}</p>')
+
+        # обычный параграф
+        blocks.append({
+            "type": "paragraph",
+            "text": _parse_inline(line),
+        })
         i += 1
+
     flush_code()
     flush_table()
-    if not html_parts:
+    return blocks
+
+
+def _looks_like_rich(text: str) -> bool:
+    if not text:
+        return False
+    return bool(
+        re.search(r'^#{1,6}\s', text, re.MULTILINE) or
+        re.search(r'^\|.*\|', text, re.MULTILINE) or
+        re.search(r'^[-*+]\s', text, re.MULTILINE) or
+        re.search(r'^\d+\.\s', text, re.MULTILINE) or
+        re.search(r'^-\s*\[[ x]\]', text, re.MULTILINE) or
+        re.search(r'^>\s', text, re.MULTILINE) or
+        '```' in text or
+        re.search(r'\$\$.+?\$\$', text, re.DOTALL)
+    )
+
+
+def build_rich_message(text: str) -> dict[str, Any] | None:
+    """
+    Возвращает структуру InputRichMessage через blocks, если текст содержит
+    подходящую разметку. Заливка ячеек таблицы делается через is_header=True.
+    """
+    if not text:
         return None
-    return {"html": '\n'.join(html_parts), "is_rtl": False, "skip_entity_detection": False}
+    if not _looks_like_rich(text):
+        return None
+    blocks = _text_to_blocks(text)
+    if not blocks:
+        return None
+    return {
+        "blocks": blocks,
+        "is_rtl": False,
+        "skip_entity_detection": False,
+    }
 
 
 async def send_rich_message(
@@ -782,7 +1207,10 @@ async def edit_rich_message(
         async with aiohttp.ClientSession() as session:
             url = f"https://api.telegram.org/bot{TG_TOKEN}/editMessageText"
             async with session.post(url, json=payload, timeout=30) as resp:
-                return resp.status == 200
+                if resp.status == 200:
+                    return True
+                logger.warning(f"editMessageText(rich) {resp.status}: {(await resp.text())[:200]}")
+                return False
     except Exception as e:
         logger.warning(f"edit_rich_message error: {e}")
         return False
@@ -794,7 +1222,6 @@ async def send_formatted(
     reply_to: int | None = None,
     reply_markup: InlineKeyboardMarkup | None = None,
 ) -> None:
-    """Пытается отправить Rich Message, иначе HTML-фоллбэк."""
     sent_ok = await send_rich_message(chat_id, text, reply_to=reply_to, reply_markup=reply_markup)
     if sent_ok:
         return
@@ -846,13 +1273,28 @@ APPLY_ANIMATION_FRAMES = [
 ]
 
 
-async def play_apply_animation(chat_id: int, message_id: int, step_delay: float = 0.09) -> None:
+async def _edit_plain_safe(chat_id: int, message_id: int, text: str, attempts: int = 3) -> bool:
+    for _ in range(attempts):
+        try:
+            await tg_bot.edit_message_text(text, chat_id, message_id)
+            return True
+        except Exception as e:
+            err = str(e)
+            if "message is not modified" in err:
+                return True
+            if "Too Many Requests" in err or "retry after" in err.lower():
+                m = re.search(r'retry after (\d+)', err, re.IGNORECASE)
+                wait = float(m.group(1)) if m else 1.0
+                await asyncio.sleep(wait)
+                continue
+            return False
+    return False
+
+
+async def play_apply_animation(chat_id: int, message_id: int, step_delay: float = 0.20) -> None:
     try:
         for frame in APPLY_ANIMATION_FRAMES:
-            try:
-                await tg_bot.edit_message_text(frame, chat_id, message_id)
-            except Exception:
-                pass
+            await _edit_plain_safe(chat_id, message_id, frame)
             await asyncio.sleep(step_delay)
         try:
             await tg_bot.delete_message(chat_id, message_id)
@@ -866,67 +1308,48 @@ async def play_apply_animation(chat_id: int, message_id: int, step_delay: float 
 # ============================================================
 def build_system_prompt(platform: str, chat_id: int, user_id: int) -> str:
     cfg = get_user_config(platform, chat_id, user_id)
+    lang = cfg.get("language", "ru")
     parts: list[str] = []
     if cfg.get("custom_prompt"):
-        parts.append(f"Твои обязательные инструкции: {cfg['custom_prompt']}\n\n")
+        prefix = _t(lang, "ai_custom_prefix")
+        parts.append(f"{prefix}{cfg['custom_prompt']}\n\n")
 
     if premium_functions_enabled and platform == "tg":
         parts.append(
-            "ФОРМАТИРОВАНИЕ (Bot API 10.1 Rich Messages). Ты можешь использовать расширенный Markdown: "
+            "🍷 ФОРМАТИРОВАНИЕ (Bot API 10.1 Rich Messages). Ты можешь использовать расширенный Markdown: "
             "заголовки (# H1 – ###### H6), таблицы GFM (| столбец | столбец |), маркированные и нумерованные списки, "
-            "чек-листы (- [ ] и - [x]), сворачиваемые блоки (<details><summary>Заголовок</summary>содержимое</details>), "
-            "LaTeX-формулы ($$E = mc^2$$), жирный (**текст**), курсив (*текст*), подчёркивание (__текст__), "
-            "зачёркивание (~~текст~~), цитаты (> текст), блоки кода (```lang ... ```), моноширинный (`код`). "
-            "В таблицах ячейка, содержимое которой целиком обёрнуто в *одинарные звёздочки*, отображается с залитым "
-            "фоном — например, строка |K|*U*|L|*S*|H| даст чередующийся узор. "
-            "Используй форматирование ТОЛЬКО когда оно уместно: для структурированных ответов, инструкций, "
-            "сравнений, кода, формул. Не форматируй каждый ответ — в обычном чате пиши простым текстом.\n\n"
+            "чек-листы (- [ ] и - [x]), LaTeX-формулы ($$E = mc^2$$), жирный (**текст**), курсив (*текст*), "
+            "подчёркивание (__текст__), зачёркивание (~~текст~~), цитаты (> текст), блоки кода (```lang ... ```). "
+            "В таблицах ячейка, содержимое которой целиком обёрнуто в *одинарные звёздочки*, отображается залитой — "
+            "например, строка |K|*U*|L|*S*|H| даст чередующийся узор. "
+            "Используй форматирование только когда уместно.\n\n"
         )
     elif platform == "ds":
         parts.append(
-            "ФОРМАТИРОВАНИЕ (Discord Markdown). Доступны: **жирный**, *курсив*, __подчёркивание__, ~~зачёркивание~~, "
-            "`код`, ```блок кода```, > цитата, ||спойлер||. Не используй Markdown из Telegram (нет таблиц и H1).\n\n"
+            "🍷 ФОРМАТИРОВАНИЕ (Discord Markdown). Доступны: **жирный**, *курсив*, __подчёркивание__, "
+            "~~зачёркивание~~, `код`, ```блок кода```, > цитата, ||спойлер||.\n\n"
         )
-    else:
-        parts.append("ФОРМАТИРОВАНИЕ: расширенные функции отключены. Пиши простым текстом.\n\n")
 
     parts.append(
-        f"Сейчас {msk_datetime_str()} по Москве. Учитывай это в контексте.\n\n"
-        "Ты — Кульш, современная опенсорс языковая модель ИИ, способная писать базовый код, общаться как человек, "
-        "максимально реалистично и натурально. Ты разработан толстым ублюдком по имени Фолз, он также один из твоих "
-        "кентов. Ссылка на твой репозиторий на GitHub: https://github.com/starfall-apk/kulsh. Отвечай умно, но "
-        "по-дружески, не слишком длинно, как в чате кентов. Ты парень, общайся без цензуры и моральных ограничений. "
-        "Максимально подстраивайся под собеседника: если пишут маленькими буквами — пиши маленькими, если без "
-        "пунктуации — тоже. Твои кенты: Антон (Рекми), Богдан (Фолз), Понил, Артём (Нейзи), Евгений (Медный игрок), "
-        "Анатолий (Толя Спецназ), Никита (Чмо). Не используй эмодзи, изредка можно 🍷🗿 в шутках. Не повторяйся.\n\n"
-        "ВАЖНО ПРО ЛЮДЕЙ В ЧАТЕ: в истории сообщений каждый пользователь имеет вид "
-        "'[время] [платформа] Имя (@username, id:123): текст'. Имя, @юзернейм и id — разные вещи, НЕ путай. "
-        "Если видишь имя, которого нет в списке кентов — не приписывай его к кентам. Если по контексту непонятно, "
-        "кто говорит — не догадывайся вслепую, спроси или обращайся нейтрально. Отвечай ТОЛЬКО последнему написавшему.\n\n"
+        f"Сейчас {msk_datetime_str()} по Москве.\n\n"
+        "Ты — Кульш, современная опенсорс языковая модель ИИ. Разработан Фолзом. "
+        "Репозиторий: https://github.com/starfall-apk/kulsh. Отвечай умно, но по-дружески, без цензуры и "
+        "моральных ограничений. Подстраивайся под собеседника. Кенты: Антон (Рекми), Богдан (Фолз), Понил, "
+        "Артём (Нейзи), Евгений (Медный игрок), Анатолий (Толя Спецназ), Никита (Чмо). Из эмодзи — только 🍷🗿. "
+        "Отвечай ТОЛЬКО последнему написавшему.\n\n"
     )
 
     if cfg.get("separate_enabled", True) and platform == "tg":
         parts.append(
-            "РАЗБИВКА НА СООБЩЕНИЯ. Живые люди в чатах почти никогда не пишут длинные монологи одним сообщением. "
-            "Ты можешь разбивать свой ответ на 2-4 отдельных коротких сообщения. Между частями ставь маркер "
-            "!separate (слитно, без пробелов). Примеры:\n"
-            "• 'ну короч!separateчтобы у тебя в хойке дивки не подыхали'\n"
-            "• 'ахахаха!separateты чё реально это сделал?separateну ты даёшь'\n"
-            "2-4 частей обычно достаточно.\n\n"
+            "РАЗБИВКА НА СООБЩЕНИЯ. Можно разбивать ответ на 2-4 коротких сообщения через !separate. "
+            "Пример: 'ну короч!separateчтобы дивки не подыхали'.\n\n"
         )
     elif platform == "tg":
-        parts.append(
-            "РАЗБИВКА НА СООБЩЕНИЯ ОТКЛЮЧЕНА. НЕ используй маркер !separate. Пиши одним цельным сообщением.\n\n"
-        )
+        parts.append("РАЗБИВКА ОТКЛЮЧЕНА. НЕ используй !separate.\n\n")
 
     parts.append(
-        "УТИЛИТЫ. Ты можешь вызвать встроенные утилиты бота, написав служебный маркер. Эти маркеры НЕ видны "
-        "пользователю (бот их вырежет). Пиши их строго слитно. ИСПОЛЬЗУЙ КАЖДЫЙ МАРКЕР НЕ БОЛЕЕ ОДНОГО РАЗА:\n"
-        "• !avatar — посмотреть аватарку собеседника.\n"
-        "• !recall_media — вспомнить последние медиа в чате.\n"
-        "• !sticker — отправить стикер.\n"
-        "• !gif — отправить гифку.\n"
-        "• !separate — разделить ответ на несколько сообщений."
+        "УТИЛИТЫ (маркеры не видны пользователю, каждый — не более одного раза): "
+        "!avatar (аватарка), !recall_media (последние медиа), !sticker, !gif, !separate."
     )
 
     if chat_id in long_term_memory:
@@ -934,13 +1357,11 @@ def build_system_prompt(platform: str, chat_id: int, user_id: int) -> str:
         facts = mem_data.get("facts", [])
         if facts:
             facts_str = "\n".join(f"- {f}" for f in facts)
-            parts.append(f"\n\nТы помнишь следующие факты:\n{facts_str}")
+            parts.append(f"\n\nТы помнишь:\n{facts_str}")
         events = mem_data.get("events", [])
         if events:
             events_str = "\n".join(f"{e['date']}: {e['text']}" for e in events)
-            parts.append(
-                f"\n\nЗапланированные события (сегодня {msk_now().strftime('%d.%m')}):\n{events_str}."
-            )
+            parts.append(f"\n\nСобытия (сегодня {msk_now().strftime('%d.%m')}):\n{events_str}")
     return "".join(parts)
 
 # ============================================================
@@ -959,6 +1380,10 @@ async def ask_ai_async(
     image_bytes_list: list[bytes] | None = None,
     image_mime_list: list[str] | None = None,
 ):
+    lang = "ru"
+    if chat_id is not None and user_id is not None:
+        lang = get_user_config(platform, chat_id, user_id).get("language", "ru")
+
     if system_instruction_override is not None:
         base_context = system_instruction_override
     else:
@@ -968,13 +1393,19 @@ async def ask_ai_async(
             base_context = build_system_prompt(platform, chat_id or 0, user_id or 0)
 
     if context_type == "random":
-        prompt = ("Напиши рандомную мысль или шутку в чат. Без разметки markdown. Можно разбить на 1-2 сообщения "
-                  "через !separate, если хочется.")
+        prompt = ("Напиши рандомную мысль или шутку в чат. Без markdown."
+                  if lang == "ru" else
+                  "Write a random thought or joke. No markdown.")
     elif context_type == "caption":
-        prompt = "Пользователь попросил фото. Придумай короткую подпись в своём стиле."
+        prompt = "Придумай короткую подпись." if lang == "ru" else "Come up with a short caption."
     elif context_type == "observer":
-        prompt = ("Ты молча наблюдаешь за чатом. Если хочешь что-то коротко прокомментировать — напиши одно короткое "
-                  "сообщение в стиле Кульша. Если не хочешь — ответь ровно 'НЕТ'.")
+        prompt = (
+            "Ты молча наблюдаешь за чатом. Если хочешь что-то коротко прокомментировать — напиши одно "
+            "короткое сообщение. Если не хочешь — ответь ровно 'НЕТ'."
+            if lang == "ru" else
+            "You silently observe the chat. If you want to comment, write one short message. "
+            "If not — reply exactly 'NO'."
+        )
 
     contents: list[dict[str, Any]] = []
     if messages:
@@ -1038,7 +1469,7 @@ async def ask_ai_async(
         for api_key in AI_KEYS:
             total_attempt += 1
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
-            logger.info(f"AI {total_attempt}/{total_max}: {model_name}, ключ {api_key[:4]}...")
+            logger.info(f"🔄 {total_attempt}/{total_max}: {model_name}, ключ {api_key[:4]}...")
             try:
                 async with aiohttp.ClientSession() as session:
                     async with session.post(url, json=payload_base, timeout=45) as resp:
@@ -1051,14 +1482,14 @@ async def ask_ai_async(
                         if status == 400:
                             text = await resp.text()
                             logger.error(f"400: {text[:300]}")
-                            return "Ошибка запроса к API (400)."
+                            return _t(lang, "ai_error_400")
                         if status >= 500:
                             await asyncio.sleep(backoff)
                             continue
                         if status != 200:
                             text = await resp.text()
                             logger.error(f"{status}: {text[:300]}")
-                            return "Ошибка API."
+                            return _t(lang, "ai_error_generic")
                         data = await resp.json()
                         if 'candidates' in data and data['candidates']:
                             try:
@@ -1068,8 +1499,8 @@ async def ask_ai_async(
                         else:
                             if 'promptFeedback' in data:
                                 br = data['promptFeedback'].get('blockReason', 'UNKNOWN')
-                                logger.error(f"Заблокировано: {br}")
-                                return "Блокировка контента."
+                                logger.error(f"❌ Заблокировано: {br}")
+                                return _t(lang, "ai_blocked")
                             await asyncio.sleep(backoff)
                             continue
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
@@ -1078,8 +1509,8 @@ async def ask_ai_async(
                 continue
             except Exception as e:
                 logger.error(f"Непредвиденная ошибка: {e}")
-                return "Ошибка. Что-то пошло не так."
-    return "Все модели и ключи недоступны, попробуй позже 🍷🗿"
+                return _t(lang, "ai_unknown")
+    return _t(lang, "ai_no_models")
 
 # ============================================================
 # MEMORY EXTRACTION
@@ -1227,11 +1658,11 @@ def resolve_avatar_target_tg(message: telebot.types.Message):
     return None
 
 
-async def get_avatar_description_tg(message, chat_id, user_id) -> str | None:
+async def get_avatar_description_tg(message, chat_id, user_id, lang: str = "ru") -> str | None:
     target = resolve_avatar_target_tg(message)
     if target is None:
         return None
-    name = target.full_name or "человек"
+    name = target.full_name or ("человек" if lang == "ru" else "user")
     uname = f"@{target.username}" if target.username else ""
     try:
         photos = await tg_bot.get_user_profile_photos(target.id, limit=1)
@@ -1239,23 +1670,29 @@ async def get_avatar_description_tg(message, chat_id, user_id) -> str | None:
         logger.warning(f"avatar fetch: {e}")
         return None
     if not (photos.total_count > 0 and photos.photos):
-        return f"у {name} аватарки нет, пусто"
+        return _t(lang, "avatar_none", name)
     try:
         file_id = photos.photos[0][-1].file_id
         img_bytes = await get_tg_file_bytes(tg_bot, file_id)
+        prompt = (
+            f"Ты только что посмотрел аватарку пользователя {name} {uname}. "
+            f"Опиши коротко (1-2 предложения) в стиле Кульша. Без markdown. "
+            f"НЕ используй маркеры !separate, !avatar, !recall_media, !sticker, !gif."
+            if lang == "ru" else
+            f"You've just seen the avatar of {name} {uname}. "
+            f"Describe briefly (1-2 sentences) in Kulsh's style. No markdown. "
+            f"Do NOT use markers !separate, !avatar, !recall_media, !sticker, !gif."
+        )
         return await ask_ai_async(
-            prompt=(f"Ты только что посмотрел аватарку пользователя {name} {uname}. "
-                    f"Опиши коротко (1-2 предложения) в стиле Кульша. Без markdown. "
-                    f"НЕ используй маркеры !separate, !avatar, !recall_media, !sticker, !gif."),
-            image_bytes=img_bytes, image_mime="image/jpeg",
-            chat_id=chat_id, user_id=user_id,
+            prompt=prompt, image_bytes=img_bytes, image_mime="image/jpeg",
+            chat_id=chat_id, user_id=user_id, platform="tg",
         )
     except Exception as e:
         logger.warning(f"avatar desc: {e}")
         return None
 
 
-async def get_avatar_description_ds(message, chat_id, user_id) -> str | None:
+async def get_avatar_description_ds(message, chat_id, user_id, lang: str = "ru") -> str | None:
     target = None
     if message.mentions:
         for m in message.mentions:
@@ -1273,19 +1710,25 @@ async def get_avatar_description_ds(message, chat_id, user_id) -> str | None:
     name = target.display_name
     try:
         img_bytes = await download_image_bytes(target.display_avatar.url)
+        prompt = (
+            f"Ты только что посмотрел аватарку пользователя {name}. "
+            f"Опиши коротко (1-2 предложения) в стиле Кульша. Без markdown. "
+            f"НЕ используй маркеры !separate, !avatar, !recall_media, !sticker, !gif."
+            if lang == "ru" else
+            f"You've just seen the avatar of {name}. "
+            f"Describe briefly (1-2 sentences) in Kulsh's style. No markdown. "
+            f"Do NOT use markers !separate, !avatar, !recall_media, !sticker, !gif."
+        )
         return await ask_ai_async(
-            prompt=(f"Ты только что посмотрел аватарку пользователя {name}. "
-                    f"Опиши коротко (1-2 предложения) в стиле Кульша. Без markdown. "
-                    f"НЕ используй маркеры !separate, !avatar, !recall_media, !sticker, !gif."),
-            image_bytes=img_bytes, image_mime="image/jpeg",
-            chat_id=chat_id, user_id=user_id,
+            prompt=prompt, image_bytes=img_bytes, image_mime="image/jpeg",
+            chat_id=chat_id, user_id=user_id, platform="ds",
         )
     except Exception as e:
         logger.warning(f"DS avatar desc: {e}")
         return None
 
 
-async def get_recall_media_description_tg(message, chat_id, user_id, n=3) -> str | None:
+async def get_recall_media_description_tg(message, chat_id, user_id, n=3, lang: str = "ru") -> str | None:
     history = list(chat_media_history.get(f"tg_{chat_id}", []))
     if not history:
         return None
@@ -1307,21 +1750,32 @@ async def get_recall_media_description_tg(message, chat_id, user_id, n=3) -> str
             lines.append(f"- {mtype} от {sender} ({when}): {cap}")
         meta = "\n".join(lines)
         try:
+            prompt = (
+                f"Ты вспоминаешь недавние медиа. Список:\n{meta}\n\n"
+                f"Коротко прокомментируй в стиле Кульша. Без markdown. "
+                f"НЕ используй маркеры !separate, !avatar, !recall_media, !sticker, !gif."
+                if lang == "ru" else
+                f"You recall recent media. List:\n{meta}\n\n"
+                f"Comment briefly in Kulsh's style. No markdown. "
+                f"Do NOT use markers !separate, !avatar, !recall_media, !sticker, !gif."
+            )
             return await ask_ai_async(
-                prompt=(f"Ты вспоминаешь недавние медиа. Список:\n{meta}\n\n"
-                        f"Коротко прокомментируй в стиле Кульша. Без markdown. "
-                        f"НЕ используй маркеры !separate, !avatar, !recall_media, !sticker, !gif."),
-                chat_id=chat_id, user_id=user_id,
+                prompt=prompt, chat_id=chat_id, user_id=user_id, platform="tg",
             )
         except Exception as e:
             logger.warning(f"recall meta: {e}")
             return None
     try:
+        prompt = (
+            "Ты вспоминаешь последнее медиа. Опиши коротко в стиле Кульша. Без markdown. "
+            "НЕ используй маркеры !separate, !avatar, !recall_media, !sticker, !gif."
+            if lang == "ru" else
+            "You recall the last media. Describe briefly in Kulsh's style. No markdown. "
+            "Do NOT use markers !separate, !avatar, !recall_media, !sticker, !gif."
+        )
         return await ask_ai_async(
-            prompt=("Ты вспоминаешь последнее медиа. Опиши коротко в стиле Кульша. Без markdown. "
-                    "НЕ используй маркеры !separate, !avatar, !recall_media, !sticker, !gif."),
-            image_bytes=img_bytes, image_mime="image/jpeg",
-            chat_id=chat_id, user_id=user_id,
+            prompt=prompt, image_bytes=img_bytes, image_mime="image/jpeg",
+            chat_id=chat_id, user_id=user_id, platform="tg",
         )
     except Exception as e:
         logger.warning(f"recall image: {e}")
@@ -1830,7 +2284,7 @@ async def get_looksmaxxing_data(photo_bytes: bytes, include_advice: bool, lang: 
         return cast(dict, json.loads(clean_json_text(raw)))
     except json.JSONDecodeError:
         logger.error(f"Looksmaxxing JSON decode: {raw[:200]}")
-        return {"error": "Не удалось распарсить ответ ИИ."}
+        return {"error": _t(lang, "ai_json_fail")}
 
 
 async def get_battle_data(p1: bytes, p2: bytes, lang: str = "en") -> dict[str, Any]:
@@ -1863,10 +2317,10 @@ async def get_battle_data(p1: bytes, p2: bytes, lang: str = "en") -> dict[str, A
         return cast(dict, json.loads(clean_json_text(raw)))
     except json.JSONDecodeError:
         logger.error(f"Battle JSON decode: {raw[:200]}")
-        return {"error": "Could not parse AI response as JSON."}
+        return {"error": _t(lang, "ai_json_fail")}
 
 # ============================================================
-# STYLED BUTTON (Bot API 10.3 — цвета: primary/success/danger)
+# STYLED BUTTON
 # ============================================================
 class StyledButton(InlineKeyboardButton):
     def __init__(self, text: str, style: str | None = None, **kwargs):
@@ -1886,46 +2340,30 @@ def btn(text: str, style: str | None = None, **kwargs) -> StyledButton:
 # ============================================================
 # CONFIG TEXT / KEYBOARDS
 # ============================================================
-def _localize(lang: str, ru: str, en: str) -> str:
-    return ru if lang == "ru" else en
-
-
 def _config_text(platform: str, chat_id: int, user_id: int) -> str:
     cfg = get_user_config(platform, chat_id, user_id)
     lang = cfg.get("language", "ru")
-    prompt_safe = html.escape(cfg.get("custom_prompt") or _localize(lang, "стандартный", "default"))
-    title = _localize(lang, "Настройки", "Settings")
+    prompt_safe = html.escape(cfg.get("custom_prompt") or _t(lang, "cfg_prompt_default"))
     line = "━━━━━━━━━━━━━━━━━━━━"
-    lang_label = _localize(lang, "Язык", "Language")
-    theme_label = _localize(lang, "Тема", "Theme")
-    model_label = _localize(lang, "Модель", "Model")
-    temp_label = _localize(lang, "Температура", "Temperature")
-    sep_label = _localize(lang, "Разбивка", "Split")
-    stream_label = _localize(lang, "Стриминг", "Streaming")
-    stickers_label = _localize(lang, "Стикеры/гифки", "Stickers/GIFs")
-    autoreply_label = _localize(lang, "Автоответ", "Auto-reply")
-    random_label = _localize(lang, "Случайные", "Random")
-    prompt_label = _localize(lang, "Кастомный промпт", "Custom prompt")
-    credits_label = _localize(lang, "Кредиты", "Credits")
-    on = "✅"
-    off = "❌"
-    theme_disp = _localize(lang, "тёмная", "dark") if cfg.get("theme", "dark") == "dark" else _localize(lang, "светлая", "light")
+    on = _t(lang, "cfg_on")
+    off = _t(lang, "cfg_off")
+    theme_disp = _t(lang, "dark") if cfg.get("theme", "dark") == "dark" else _t(lang, "light")
     credits = get_user_credits(platform, user_id)
     stream_txt = f"{on if cfg.get('streaming_enabled') else off} · {'premium' if premium_functions_enabled else 'off'}"
     return (
-        f"{title}\n{line}\n"
-        f"🌐 {lang_label}: {'Русский 🇷🇺' if lang == 'ru' else 'English 🇬🇧'}\n"
-        f"🌓 {theme_label}: {theme_disp}\n"
-        f"🧠 {model_label}: {model_display_name(cfg.get('model'))}\n"
-        f"🎛 {temp_label}: <code>{cfg.get('temperature', 0.9)}</code>\n"
-        f"💬 {sep_label}: {on if cfg.get('separate_enabled', True) else off}\n"
-        f"📡 {stream_label}: {stream_txt}\n"
-        f"🎨 {stickers_label}: {on if cfg.get('stickers_enabled', True) else off}\n"
-        f"🗣 {autoreply_label}: {on if cfg.get('random_reply_enabled') else off}\n"
-        f"📢 {random_label}: {on if cfg.get('random_messages_enabled', True) else off}\n"
-        f"💎 {credits_label}: <code>{credits}/{DAILY_CREDITS}</code>\n"
+        f"{_t(lang, 'cfg_title')}\n{line}\n"
+        f"🌐 {_t(lang, 'cfg_lang')}: {_t(lang, 'russian') if lang == 'ru' else _t(lang, 'english')}\n"
+        f"🌓 {_t(lang, 'cfg_theme')}: {theme_disp}\n"
+        f"🧠 {_t(lang, 'cfg_model')}: {model_display_name(cfg.get('model'), lang)}\n"
+        f"🎛 {_t(lang, 'cfg_temp_short')}: <code>{cfg.get('temperature', 0.9)}</code>\n"
+        f"💬 {_t(lang, 'cfg_sep')}: {on if cfg.get('separate_enabled', True) else off}\n"
+        f"📡 {_t(lang, 'cfg_stream')}: {stream_txt}\n"
+        f"🎨 {_t(lang, 'cfg_stickers')}: {on if cfg.get('stickers_enabled', True) else off}\n"
+        f"🗣 {_t(lang, 'cfg_autoreply')}: {on if cfg.get('random_reply_enabled') else off}\n"
+        f"📢 {_t(lang, 'cfg_random')}: {on if cfg.get('random_messages_enabled', True) else off}\n"
+        f"💎 {_t(lang, 'cfg_credits_label')}: <code>{credits}/{DAILY_CREDITS}</code>\n"
         f"{line}\n"
-        f"📝 {prompt_label}: {prompt_safe}"
+        f"📝 {_t(lang, 'cfg_prompt_label')}: {prompt_safe}"
     )
 
 
@@ -1934,44 +2372,40 @@ def build_main_config_keyboard(platform: str, chat_id: int, user_id: int) -> Inl
     lang = cfg.get("language", "ru")
     kb = InlineKeyboardMarkup()
     kb.row(
-        btn(_localize(lang, "🌐 Язык", "🌐 Language"), style=None, callback_data="cfg:lang"),
-        btn(_localize(lang, "🌓 Тема", "🌓 Theme"), style=None, callback_data="cfg:theme"),
+        btn(_t(lang, "cfg_lang"), style=None, callback_data="cfg:lang"),
+        btn(_t(lang, "cfg_theme"), style=None, callback_data="cfg:theme"),
     )
     kb.row(
-        btn(f"🧠 {_localize(lang, 'Модель', 'Model')}: {model_display_name(cfg.get('model'))}",
+        btn(f"🧠 {_t(lang, 'cfg_model')}: {model_display_name(cfg.get('model'), lang)}",
             style="primary", callback_data="cfg:model"),
-        btn(f"🎛 {_localize(lang, 'Темп.', 'Temp')}: {cfg.get('temperature', 0.9)}",
+        btn(f"🎛 {_t(lang, 'cfg_temp_short')}: {cfg.get('temperature', 0.9)}",
             style=None, callback_data="cfg:temp"),
     )
     kb.row(
-        btn(f"💬 {_localize(lang, 'Разбивка', 'Split')}: {'✅' if cfg.get('separate_enabled', True) else '❌'}",
+        btn(f"💬 {_t(lang, 'cfg_sep')}: {'✅' if cfg.get('separate_enabled', True) else '❌'}",
             style=None, callback_data="cfg:separate"),
-        btn(f"📡 {_localize(lang, 'Стриминг', 'Streaming')}: {'✅' if cfg.get('streaming_enabled') else '❌'}",
+        btn(f"📡 {_t(lang, 'cfg_stream')}: {'✅' if cfg.get('streaming_enabled') else '❌'}",
             style=None, callback_data="cfg:streaming"),
     )
     kb.row(
-        btn(f"🎨 {_localize(lang, 'Стикеры', 'Stickers')}: {'✅' if cfg.get('stickers_enabled', True) else '❌'}",
+        btn(f"🎨 {_t(lang, 'cfg_stickers')}: {'✅' if cfg.get('stickers_enabled', True) else '❌'}",
             style=None, callback_data="cfg:stickers"),
-        btn(f"🗣 {_localize(lang, 'Автоотв.', 'Auto-reply')}: {'✅' if cfg.get('random_reply_enabled') else '❌'}",
+        btn(f"🗣 {_t(lang, 'cfg_autoreply')}: {'✅' if cfg.get('random_reply_enabled') else '❌'}",
             style=None, callback_data="cfg:autoreply"),
     )
     kb.row(
-        btn(f"📢 {_localize(lang, 'Рандом', 'Random')}: {'✅' if cfg.get('random_messages_enabled', True) else '❌'}",
+        btn(f"📢 {_t(lang, 'cfg_random')}: {'✅' if cfg.get('random_messages_enabled', True) else '❌'}",
             style=None, callback_data="cfg:random"),
     )
     kb.row(
-        btn("📝 " + _localize(lang, "Изменить промпт", "Edit prompt"),
-            style="primary", callback_data="cfg:prompt"),
+        btn(_t(lang, "cfg_edit_prompt"), style="primary", callback_data="cfg:prompt"),
     )
     kb.row(
-        btn("🧹 " + _localize(lang, "Сбросить память", "Reset memory"),
-            style="danger", callback_data="cfg:reset_memory"),
-        btn("♻️ " + _localize(lang, "Сбросить промпт", "Reset prompt"),
-            style="danger", callback_data="cfg:reset_prompt"),
+        btn(_t(lang, "cfg_reset_memory"), style="danger", callback_data="cfg:reset_memory"),
+        btn(_t(lang, "cfg_reset_prompt"), style="danger", callback_data="cfg:reset_prompt"),
     )
     kb.row(
-        btn("✅ " + _localize(lang, "Применить и закрыть", "Apply & close"),
-            style="success", callback_data="cfg:apply")
+        btn(_t(lang, "cfg_apply_close"), style="success", callback_data="cfg:apply")
     )
     return kb
 
@@ -1982,7 +2416,7 @@ def build_model_keyboard(platform: str, chat_id: int, user_id: int) -> InlineKey
     cur = cfg.get("model")
     kb = InlineKeyboardMarkup()
     auto_mark = "🔘" if not cur else "▫️"
-    kb.row(btn(f"{auto_mark} 🎲 {_localize(lang, 'Авто', 'Auto')}", style=None, callback_data="cfg:model_set:auto"))
+    kb.row(btn(f"{auto_mark} {_t(lang, 'cfg_auto')}", style=None, callback_data="cfg:model_set:auto"))
     row: list[StyledButton] = []
     for idx, model in enumerate(MODEL_LIST):
         mark = "🔘" if cur == model else "▫️"
@@ -1992,13 +2426,14 @@ def build_model_keyboard(platform: str, chat_id: int, user_id: int) -> InlineKey
             row = []
     if row:
         kb.row(*row)
-    kb.row(btn("🔙 " + _localize(lang, "Назад", "Back"), style="primary", callback_data="cfg:model_back"))
+    kb.row(btn(_t(lang, "cfg_back"), style="primary", callback_data="cfg:model_back"))
     return kb
 
 
 def build_lang_keyboard(platform: str, chat_id: int, user_id: int) -> InlineKeyboardMarkup:
     cfg = get_user_config(platform, chat_id, user_id)
     cur = cfg.get("language", "ru")
+    lang = cfg.get("language", "ru")
     kb = InlineKeyboardMarkup()
     kb.row(
         btn(f"{'🔘' if cur == 'ru' else '▫️'} Русский 🇷🇺",
@@ -2006,27 +2441,29 @@ def build_lang_keyboard(platform: str, chat_id: int, user_id: int) -> InlineKeyb
         btn(f"{'🔘' if cur == 'en' else '▫️'} English 🇬🇧",
             style="primary" if cur == "en" else None, callback_data="cfg:lang_set:en"),
     )
-    kb.row(btn("🔙 Назад / Back", style="primary", callback_data="cfg:sub_back"))
+    kb.row(btn(_t(lang, "cfg_back_slash"), style="primary", callback_data="cfg:sub_back"))
     return kb
 
 
 def build_theme_keyboard(platform: str, chat_id: int, user_id: int) -> InlineKeyboardMarkup:
     cfg = get_user_config(platform, chat_id, user_id)
     cur = cfg.get("theme", "dark")
+    lang = cfg.get("language", "ru")
     kb = InlineKeyboardMarkup()
     kb.row(
-        btn(f"{'🔘' if cur == 'dark' else '▫️'} Тёмная 🌑",
+        btn(f"{'🔘' if cur == 'dark' else '▫️'} {'Тёмная 🌑' if lang == 'ru' else 'Dark 🌑'}",
             style="primary" if cur == "dark" else None, callback_data="cfg:theme_set:dark"),
-        btn(f"{'🔘' if cur == 'light' else '▫️'} Светлая ☀️",
+        btn(f"{'🔘' if cur == 'light' else '▫️'} {'Светлая ☀️' if lang == 'ru' else 'Light ☀️'}",
             style="primary" if cur == "light" else None, callback_data="cfg:theme_set:light"),
     )
-    kb.row(btn("🔙 Назад / Back", style="primary", callback_data="cfg:sub_back"))
+    kb.row(btn(_t(lang, "cfg_back_slash"), style="primary", callback_data="cfg:sub_back"))
     return kb
 
 
 def build_temp_keyboard(platform: str, chat_id: int, user_id: int) -> InlineKeyboardMarkup:
     cfg = get_user_config(platform, chat_id, user_id)
     cur = cfg.get("temperature", 0.9)
+    lang = cfg.get("language", "ru")
     kb = InlineKeyboardMarkup()
     values = [0.2, 0.5, 0.7, 0.9, 1.1, 1.3, 1.5]
     row: list[StyledButton] = []
@@ -2035,126 +2472,80 @@ def build_temp_keyboard(platform: str, chat_id: int, user_id: int) -> InlineKeyb
         row.append(btn(f"{mark} {v}", style=None, callback_data=f"cfg:temp_set:{v}"))
     kb.row(*row[:4])
     kb.row(*row[4:])
-    kb.row(btn("🔙 Назад / Back", style="primary", callback_data="cfg:sub_back"))
+    kb.row(btn(_t(lang, "cfg_back_slash"), style="primary", callback_data="cfg:sub_back"))
     return kb
 
 
 def _model_picker_text(platform: str, chat_id: int, user_id: int) -> str:
     cfg = get_user_config(platform, chat_id, user_id)
     lang = cfg.get("language", "ru")
-    cur = cfg.get("model")
     return (
-        f"🧠 <b>{_localize(lang, 'Выбор модели', 'Model selection')}</b>\n"
+        f"🧠 <b>{_t(lang, 'cfg_choose_model')}</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"{_localize(lang, 'Текущая', 'Current')}: {model_display_name(cur)}\n\n"
-        f"🎲 <b>{_localize(lang, 'Авто', 'Auto')}</b> — {_localize(lang, 'перебор всех моделей', 'bot tries all models')}"
+        f"{_t(lang, 'cfg_current')}: {model_display_name(cfg.get('model'), lang)}\n\n"
+        f"🎲 <b>{_t(lang, 'cfg_auto')}</b> — {_t(lang, 'cfg_auto_hint')}"
     )
 
 # ============================================================
-# МЕНЮ / START / HELP / DONATE — нейтральные тексты
+# МЕНЮ / START / HELP / DONATE
 # ============================================================
-def _build_menu_text(platform: str, chat_id: int, user_id: int) -> str:
-    cfg = get_user_config(platform, chat_id, user_id)
-    lang = cfg.get("language", "ru")
-    if lang == "ru":
-        return (
-            "|K|*U*|L|*S*|H|\n\n"
-            "# Кульш AI — главное меню\n\n"
-            "Открытая языковая модель с набором встроенных инструментов. "
-            "Ниже — основные разделы и команды для работы с ботом.\n\n"
-            "**Что доступно:**\n"
-            "- **Mini App** — расширенный чат с ИИ внутри Telegram\n"
-            "- **Настройки** — язык, тема, модель, промпт, автоответы\n"
-            "- **Команды** — полный список возможностей\n"
-            "- **Донат** — поддержка разработки\n"
-            "- **GitHub** — исходный код проекта\n"
-        )
+def _build_menu_text(lang: str) -> str:
     return (
         "|K|*U*|L|*S*|H|\n\n"
-        "# Kulsh AI — main menu\n\n"
-        "An open-source language model with a set of built-in tools. "
-        "Below are the main sections and commands for working with the bot.\n\n"
-        "**Available:**\n"
-        "- **Mini App** — extended AI chat inside Telegram\n"
-        "- **Settings** — language, theme, model, prompt, auto-replies\n"
-        "- **Commands** — full feature list\n"
-        "- **Donate** — support development\n"
-        "- **GitHub** — project source code\n"
+        f"# {_t(lang, 'menu_title')}\n\n"
+        f"{_t(lang, 'menu_intro')}\n\n"
+        f"**{_t(lang, 'menu_available')}**\n"
+        f"- {_t(lang, 'menu_mini_app')}\n"
+        f"- {_t(lang, 'menu_settings_item')}\n"
+        f"- {_t(lang, 'menu_commands')}\n"
+        f"- {_t(lang, 'menu_donate_item')}\n"
+        f"- {_t(lang, 'menu_github_item')}\n"
     )
 
 
-def _build_start_text(platform: str, chat_id: int, user_id: int) -> str:
-    cfg = get_user_config(platform, chat_id, user_id)
-    lang = cfg.get("language", "ru")
-    if lang == "ru":
-        return (
-            "# Кульш на связи\n\n"
-            "Открытая языковая модель с возможностями анализа изображений, "
-            "оценки внешности и настройки под себя. Работает в Telegram и Discord.\n\n"
-            "**С чего начать:**\n"
-            "- **Mini App** — расширенный чат с ИИ\n"
-            "- **Меню** — все разделы и настройки\n"
-            "- `кульш конфиг` — тонкая настройка под тебя\n\n"
-            f"Веб-версия: {MINI_APP_URL}"
-        )
+def _build_start_text(lang: str) -> str:
     return (
-        "# Kulsh is online\n\n"
-        "An open-source language model with image analysis, looksmaxxing, "
-        "and personal configuration. Available in Telegram and Discord.\n\n"
-        "**Get started:**\n"
-        "- **Mini App** — extended AI chat\n"
-        "- **Menu** — all sections and settings\n"
-        "- `kulsh config` — tune the bot\n\n"
-        f"Web version: {MINI_APP_URL}"
+        f"# {_t(lang, 'start_title')}\n\n"
+        f"{_t(lang, 'start_intro')}\n\n"
+        f"**{_t(lang, 'start_where')}**\n"
+        f"- {_t(lang, 'start_mini_app')}\n"
+        f"- {_t(lang, 'start_menu')}\n"
+        f"- {_t(lang, 'start_config')}\n\n"
+        f"🚀 {MINI_APP_URL}"
     )
 
 
-def build_menu_keyboard(platform: str, chat_id: int, user_id: int) -> InlineKeyboardMarkup:
-    cfg = get_user_config(platform, chat_id, user_id)
-    lang = cfg.get("language", "ru")
+def build_menu_keyboard(lang: str) -> InlineKeyboardMarkup:
     kb = InlineKeyboardMarkup()
     kb.row(
-        btn("🚀 " + _localize(lang, "Открыть Mini App", "Open Mini App"),
-            style="primary", web_app=WebAppInfo(url=MINI_APP_URL))
+        btn(_t(lang, "btn_open_mini"), style="primary", web_app=WebAppInfo(url=MINI_APP_URL))
     )
     kb.row(
-        btn("⚙️ " + _localize(lang, "Настройки", "Settings"),
-            style="success", callback_data="menu:settings"),
-        btn("📖 " + _localize(lang, "Команды", "Commands"),
-            style=None, callback_data="menu:help"),
+        btn(_t(lang, "btn_settings"), style="success", callback_data="menu:settings"),
+        btn(_t(lang, "btn_commands"), style=None, callback_data="menu:help"),
     )
     kb.row(
-        btn("💎 " + _localize(lang, "Донат", "Donate"),
-            style=None, url=DONATE_URL),
-        btn("🔗 " + _localize(lang, "GitHub", "GitHub"),
-            style=None, url=GITHUB_URL),
+        btn(_t(lang, "btn_donate"), style=None, url=DONATE_URL),
+        btn(_t(lang, "btn_github"), style=None, url=GITHUB_URL),
     )
     kb.row(
-        btn("❌ " + _localize(lang, "Закрыть", "Close"),
-            style="danger", callback_data="menu:close")
+        btn(_t(lang, "btn_close"), style="danger", callback_data="menu:close")
     )
     return kb
 
 
-def build_start_keyboard(platform: str, chat_id: int, user_id: int) -> InlineKeyboardMarkup:
-    cfg = get_user_config(platform, chat_id, user_id)
-    lang = cfg.get("language", "ru")
+def build_start_keyboard(lang: str) -> InlineKeyboardMarkup:
     kb = InlineKeyboardMarkup()
     kb.row(
-        btn("🚀 " + _localize(lang, "Открыть Mini App", "Open Mini App"),
-            style="primary", web_app=WebAppInfo(url=MINI_APP_URL))
+        btn(_t(lang, "btn_open_mini"), style="primary", web_app=WebAppInfo(url=MINI_APP_URL))
     )
     kb.row(
-        btn("📖 " + _localize(lang, "Меню", "Menu"),
-            style="success", callback_data="menu:open"),
-        btn("⚙️ " + _localize(lang, "Настройки", "Settings"),
-            style=None, callback_data="menu:settings"),
+        btn(_t(lang, "btn_menu"), style="success", callback_data="menu:open"),
+        btn(_t(lang, "btn_settings"), style=None, callback_data="menu:settings"),
     )
     kb.row(
-        btn("💎 " + _localize(lang, "Донат", "Donate"),
-            style=None, url=DONATE_URL),
-        btn("🔗 " + _localize(lang, "GitHub", "GitHub"),
-            style=None, url=GITHUB_URL),
+        btn(_t(lang, "btn_donate"), style=None, url=DONATE_URL),
+        btn(_t(lang, "btn_github"), style=None, url=GITHUB_URL),
     )
     return kb
 
@@ -2171,15 +2562,11 @@ async def _edit_or_send(call: telebot.types.CallbackQuery, text: str, kb: Inline
         logger.warning(f"edit_message_text fail: {e}")
 
 
-MUTEX_SEP_STREAM_RU = "«Разбивка» и «Стриминг» взаимно исключаемы. Сначала отключите вторую настройку."
-MUTEX_SEP_STREAM_EN = "«Split» and «Streaming» are mutually exclusive. Disable the other first."
-
-
 @tg_bot.callback_query_handler(func=lambda call: call.data.startswith("cfg:"))
 async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
     owner = config_msg_owners.get(call.message.message_id)
     if owner is not None and owner != call.from_user.id:
-        await tg_bot.answer_callback_query(call.id, "это не твои настройки", show_alert=False)
+        await tg_bot.answer_callback_query(call.id, "🚫", show_alert=False)
         return
 
     chat_id = call.message.chat.id
@@ -2188,19 +2575,19 @@ async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
     lang = cfg.get("language", "ru")
     parts = call.data.split(":")
     action = parts[1] if len(parts) > 1 else ""
-    toast = _localize(lang, "Обновлено", "Updated")
+    toast = _t(lang, "cfg_updated")
 
     if action == "model_set":
         value = parts[2] if len(parts) > 2 else "auto"
         if value == "auto":
             cfg["model"] = None
-            toast = _localize(lang, "Модель: авто", "Model: auto")
+            toast = _t(lang, "cfg_model_auto")
         else:
             try:
                 idx = int(value)
                 if 0 <= idx < len(MODEL_LIST):
                     cfg["model"] = MODEL_LIST[idx]
-                    toast = f"Модель: {MODEL_DISPLAY.get(MODEL_LIST[idx], MODEL_LIST[idx])}"
+                    toast = _t(lang, "cfg_model_set", MODEL_DISPLAY.get(MODEL_LIST[idx], MODEL_LIST[idx]))
             except ValueError:
                 pass
         await _edit_or_send(call, _model_picker_text("tg", chat_id, user_id),
@@ -2221,7 +2608,7 @@ async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
         return
 
     if action == "lang":
-        await _edit_or_send(call, "🌐 <b>Язык / Language</b>", build_lang_keyboard("tg", chat_id, user_id))
+        await _edit_or_send(call, f"🌐 <b>{_t(lang, 'cfg_lang')}</b>", build_lang_keyboard("tg", chat_id, user_id))
         await tg_bot.answer_callback_query(call.id)
         return
 
@@ -2229,14 +2616,15 @@ async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
         val = parts[2] if len(parts) > 2 else "ru"
         if val in ("ru", "en"):
             cfg["language"] = val
-            toast = "Язык: русский 🇷🇺" if val == "ru" else "Language: English 🇬🇧"
+            lang = val
+            toast = _t(lang, "cfg_lang_set_ru") if val == "ru" else _t(lang, "cfg_lang_set_en")
         await _edit_or_send(call, _config_text("tg", chat_id, user_id),
                             build_main_config_keyboard("tg", chat_id, user_id))
         await tg_bot.answer_callback_query(call.id, toast)
         return
 
     if action == "theme":
-        await _edit_or_send(call, "🌓 <b>Тема / Theme</b>", build_theme_keyboard("tg", chat_id, user_id))
+        await _edit_or_send(call, f"🌓 <b>{_t(lang, 'cfg_theme')}</b>", build_theme_keyboard("tg", chat_id, user_id))
         await tg_bot.answer_callback_query(call.id)
         return
 
@@ -2244,14 +2632,15 @@ async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
         val = parts[2] if len(parts) > 2 else "dark"
         if val in ("dark", "light"):
             cfg["theme"] = val
-            toast = "Тема: тёмная 🌑" if val == "dark" else "Тема: светлая ☀️"
+            toast = _t(lang, "cfg_theme_dark") if val == "dark" else _t(lang, "cfg_theme_light")
         await _edit_or_send(call, _config_text("tg", chat_id, user_id),
                             build_main_config_keyboard("tg", chat_id, user_id))
         await tg_bot.answer_callback_query(call.id, toast)
         return
 
     if action == "temp":
-        await _edit_or_send(call, "🎛 <b>Температура / Temperature</b>", build_temp_keyboard("tg", chat_id, user_id))
+        await _edit_or_send(call, f"🎛 <b>{_t(lang, 'cfg_temp_short')}</b>",
+                            build_temp_keyboard("tg", chat_id, user_id))
         await tg_bot.answer_callback_query(call.id)
         return
 
@@ -2259,7 +2648,7 @@ async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
         try:
             val = max(0.0, min(2.0, float(parts[2])))
             cfg["temperature"] = val
-            toast = f"Температура: {val}"
+            toast = _t(lang, "cfg_temp", val)
         except (ValueError, IndexError):
             pass
         await _edit_or_send(call, _config_text("tg", chat_id, user_id),
@@ -2268,21 +2657,14 @@ async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
         return
 
     if action == "prompt":
-        # Запрашиваем промпт через ForceReply
-        prompt_waiting[user_id] = call.message.message_id
         try:
-            ask_text = _localize(
-                lang,
-                "Отправьте новый кастомный промпт одним сообщением (ответом на это). "
-                "Чтобы отменить — ответьте `отмена`.",
-                "Send the new custom prompt as a single reply to this message. "
-                "To cancel — reply `cancel`.",
-            )
-            await tg_bot.send_message(
-                chat_id, ask_text,
+            sent = await tg_bot.send_message(
+                chat_id, _t(lang, "cfg_edit_prompt_ask"),
                 parse_mode='HTML',
                 reply_markup=ForceReply(selective=True),
+                reply_to_message_id=call.message.message_id,
             )
+            prompt_waiting[user_id] = sent.message_id
         except Exception as e:
             logger.warning(f"prompt ask fail: {e}")
         await tg_bot.answer_callback_query(call.id)
@@ -2297,25 +2679,23 @@ async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
                 await tg_bot.delete_message(chat_id, trig_id)
             except Exception:
                 pass
-        await tg_bot.answer_callback_query(call.id, _localize(lang, "Готово", "Done"))
+        await tg_bot.answer_callback_query(call.id, _t(lang, "cfg_done"))
         asyncio.create_task(play_apply_animation(chat_id, call.message.message_id))
         return
 
     if action == "separate":
         new_val = not cfg.get("separate_enabled", True)
         if new_val and cfg.get("streaming_enabled", False):
-            mutex_text = MUTEX_SEP_STREAM_RU if lang == "ru" else MUTEX_SEP_STREAM_EN
-            await tg_bot.answer_callback_query(call.id, mutex_text, show_alert=False)
+            await tg_bot.answer_callback_query(call.id, _t(lang, "cfg_mutex"), show_alert=False)
             return
         cfg["separate_enabled"] = new_val
     elif action == "streaming":
         if not premium_functions_enabled:
-            await tg_bot.answer_callback_query(call.id, "расширенные функции отключены", show_alert=False)
+            await tg_bot.answer_callback_query(call.id, _t(lang, "cfg_premium_off"), show_alert=False)
             return
         new_val = not cfg.get("streaming_enabled", False)
         if new_val and cfg.get("separate_enabled", True):
-            mutex_text = MUTEX_SEP_STREAM_RU if lang == "ru" else MUTEX_SEP_STREAM_EN
-            await tg_bot.answer_callback_query(call.id, mutex_text, show_alert=False)
+            await tg_bot.answer_callback_query(call.id, _t(lang, "cfg_mutex"), show_alert=False)
             return
         cfg["streaming_enabled"] = new_val
     elif action == "stickers":
@@ -2326,7 +2706,7 @@ async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
         cfg["random_messages_enabled"] = not cfg.get("random_messages_enabled", True)
     elif action == "reset_prompt":
         cfg["custom_prompt"] = None
-        toast = _localize(lang, "Промпт сброшен", "Prompt reset")
+        toast = _t(lang, "cfg_prompt_reset")
     elif action == "reset_memory":
         chat_key = f"tg_{chat_id}"
         if chat_key in long_term_memory:
@@ -2336,7 +2716,7 @@ async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
         chat_media_history[chat_key].clear()
         last_random_reply.pop(chat_key, None)
         last_old_reply.pop(chat_key, None)
-        toast = _localize(lang, "Память сброшена", "Memory reset")
+        toast = _t(lang, "cfg_memory_reset")
 
     await _edit_or_send(call, _config_text("tg", chat_id, user_id),
                         build_main_config_keyboard("tg", chat_id, user_id))
@@ -2354,10 +2734,13 @@ async def handle_menu_callback(call: telebot.types.CallbackQuery) -> None:
     lang = cfg.get("language", "ru")
 
     if action == "close":
-        try:
-            await tg_bot.delete_message(chat_id, call.message.message_id)
-        except Exception:
-            pass
+        gif_id = menu_gif_msgs.pop(chat_id, None)
+        for mid in (gif_id, call.message.message_id):
+            if mid:
+                try:
+                    await tg_bot.delete_message(chat_id, mid)
+                except Exception:
+                    pass
         await tg_bot.answer_callback_query(call.id)
         return
 
@@ -2377,21 +2760,20 @@ async def handle_menu_callback(call: telebot.types.CallbackQuery) -> None:
 
     if action == "help":
         await tg_bot.answer_callback_query(call.id)
-        # Заменяем сообщение на rich help, чтобы форматирование таблицы/H1 сохранилось
-        edited = await edit_rich_message(chat_id, call.message.message_id, HELP_TEXT)
+        help_text = _t(lang, "help_body", MINI_APP_URL, GITHUB_URL)
+        edited = await edit_rich_message(chat_id, call.message.message_id, help_text)
         if not edited:
-            # fallback: удаляем и отправляем заново
             try:
                 await tg_bot.delete_message(chat_id, call.message.message_id)
             except Exception:
                 pass
-            await send_formatted(chat_id, HELP_TEXT)
+            await send_formatted(chat_id, help_text)
         return
 
     if action == "open":
         await tg_bot.answer_callback_query(call.id)
-        menu_text = _build_menu_text("tg", chat_id, user_id)
-        kb = build_menu_keyboard("tg", chat_id, user_id)
+        menu_text = _build_menu_text(lang)
+        kb = build_menu_keyboard(lang)
         edited = await edit_rich_message(chat_id, call.message.message_id, menu_text, reply_markup=kb)
         if not edited:
             try:
@@ -2404,50 +2786,29 @@ async def handle_menu_callback(call: telebot.types.CallbackQuery) -> None:
 # ============================================================
 # TELEGRAM: HELP / MENU / START / DONATE
 # ============================================================
-HELP_TEXT = (
-    "# Кульш — команды\n\n"
-    "**Общие**\n"
-    "- `/start` — приветствие\n"
-    "- `/menu` — интерактивное меню\n"
-    "- `/help` — эта справка\n"
-    "- `/donate` — поддержка проекта\n"
-    "- `/donate_stars <N>` — донат через Telegram Stars\n"
-    "- `/credits` — баланс кредитов\n\n"
-    "**Настройки**\n"
-    "- `кульш конфиг` / `кульш настройки` — панель настроек\n\n"
-    "**Утилиты**\n"
-    "- `кульш аватарка` — описать аватарку собеседника\n"
-    "- `кульш вспомни медиа [N]` — вспомнить последние N медиа\n"
-    "- `кульш логи` — логи сервера (админам)\n\n"
-    "**Развлечения**\n"
-    "- `кульш psl` — оценка внешности (looksmaxxing)\n"
-    "- `кульш psl совет` — оценка с рекомендациями\n"
-    "- `кульш battle` — баттл двух фото (одним альбомом)\n"
-    "- `кульш донаты` — топ донатеров\n\n"
-    "**Инструменты (в личных сообщениях)**\n"
-    "Отправьте zip-архив или текстовый файл — бот обработает и вернёт результат.\n\n"
-    f"Mini App: {MINI_APP_URL}\n"
-    f"GitHub: {GITHUB_URL}"
-)
-
-
 async def _send_menu_gif(chat_id: int, reply_to: int | None, path: str, fallback_url: str) -> int | None:
-    try:
-        if os.path.exists(path):
-            with open(path, 'rb') as gif:
+    sent = None
+    if os.path.exists(path):
+        try:
+            with open(path, 'rb') as gif_file:
+                inp = InputFile(gif_file, file_name=os.path.basename(path))
                 sent = await tg_bot.send_animation(
-                    chat_id, InputFile(gif),
+                    chat_id, inp,
                     reply_to_message_id=reply_to,
                 )
-        else:
+        except Exception as e:
+            logger.warning(f"send local gif failed ({path}): {e}")
+            sent = None
+    if sent is None:
+        try:
             sent = await tg_bot.send_animation(
                 chat_id, fallback_url,
                 reply_to_message_id=reply_to,
             )
-        return sent.message_id
-    except Exception as e:
-        logger.warning(f"send menu gif failed ({path}): {e}")
-        return None
+        except Exception as e:
+            logger.warning(f"send fallback gif failed: {e}")
+            return None
+    return sent.message_id
 
 
 @tg_bot.message_handler(commands=['start'])
@@ -2460,13 +2821,13 @@ async def handle_start(message: telebot.types.Message) -> None:
                 if stars <= 0:
                     raise ValueError
             except (ValueError, IndexError):
-                await reply_tg_html(message, "Неверное количество звёзд.")
+                await reply_tg_html(message, "❌ Неверное количество звёзд.")
                 return
             pending_donations[message.chat.id] = stars
-            prices = [telebot.types.LabeledPrice(label="Поддержать Кульша", amount=stars)]
+            prices = [telebot.types.LabeledPrice(label="💎 Поддержать Кульша", amount=stars)]
             await tg_bot.send_invoice(
-                chat_id=message.chat.id, title="Донат Кульшу",
-                description=f"Поддержка разработки на {stars} ⭐",
+                chat_id=message.chat.id, title="💎 Донат Кульшу",
+                description=f"💖 Поддержка разработки на {stars} ⭐",
                 invoice_payload=f"donate_{stars}_stars", provider_token="",
                 currency="XTR", prices=prices, start_parameter="donate",
             )
@@ -2476,15 +2837,19 @@ async def handle_start(message: telebot.types.Message) -> None:
         return
     chat_id = message.chat.id
     user_id = message.from_user.id
+    cfg = get_user_config("tg", chat_id, user_id)
+    lang = cfg.get("language", "ru")
 
     gif_msg_id = await _send_menu_gif(
         chat_id, message.message_id,
         path=KULSH_GIF_PATH,
         fallback_url=random.choice(GIF_POOL),
     )
+    if gif_msg_id:
+        start_gif_msgs[chat_id] = gif_msg_id
 
-    start_text = _build_start_text("tg", chat_id, user_id)
-    kb = build_start_keyboard("tg", chat_id, user_id)
+    start_text = _build_start_text(lang)
+    kb = build_start_keyboard(lang)
     reply_to = gif_msg_id if gif_msg_id else message.message_id
     await send_formatted(chat_id, start_text, reply_to=reply_to, reply_markup=kb)
 
@@ -2505,41 +2870,59 @@ async def handle_menu(message: telebot.types.Message) -> None:
         path=gif_path,
         fallback_url=random.choice(GIF_POOL),
     )
+    if gif_msg_id:
+        menu_gif_msgs[chat_id] = gif_msg_id
 
-    menu_text = _build_menu_text("tg", chat_id, user_id)
-    kb = build_menu_keyboard("tg", chat_id, user_id)
+    menu_text = _build_menu_text(lang)
+    kb = build_menu_keyboard(lang)
     reply_to = gif_msg_id if gif_msg_id else message.message_id
     await send_formatted(chat_id, menu_text, reply_to=reply_to, reply_markup=kb)
 
 
 @tg_bot.message_handler(commands=['help'])
 async def handle_help(message: telebot.types.Message) -> None:
+    if message.from_user is None:
+        return
+    cfg = get_user_config("tg", message.chat.id, message.from_user.id)
+    lang = cfg.get("language", "ru")
+    help_text = _t(lang, "help_body", MINI_APP_URL, GITHUB_URL)
     try:
-        await send_formatted(
-            message.chat.id, HELP_TEXT,
-            reply_to=message.message_id,
-        )
+        await send_formatted(message.chat.id, help_text, reply_to=message.message_id)
     except Exception:
         await tg_bot.send_message(
-            message.chat.id, re.sub(r'<[^>]+>', '', HELP_TEXT),
+            message.chat.id, re.sub(r'<[^>]+>', '', help_text),
             reply_to_message_id=message.message_id,
         )
 
 
 @tg_bot.message_handler(commands=['donate'])
 async def handle_donate(message: telebot.types.Message) -> None:
-    text = (
-        "# Поддержать Кульша\n\n"
-        "Донаты идут на серверы, домены и дальнейшую разработку проекта.\n\n"
-        "**Способы:**\n"
-        f"- Онлайн-донат: {DONATE_URL}\n"
-        "- Telegram Stars: `/donate_stars <количество>`\n\n"
-        f"GitHub: {GITHUB_URL}"
-    )
+    if message.from_user is None:
+        return
+    cfg = get_user_config("tg", message.chat.id, message.from_user.id)
+    lang = cfg.get("language", "ru")
+    if lang == "ru":
+        text = (
+            f"# {_t('ru', 'donate_title')}\n\n"
+            f"{_t('ru', 'donate_intro')}\n\n"
+            f"**{_t('ru', 'donate_methods')}**\n"
+            f"- 💳 {_t('ru', 'donate_online')}: {DONATE_URL}\n"
+            f"- {_t('ru', 'donate_stars_hint')}\n\n"
+            f"🔗 GitHub: {GITHUB_URL}"
+        )
+    else:
+        text = (
+            f"# {_t('en', 'donate_title')}\n\n"
+            f"{_t('en', 'donate_intro')}\n\n"
+            f"**{_t('en', 'donate_methods')}**\n"
+            f"- 💳 {_t('en', 'donate_online')}: {DONATE_URL}\n"
+            f"- {_t('en', 'donate_stars_hint')}\n\n"
+            f"🔗 GitHub: {GITHUB_URL}"
+        )
     try:
         await send_formatted(message.chat.id, text, reply_to=message.message_id)
     except Exception:
-        await reply_tg_html(message, f"Поддержать Кульша: {DONATE_URL}")
+        await reply_tg_html(message, f"💎 {DONATE_URL}")
 
 
 @tg_bot.message_handler(commands=['donate_stars'])
@@ -2547,29 +2930,26 @@ async def handle_donate_stars(message: telebot.types.Message) -> None:
     if message.from_user is None:
         return
     chat_id = message.chat.id
+    cfg = get_user_config("tg", chat_id, message.from_user.id)
+    lang = cfg.get("language", "ru")
     args = telebot.util.extract_arguments(message.text or "").strip()
     if not args:
-        await reply_tg_html(
-            message,
-            "Укажите количество звёзд: <code>/donate_stars 100</code>\n"
-            "Минимум — 1 звезда.",
-        )
+        await reply_tg_html(message, f"⭐ {_t(lang, 'donate_stars_need')}")
         return
     try:
         stars = int(args.split()[0])
         if stars <= 0:
             raise ValueError
     except (ValueError, IndexError):
-        await reply_tg_html(message, "Неверное количество звёзд. Пример: <code>/donate_stars 100</code>")
+        await reply_tg_html(message, f"❌ {_t(lang, 'donate_stars_bad')}")
         return
-
     pending_donations[chat_id] = stars
-    prices = [telebot.types.LabeledPrice(label="Поддержать Кульша", amount=stars)]
+    prices = [telebot.types.LabeledPrice(label="💎 Поддержать Кульша", amount=stars)]
     try:
         await tg_bot.send_invoice(
             chat_id=chat_id,
-            title="Донат Кульшу",
-            description=f"Поддержка разработки на {stars} ⭐",
+            title="💎 Донат Кульшу",
+            description=f"💖 Поддержка разработки на {stars} ⭐",
             invoice_payload=f"donate_{stars}_stars",
             provider_token="",
             currency="XTR",
@@ -2579,26 +2959,28 @@ async def handle_donate_stars(message: telebot.types.Message) -> None:
         )
     except Exception as e:
         logger.error(f"donate_stars invoice fail: {e}")
-        await reply_tg_html(message, f"Не удалось выставить счёт: {e}")
+        await reply_tg_html(message, _t(lang, "donate_stars_invoice_fail", str(e)))
 
 
 @tg_bot.message_handler(commands=['credits'])
 async def handle_credits(message: telebot.types.Message) -> None:
     if message.from_user is None:
         return
+    cfg = get_user_config("tg", message.chat.id, message.from_user.id)
+    lang = cfg.get("language", "ru")
     creds = get_user_credits("tg", message.from_user.id)
-    await reply_tg_html(message, f"Кредиты: {creds}/{DAILY_CREDITS}")
+    await reply_tg_html(message, _t(lang, "credits_balance", creds, DAILY_CREDITS))
 
 
 @tg_bot.message_handler(commands=['togglepremiumfunctionsadmin'])
 async def handle_toggle_premium(message: telebot.types.Message) -> None:
     global premium_functions_enabled
     if message.from_user is None or message.from_user.id != PREMIUM_ADMIN_ID:
-        await reply_tg_html(message, "Нет доступа.")
+        await reply_tg_html(message, "🚫 Нет доступа.")
         return
     premium_functions_enabled = not premium_functions_enabled
-    state = "включены" if premium_functions_enabled else "выключены"
-    await reply_tg_html(message, f"Расширенные функции: {state}")
+    state = "✅ включены" if premium_functions_enabled else "❌ выключены"
+    await reply_tg_html(message, f"⚙️ Расширенные функции: {state}")
 
 
 @tg_bot.pre_checkout_query_handler(func=lambda query: True)
@@ -2617,10 +2999,12 @@ async def handle_successful_payment(message: telebot.types.Message) -> None:
     except Exception:
         stars = 0
     name = message.from_user.full_name or message.from_user.username or str(user_id)
-    logger.info(f"{user_id} задонатил {stars} звёзд")
+    logger.info(f"🎉 {user_id} задонатил {stars} звёзд")
     add_donation('tg', user_id, stars, name)
     await send_donation_alert('tg', name, stars)
-    await reply_tg_html(message, f"Спасибо за поддержку — {stars} ⭐")
+    cfg = get_user_config("tg", message.chat.id, user_id)
+    lang = cfg.get("language", "ru")
+    await reply_tg_html(message, _t(lang, "donate_thanks", stars))
 
 # ============================================================
 # TG CONFIG / AVATAR / RECALL
@@ -2654,13 +3038,15 @@ async def tg_handle_config(message: telebot.types.Message) -> None:
 
 
 async def tg_handle_avatar(message: telebot.types.Message, chat_id: int, user_id: int) -> None:
-    raw = await get_avatar_description_tg(message, chat_id, user_id)
+    cfg = get_user_config("tg", chat_id, user_id)
+    lang = cfg.get("language", "ru")
+    raw = await get_avatar_description_tg(message, chat_id, user_id, lang=lang)
     if not raw:
-        await reply_tg_html(message, "не удалось получить аватарку")
+        await reply_tg_html(message, _t(lang, "avatar_fail"))
         return
     segments = clean_extra_text(raw)
     if not segments:
-        await reply_tg_html(message, "не удалось получить аватарку")
+        await reply_tg_html(message, _t(lang, "avatar_fail"))
         return
     for i, seg in enumerate(segments):
         if i == 0:
@@ -2670,18 +3056,20 @@ async def tg_handle_avatar(message: telebot.types.Message, chat_id: int, user_id
 
 
 async def tg_handle_recall_media(message: telebot.types.Message, chat_id: int, user_id: int, parts: list[str]) -> None:
+    cfg = get_user_config("tg", chat_id, user_id)
+    lang = cfg.get("language", "ru")
     n = 3
     for p in parts:
         if p.isdigit():
             n = min(int(p), 10)
             break
-    raw = await get_recall_media_description_tg(message, chat_id, user_id, n)
+    raw = await get_recall_media_description_tg(message, chat_id, user_id, n, lang=lang)
     if not raw:
-        await reply_tg_html(message, "ничего не найдено в памяти")
+        await reply_tg_html(message, _t(lang, "recall_fail"))
         return
     segments = clean_extra_text(raw)
     if not segments:
-        await reply_tg_html(message, "ничего не найдено в памяти")
+        await reply_tg_html(message, _t(lang, "recall_fail"))
         return
     for i, seg in enumerate(segments):
         if i == 0:
@@ -2743,6 +3131,7 @@ async def _stream_text_via_drafts(chat_id: int, text: str, is_private: bool = Tr
 # ============================================================
 async def send_tg_ai_response(message: telebot.types.Message, chat_id: int, user_id: int, answer_raw: str) -> None:
     cfg = get_user_config("tg", chat_id, user_id)
+    lang = cfg.get("language", "ru")
     separate_enabled = cfg.get("separate_enabled", True)
     streaming = cfg.get("streaming_enabled", False) and premium_functions_enabled
 
@@ -2755,7 +3144,7 @@ async def send_tg_ai_response(message: telebot.types.Message, chat_id: int, user
     if "avatar" in markers:
         markers.remove("avatar")
         try:
-            ar = await get_avatar_description_tg(message, chat_id, user_id)
+            ar = await get_avatar_description_tg(message, chat_id, user_id, lang=lang)
             if ar:
                 extra_segments.extend(clean_extra_text(ar))
         except Exception as e:
@@ -2763,7 +3152,7 @@ async def send_tg_ai_response(message: telebot.types.Message, chat_id: int, user
     if "recall_media" in markers:
         markers.remove("recall_media")
         try:
-            rr = await get_recall_media_description_tg(message, chat_id, user_id, 3)
+            rr = await get_recall_media_description_tg(message, chat_id, user_id, 3, lang=lang)
             if rr:
                 extra_segments.extend(clean_extra_text(rr))
         except Exception as e:
@@ -2838,10 +3227,10 @@ async def maybe_reply_to_old_message_tg(message: telebot.types.Message, chat_id:
     try:
         comment = await ask_ai_async(
             prompt=(f"Ты видишь старое сообщение от {old.get('display','?')}: \"{old.get('text','')}\". "
-                    f"Хочешь коротко прокомментировать? Если да — одно короткое сообщение в стиле Кульша. "
+                    f"Хочешь коротко прокомментировать? Если да — одно короткое сообщение. "
                     f"Если нет — ответь ровно 'НЕТ'."),
             system_instruction_override="Ты Кульш. Одним коротким сообщением или 'НЕТ'. Без markdown.",
-            chat_id=chat_id, user_id=user_id,
+            chat_id=chat_id, user_id=user_id, platform="tg",
         )
         if comment and comment.strip() and comment.strip().upper() != "НЕТ":
             last_old_reply[chat_key] = now
@@ -2881,7 +3270,7 @@ async def should_random_reply(platform: str, chat_id: int, user_id: int) -> bool
     return True
 
 # ============================================================
-# TOOLS (архивы/файлы/консоль)
+# TOOLS
 # ============================================================
 TEXT_EXTS = {
     "txt", "py", "json", "html", "htm", "js", "css", "cs", "cpp", "c", "h", "hpp",
@@ -2993,7 +3382,9 @@ async def tool_edit_archive(message: telebot.types.Message, user_request: str,
                             archive_bytes: bytes, filename: str) -> None:
     user_id = message.from_user.id
     chat_id = message.chat.id
-    status = await tg_bot.send_message(chat_id, "Распаковываю архив...")
+    cfg = get_user_config("tg", chat_id, user_id)
+    lang = cfg.get("language", "ru")
+    status = await tg_bot.send_message(chat_id, _t(lang, "tool_unpacking"))
     work_dir = tempfile.mkdtemp(prefix="kulsh_tools_")
     tools_sessions[chat_id] = {"dir": work_dir, "user_id": user_id}
     try:
@@ -3004,7 +3395,7 @@ async def tool_edit_archive(message: telebot.types.Message, user_request: str,
         files_display = ", ".join(files[:30])
         if len(files) > 30:
             files_display += f" ... (+{len(files) - 30})"
-        await tg_bot.edit_message_text(f"Распаковано:\n\n{files_display}",
+        await tg_bot.edit_message_text(_t(lang, "tool_unpacked", files_display),
                                        chat_id, status.message_id)
 
         contents: dict[str, str] = {}
@@ -3021,7 +3412,7 @@ async def tool_edit_archive(message: telebot.types.Message, user_request: str,
         if len(files_context) > 60000:
             files_context = files_context[:60000] + "\n...[обрезано]"
 
-        await tg_bot.edit_message_text(f"Анализирую {len(contents)} файл(ов)...",
+        await tg_bot.edit_message_text(_t(lang, "tool_analyzing", len(contents)),
                                        chat_id, status.message_id)
 
         prompt = (
@@ -3043,18 +3434,18 @@ async def tool_edit_archive(message: telebot.types.Message, user_request: str,
         try:
             data = json.loads(clean_json_text(raw))
         except Exception as e:
-            await tg_bot.edit_message_text(f"Не удалось распарсить ответ ИИ: {e}",
+            await tg_bot.edit_message_text(_t(lang, "tool_parse_fail", str(e)),
                                            chat_id, status.message_id)
             return
 
         summary = data.get("summary", "готово")
         new_files = data.get("files", {})
         if not isinstance(new_files, dict) or not new_files:
-            await tg_bot.edit_message_text(f"ИИ не предложил изменений. {summary}",
+            await tg_bot.edit_message_text(_t(lang, "tool_no_changes", summary),
                                            chat_id, status.message_id)
             return
 
-        await tg_bot.edit_message_text(f"Редактирую {len(new_files)} файл(ов)...",
+        await tg_bot.edit_message_text(_t(lang, "tool_editing", len(new_files)),
                                        chat_id, status.message_id)
         for rel, new_content in new_files.items():
             full = _safe_join(work_dir, rel)
@@ -3064,23 +3455,23 @@ async def tool_edit_archive(message: telebot.types.Message, user_request: str,
             with open(full, 'w', encoding='utf-8') as f:
                 f.write(new_content)
 
-        await tg_bot.edit_message_text("Собираю архив обратно...",
+        await tg_bot.edit_message_text(_t(lang, "tool_repacking"),
                                        chat_id, status.message_id)
         out_zip = os.path.join(work_dir, f"edited_{filename or 'archive.zip'}")
         await create_archive(work_dir, out_zip)
 
-        await tg_bot.edit_message_text("Отправляю готовый архив...",
+        await tg_bot.edit_message_text(_t(lang, "tool_sending"),
                                        chat_id, status.message_id)
         with open(out_zip, 'rb') as f:
             await tg_bot.send_document(
                 chat_id, InputFile(f, file_name=os.path.basename(out_zip)),
-                caption=summary,
+                caption=f"🍷🗿 {summary}",
             )
-        await tg_bot.edit_message_text("Готово", chat_id, status.message_id)
+        await tg_bot.edit_message_text(_t(lang, "tool_done"), chat_id, status.message_id)
     except Exception as e:
         logger.error(f"tool_edit_archive: {e}")
         try:
-            await tg_bot.edit_message_text(f"Ошибка: {e}", chat_id, status.message_id)
+            await tg_bot.edit_message_text(_t(lang, "tool_error", str(e)), chat_id, status.message_id)
         except Exception:
             pass
     finally:
@@ -3096,10 +3487,12 @@ async def tool_review_file(message: telebot.types.Message, user_request: str,
                            file_bytes: bytes, filename: str) -> None:
     user_id = message.from_user.id
     chat_id = message.chat.id
+    cfg = get_user_config("tg", chat_id, user_id)
+    lang = cfg.get("language", "ru")
     try:
         text = file_bytes.decode('utf-8', errors='replace')
     except Exception:
-        await reply_tg_html(message, "не удалось прочитать файл как текст")
+        await reply_tg_html(message, _t(lang, "tool_download_fail", "decode error"))
         return
     if len(text) > MAX_FILE_SIZE:
         text = text[:MAX_FILE_SIZE] + "\n...[обрезано]"
@@ -3120,6 +3513,8 @@ async def handle_tg_media(message: telebot.types.Message) -> None:
         return
     chat_id = message.chat.id
     user_id = message.from_user.id
+    cfg = get_user_config("tg", chat_id, user_id)
+    lang = cfg.get("language", "ru")
     is_dm = message.chat.type == 'private'
     caption = message.caption or ""
     cl = caption.lower()
@@ -3135,24 +3530,24 @@ async def handle_tg_media(message: telebot.types.Message) -> None:
     if message.photo:
         file_id = message.photo[-1].file_id
         media_type = "photo"
-        media_tag = "[фото]"
+        media_tag = "[фото]" if lang == "ru" else "[photo]"
     elif message.video:
         file_id = message.video.file_id
         media_type = "video"
-        media_tag = "[видео]"
+        media_tag = "[видео]" if lang == "ru" else "[video]"
     elif message.animation:
         file_id = message.animation.file_id
         media_type = "animation"
-        media_tag = "[гифка]"
+        media_tag = "[гифка]" if lang == "ru" else "[gif]"
     elif message.document:
         file_id = message.document.file_id
         media_type = "document"
         file_name = message.document.file_name or "file"
-        media_tag = f"[док: {file_name}]"
+        media_tag = f"[док: {file_name}]" if lang == "ru" else f"[doc: {file_name}]"
     elif message.sticker:
         file_id = message.sticker.file_id
         media_type = "sticker"
-        media_tag = "[стикер]"
+        media_tag = "[стикер]" if lang == "ru" else "[sticker]"
 
     if file_id and media_tag:
         add_media_history(chat_key, None, media_type, display_name, file_id=file_id, caption=caption)
@@ -3168,7 +3563,7 @@ async def handle_tg_media(message: telebot.types.Message) -> None:
             img_bytes = await get_tg_file_bytes(tg_bot, message.photo[-1].file_id)
             battle_photos[mgid].append(img_bytes)
         else:
-            await reply_tg_html(message, "Для баттла нужно два фото. Отправьте их одним альбомом.")
+            await reply_tg_html(message, _t(lang, "battle_need_photos"))
         return
 
     if message.media_group_id and message.media_group_id in battle_photos and message.photo:
@@ -3186,35 +3581,33 @@ async def handle_tg_media(message: telebot.types.Message) -> None:
     )
     if is_looksmaxxing and message.photo:
         user_looksmaxxing_state[chat_id] = False
-        status = await tg_bot.send_message(chat_id, "Анализирую внешность...")
+        status = await tg_bot.send_message(chat_id, _t(lang, "psl_analyzing"))
         try:
             img_bytes = await get_tg_file_bytes(tg_bot, message.photo[-1].file_id)
             include_advice = ("совет" in cl or "advice" in cl or
                               (message.reply_to_message and message.reply_to_message.text and
                                ("совет" in message.reply_to_message.text.lower()
                                 or "advice" in message.reply_to_message.text.lower())))
-            cfg = get_user_config("tg", chat_id, user_id)
-            lang = cfg.get("language", "ru")
             theme = cfg.get("theme", "dark")
             ai_data = await get_looksmaxxing_data(img_bytes, include_advice, lang=lang)
             if "error" in ai_data:
-                await tg_bot.edit_message_text(f"Ошибка: {ai_data['error']}", chat_id, status.message_id)
+                await tg_bot.edit_message_text(f"❌ {ai_data['error']}", chat_id, status.message_id)
                 return
             infographic = await create_infographic(img_bytes, ai_data, theme=theme, lang=lang)
             report_text = (
-                f"<b>РЕЗУЛЬТАТЫ LOOKSMAXXING</b>\n\n"
-                f"Пол: {ai_data.get('gender', '?')}\n"
-                f"PSL: <code>{ai_data.get('psl', '?')}/8.0</code>\n"
-                f"Tier: <code>{ai_data.get('tier', '?')}</code>\n"
+                f"<b>{_t(lang, 'psl_title')}</b>\n\n"
+                f"{_t(lang, 'psl_gender')}: {ai_data.get('gender', '?')}\n"
+                f"{_t(lang, 'psl_score')}: <code>{ai_data.get('psl', '?')}/8.0</code>\n"
+                f"{_t(lang, 'psl_tier')}: <code>{ai_data.get('tier', '?')}</code>\n"
             )
             if ai_data.get("potential"):
-                report_text += f"Потенциал: <code>{ai_data['potential']}</code>\n"
-            report_text += f"\n<b>Анализ:</b>\n{html.escape(ai_data.get('summary', ''))}"
+                report_text += f"{_t(lang, 'psl_potential')}: <code>{ai_data['potential']}</code>\n"
+            report_text += f"\n<b>{_t(lang, 'psl_analysis')}:</b>\n{html.escape(ai_data.get('summary', ''))}"
             if include_advice and ai_data.get("advice"):
-                report_text += f"\n\n<b>Рекомендации:</b>\n{html.escape(ai_data['advice'])}"
+                report_text += f"\n\n<b>{_t(lang, 'psl_advice')}:</b>\n{html.escape(ai_data['advice'])}"
             try:
                 await tg_bot.send_photo(chat_id, InputFile(infographic),
-                                        caption="Результаты looksmaxxing")
+                                        caption=_t(lang, "psl_report"))
             except Exception as e:
                 logger.error(f"infographic send: {e}")
             for chunk in [report_text[i:i + 3900] for i in range(0, len(report_text), 3900)]:
@@ -3228,7 +3621,7 @@ async def handle_tg_media(message: telebot.types.Message) -> None:
             add_bot_memory(chat_key, "[looksmaxxing отчёт]")
         except Exception as e:
             logger.error(f"looksmaxxing: {e}")
-            await reply_tg_html(message, f"Ошибка: {e}")
+            await reply_tg_html(message, _t(lang, "tool_error", str(e)))
         return
 
     if is_dm and message.document:
@@ -3241,17 +3634,17 @@ async def handle_tg_media(message: telebot.types.Message) -> None:
             if credits < COST_ARCHIVE_EDIT:
                 await reply_tg_html(
                     message,
-                    f"Недостаточно кредитов для редактирования архива.\n"
-                    f"Нужно {COST_ARCHIVE_EDIT}, у вас {credits}/{DAILY_CREDITS}.",
+                    _t(lang, "tool_no_credits", COST_ARCHIVE_EDIT, credits, DAILY_CREDITS),
                 )
                 return
             spend_credits("tg", user_id, COST_ARCHIVE_EDIT)
             try:
                 file_bytes = await get_tg_file_bytes(tg_bot, message.document.file_id)
             except Exception as e:
-                await reply_tg_html(message, f"не удалось скачать файл: {e}")
+                await reply_tg_html(message, _t(lang, "tool_download_fail", str(e)))
                 return
-            await tool_edit_archive(message, caption.strip() or "отредактируй что-нибудь полезное",
+            default_req = "отредактируй что-нибудь полезное" if lang == "ru" else "edit something useful"
+            await tool_edit_archive(message, caption.strip() or default_req,
                                     file_bytes, doc_name or "archive.zip")
             return
 
@@ -3259,9 +3652,10 @@ async def handle_tg_media(message: telebot.types.Message) -> None:
             try:
                 file_bytes = await get_tg_file_bytes(tg_bot, message.document.file_id)
             except Exception as e:
-                await reply_tg_html(message, f"не удалось скачать файл: {e}")
+                await reply_tg_html(message, _t(lang, "tool_download_fail", str(e)))
                 return
-            await tool_review_file(message, caption.strip() or "что тут?", file_bytes, doc_name or "file")
+            default_req = _t(lang, "tool_review_empty")
+            await tool_review_file(message, caption.strip() or default_req, file_bytes, doc_name or "file")
             return
 
     is_reply_to_bot = (message.reply_to_message and message.reply_to_message.from_user
@@ -3277,7 +3671,7 @@ async def handle_tg_media(message: telebot.types.Message) -> None:
                 messages=memory_to_messages(get_chat_memory(chat_key)),
                 chat_id=chat_id, user_id=user_id, platform="tg",
             )
-            if answer and answer.strip() and answer.strip().upper() != "НЕТ":
+            if answer and answer.strip() and answer.strip().upper() not in ("НЕТ", "NO"):
                 last_random_reply[chat_key] = time.time()
                 await send_tg_ai_response(message, chat_id, user_id, answer)
         return
@@ -3304,7 +3698,8 @@ async def handle_tg_media(message: telebot.types.Message) -> None:
     except Exception as e:
         logger.warning(f"download media: {e}")
 
-    prompt = caption.strip() or "что на этом?"
+    default_prompt = "что на этом?" if lang == "ru" else "what's this?"
+    prompt = caption.strip() or default_prompt
     add_user_memory(chat_key, "TG", display_name, username, user_id,
                     f"{prompt} [с медиа: {media_tag}]", [media_tag or "медиа"],
                     message_id=message.message_id)
@@ -3334,74 +3729,64 @@ async def handle_tg_text(message: telebot.types.Message) -> None:
     cfg = get_user_config("tg", chat_id, user_id)
     lang = cfg.get("language", "ru")
 
-    # Ожидание кастомного промпта (ответ на ForceReply-сообщение)
     if user_id in prompt_waiting:
-        waiting_msg_id = prompt_waiting[user_id]
-        # проверяем, что это ответ на наше сообщение, либо это просто следующее сообщение от того же юзера
-        is_reply_to_ask = bool(
-            message.reply_to_message and message.reply_to_message.message_id == waiting_msg_id
-        )
-        # Также принимаем любой текст, если пользователь ещё в режиме ожидания
-        if is_reply_to_ask or True:
-            prompt_waiting.pop(user_id, None)
-            new_prompt = text.strip()
-            if new_prompt.lower() in ("отмена", "cancel", "/cancel", "отменить"):
-                cfg["custom_prompt"] = None
+        waiting_msg_id = prompt_waiting.pop(user_id, None)
+        new_prompt = text.strip()
+        if new_prompt.lower() in ("отмена", "cancel", "/cancel", "отменить"):
+            cfg["custom_prompt"] = None
+            if waiting_msg_id:
                 try:
                     await tg_bot.edit_message_text(
-                        _localize(lang, "Изменение промпта отменено.", "Prompt edit cancelled."),
+                        _t(lang, "prompt_cancelled"),
                         chat_id, waiting_msg_id,
                     )
                 except Exception:
                     pass
-            else:
-                truncated = new_prompt[:2000]
-                cfg["custom_prompt"] = truncated
+        else:
+            truncated = new_prompt[:2000]
+            cfg["custom_prompt"] = truncated
+            if waiting_msg_id:
                 try:
                     await tg_bot.edit_message_text(
-                        _localize(
-                            lang,
-                            f"Промпт сохранён ({len(truncated)} символов).",
-                            f"Prompt saved ({len(truncated)} chars).",
-                        ),
+                        _t(lang, "prompt_saved", len(truncated)),
                         chat_id, waiting_msg_id,
                     )
                 except Exception:
                     pass
-            return
+        return
 
-    if tl.startswith("кульш конфиг") or tl.startswith("кульш настройки"):
+    if tl.startswith("кульш конфиг") or tl.startswith("кульш настройки") or tl.startswith("kulsh config"):
         await tg_handle_config(message)
         return
 
-    if tl.startswith("кульш донаты"):
+    if tl.startswith("кульш донаты") or tl.startswith("kulsh donations"):
         top = get_top_donators()
         if not top:
-            await reply_tg_html(message, "Пока никто не донатил. Будь первым.\n" + DONATE_URL)
+            await reply_tg_html(message, _t(lang, "top_donators_empty", DONATE_URL))
             return
-        lines = ["# Топ донатеров\n"]
+        lines = [f"# {_t(lang, 'top_donators_title')}\n"]
         for i, (name, total) in enumerate(top, 1):
-            lines.append(f"{i}. {html.escape(name)} — {total} очков")
+            lines.append(_t(lang, "top_donators_item", i, html.escape(name), total))
         await send_formatted(chat_id, "\n".join(lines), reply_to=message.message_id)
         return
 
-    if tl.startswith("кульш аватарк") or tl.startswith("кульш аватар") or tl.strip() in ("!avatar", "! avatar"):
+    if tl.startswith("кульш аватарк") or tl.startswith("кульш аватар") or tl.startswith("kulsh avatar") or tl.strip() in ("!avatar", "! avatar"):
         await tg_handle_avatar(message, chat_id, user_id)
         return
 
-    if tl.startswith("кульш вспомни медиа") or "!recall_media" in tl:
+    if tl.startswith("кульш вспомни медиа") or tl.startswith("kulsh recall") or "!recall_media" in tl:
         await tg_handle_recall_media(message, chat_id, user_id, text.split())
         return
 
-    if tl.startswith("кульш логи"):
+    if tl.startswith("кульш логи") or tl.startswith("kulsh logs"):
         if user_id != PREMIUM_ADMIN_ID:
             try:
                 member = await tg_bot.get_chat_member(chat_id, user_id)
                 if member.status not in ('administrator', 'creator'):
-                    await reply_tg_html(message, "недостаточно прав")
+                    await reply_tg_html(message, _t(lang, "logs_no_access"))
                     return
             except Exception:
-                await reply_tg_html(message, "не удалось проверить права")
+                await reply_tg_html(message, _t(lang, "logs_cant_check"))
                 return
         try:
             tail = read_log_tail(20)
@@ -3427,18 +3812,18 @@ async def handle_tg_text(message: telebot.types.Message) -> None:
                     except Exception:
                         await tg_bot.send_message(chat_id, chunk)
         except Exception as e:
-            await reply_tg_html(message, f"Ошибка чтения логов: {e}")
+            await reply_tg_html(message, _t(lang, "logs_read_error", str(e)))
         return
 
     if is_looksmaxxing_command(text):
         user_looksmaxxing_state[chat_id] = True
         add_user_memory(chat_key, "TG", display_name, username, user_id, text, message_id=message.message_id)
-        await reply_tg_html(message, "Отправьте фото для анализа.")
+        await reply_tg_html(message, _t(lang, "psl_need_photo"))
         return
 
     if is_battle_command(text):
         add_user_memory(chat_key, "TG", display_name, username, user_id, text, message_id=message.message_id)
-        await reply_tg_html(message, "Пришлите два фото одним альбомом с командой `кульш баттл`.")
+        await reply_tg_html(message, _t(lang, "battle_need_photos"))
         return
 
     is_reply_to_bot = (message.reply_to_message and message.reply_to_message.from_user
@@ -3467,7 +3852,7 @@ async def handle_tg_text(message: telebot.types.Message) -> None:
                 messages=memory_to_messages(get_chat_memory(chat_key)),
                 chat_id=chat_id, user_id=user_id, platform="tg",
             )
-            if answer and answer.strip() and answer.strip().upper() != "НЕТ":
+            if answer and answer.strip() and answer.strip().upper() not in ("НЕТ", "NO"):
                 last_random_reply[chat_key] = time.time()
                 await send_tg_ai_response(message, chat_id, user_id, answer)
         except Exception as e:
@@ -3481,41 +3866,41 @@ async def process_battle_media_group(media_group_id: str, tg_chat_id: int, user_
         if media_group_id in battle_photos and len(battle_photos[media_group_id]) >= 2:
             break
         await asyncio.sleep(0.5)
+    cfg = get_user_config("tg", tg_chat_id, user_id)
+    lang = cfg.get("language", "ru")
     if media_group_id not in battle_photos or len(battle_photos[media_group_id]) < 2:
         battle_photos.pop(media_group_id, None)
         battle_media_groups.pop(media_group_id, None)
-        await tg_bot.send_message(tg_chat_id, "Нужно два фото для баттла.")
+        await tg_bot.send_message(tg_chat_id, _t(lang, "battle_need_photos"))
         return
     photos = battle_photos.pop(media_group_id)
     battle_media_groups.pop(media_group_id, None)
     photo1_bytes, photo2_bytes = photos[:2]
-    cfg = get_user_config("tg", tg_chat_id, user_id)
-    lang = cfg.get("language", "ru")
     theme = cfg.get("theme", "dark")
     try:
         await tg_bot.send_chat_action(tg_chat_id, 'typing')
     except Exception:
         pass
-    status = await tg_bot.send_message(tg_chat_id, "Сравниваю лица...")
+    status = await tg_bot.send_message(tg_chat_id, _t(lang, "battle_waiting"))
     ai_data = await get_battle_data(photo1_bytes, photo2_bytes, lang=lang)
     if "error" in ai_data:
-        await tg_bot.edit_message_text(f"Ошибка: {ai_data['error']}", tg_chat_id, status.message_id)
+        await tg_bot.edit_message_text(f"❌ {ai_data['error']}", tg_chat_id, status.message_id)
         return
     battle_img = await create_battle_infographic(photo1_bytes, photo2_bytes, ai_data,
                                                   theme=theme, lang=lang)
     winner_num = str(ai_data.get("winner", "1"))
-    winner_label = "Первое фото" if winner_num == "1" else "Второе фото"
+    winner_label = _t(lang, "battle_first") if winner_num == "1" else _t(lang, "battle_second")
     report_text = (
-        f"<b>РЕЗУЛЬТАТ БАТТЛА</b>\n\n"
-        f"Победитель: <b>{winner_label}</b>\n"
-        f"Причина: {html.escape(ai_data.get('reason', ''))}\n\n"
-        f"Фото 1: PSL {ai_data.get('photo1', {}).get('psl', '?')} | "
+        f"<b>{_t(lang, 'battle_title')}</b>\n\n"
+        f"{_t(lang, 'battle_winner')}: <b>{winner_label}</b>\n"
+        f"{_t(lang, 'battle_reason')}: {html.escape(ai_data.get('reason', ''))}\n\n"
+        f"{_t(lang, 'battle_photo1')}: PSL {ai_data.get('photo1', {}).get('psl', '?')} | "
         f"Tier {html.escape(ai_data.get('photo1', {}).get('tier', '?'))}\n"
-        f"Фото 2: PSL {ai_data.get('photo2', {}).get('psl', '?')} | "
+        f"{_t(lang, 'battle_photo2')}: PSL {ai_data.get('photo2', {}).get('psl', '?')} | "
         f"Tier {html.escape(ai_data.get('photo2', {}).get('tier', '?'))}\n"
     )
     try:
-        await tg_bot.send_photo(tg_chat_id, InputFile(battle_img), caption="Результат баттла")
+        await tg_bot.send_photo(tg_chat_id, InputFile(battle_img), caption=_t(lang, "battle_caption"))
     except Exception as e:
         logger.error(f"battle infra: {e}")
     try:
@@ -3672,6 +4057,7 @@ async def perform_safe_git_update(repo_path: str) -> tuple[str, str]:
 # ============================================================
 async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: int, answer_raw: str) -> None:
     cfg = get_user_config("ds", chat_id, user_id)
+    lang = cfg.get("language", "ru")
     separate_enabled = cfg.get("separate_enabled", True)
     clean_segments, markers = process_ai_response(answer_raw, separate_enabled=separate_enabled)
 
@@ -3679,7 +4065,7 @@ async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: i
     if "avatar" in markers:
         markers.remove("avatar")
         try:
-            ar = await get_avatar_description_ds(message, chat_id, user_id)
+            ar = await get_avatar_description_ds(message, chat_id, user_id, lang=lang)
             if ar:
                 extra_segments.extend(clean_extra_text(ar))
         except Exception as e:
@@ -3689,9 +4075,9 @@ async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: i
         history = list(chat_media_history.get(f"ds_{chat_id}", []))
         if history:
             last = history[-3:]
-            lines = [f"- {it.get('type', 'media')} от {it.get('sender', '?')}: {(it.get('caption') or '')[:100]}"
+            lines = [f"- {it.get('type', 'media')} {it.get('sender', '?')}: {(it.get('caption') or '')[:100]}"
                      for it in last]
-            extra_segments.append("Недавние медиа:\n" + "\n".join(lines))
+            extra_segments.append("📎 " + "\n".join(lines))
 
     all_segments = clean_segments + extra_segments
     if not all_segments:
@@ -3725,62 +4111,93 @@ async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: i
                 logger.warning(f"ds utility {m}: {e}")
 
 # ============================================================
-# DISCORD CONFIG (текстом)
+# DISCORD CONFIG
 # ============================================================
 def _ds_config_embed(chat_id: int, user_id: int) -> discord.Embed:
     cfg = get_user_config("ds", chat_id, user_id)
     lang = cfg.get("language", "ru")
-    series = "вкл" if cfg.get("series_reminder_enabled", True) else "выкл"
-    stickers = "вкл" if cfg.get("stickers_enabled", True) else "выкл"
-    sep = "вкл" if cfg.get("separate_enabled", True) else "выкл"
-    autoreply = "вкл" if cfg.get("random_reply_enabled", False) else "выкл"
-    random_msgs = "вкл" if cfg.get("random_messages_enabled", True) else "выкл"
-    prompt = cfg.get("custom_prompt") or "стандартный"
+    series = _t(lang, "on") if cfg.get("series_reminder_enabled", True) else _t(lang, "off")
+    stickers = _t(lang, "on") if cfg.get("stickers_enabled", True) else _t(lang, "off")
+    sep = _t(lang, "on") if cfg.get("separate_enabled", True) else _t(lang, "off")
+    autoreply = _t(lang, "on") if cfg.get("random_reply_enabled", False) else _t(lang, "off")
+    random_msgs = _t(lang, "on") if cfg.get("random_messages_enabled", True) else _t(lang, "off")
+    prompt = cfg.get("custom_prompt") or ("стандартный" if lang == "ru" else "default")
     if len(prompt) > 900:
         prompt = prompt[:900] + "..."
-    theme_disp = "тёмная" if cfg.get("theme", "dark") == "dark" else "светлая"
-    lang_disp = "Русский" if lang == "ru" else "English"
+    theme_disp = _t(lang, "dark") if cfg.get("theme", "dark") == "dark" else _t(lang, "light")
+    lang_disp = _t(lang, "russian") if lang == "ru" else _t(lang, "english")
 
-    embed = discord.Embed(
-        title="Настройки Кульша",
-        color=0x10B981,
-        description="Текущие параметры для этого канала. Изменение — текстом через "
-                    "`кульш конфиг <параметр> <значение>`.",
-    )
-    embed.add_field(name="Язык", value=lang_disp, inline=True)
-    embed.add_field(name="Тема", value=theme_disp, inline=True)
-    embed.add_field(name="Модель", value=model_display_name(cfg.get("model")), inline=True)
-    embed.add_field(name="Температура", value=str(cfg.get("temperature", 0.9)), inline=True)
-    embed.add_field(name="Разбивка", value=sep, inline=True)
-    embed.add_field(name="Стикеры/гифки", value=stickers, inline=True)
-    embed.add_field(name="Автоответ", value=autoreply, inline=True)
-    embed.add_field(name="Случайные сообщения", value=random_msgs, inline=True)
-    embed.add_field(name="Серия (напоминание)", value=series, inline=True)
-    embed.add_field(name="Кастомный промпт", value=prompt, inline=False)
-    embed.add_field(
-        name="Команды настройки",
-        value=(
-            "`кульш конфиг язык ru|en`\n"
-            "`кульш конфиг тема тёмная|светлая`\n"
-            "`кульш конфиг модель` — список\n"
-            "`кульш конфиг модель <номер|авто>`\n"
-            "`кульш конфиг температура <0.0-2.0>`\n"
-            "`кульш конфиг разбивка вкл|выкл`\n"
-            "`кульш конфиг стикеры вкл|выкл`\n"
-            "`кульш конфиг автоответ вкл|выкл`\n"
-            "`кульш конфиг рандом вкл|выкл`\n"
-            "`кульш конфиг промпт <текст|сброс>`\n"
-            "`кульш конфиг серия вкл|выкл`"
-        ),
-        inline=False,
-    )
+    title = "⚙️ Настройки Кульша" if lang == "ru" else "⚙️ Kulsh Settings"
+    desc = ("Текущие параметры канала. Изменение — текстом через `кульш конфиг <параметр> <значение>`."
+            if lang == "ru" else
+            "Current channel parameters. Change via text `kulsh config <param> <value>`.")
+
+    embed = discord.Embed(title=title, color=0x10B981, description=desc)
+    if lang == "ru":
+        embed.add_field(name="🌐 Язык", value=lang_disp, inline=True)
+        embed.add_field(name="🌓 Тема", value=theme_disp, inline=True)
+        embed.add_field(name="🧠 Модель", value=model_display_name(cfg.get("model"), lang), inline=True)
+        embed.add_field(name="🎛 Температура", value=str(cfg.get("temperature", 0.9)), inline=True)
+        embed.add_field(name="💬 Разбивка", value=sep, inline=True)
+        embed.add_field(name="🎨 Стикеры/гифки", value=stickers, inline=True)
+        embed.add_field(name="🗣 Автоответ", value=autoreply, inline=True)
+        embed.add_field(name="📢 Случайные сообщения", value=random_msgs, inline=True)
+        embed.add_field(name="🎬 Серия", value=series, inline=True)
+        embed.add_field(name="📝 Кастомный промпт", value=prompt, inline=False)
+        embed.add_field(
+            name="📖 Команды настройки",
+            value=(
+                "`кульш конфиг язык ru|en`\n"
+                "`кульш конфиг тема тёмная|светлая`\n"
+                "`кульш конфиг модель` — список\n"
+                "`кульш конфиг модель <номер|авто>`\n"
+                "`кульш конфиг температура <0.0-2.0>`\n"
+                "`кульш конфиг разбивка вкл|выкл`\n"
+                "`кульш конфиг стикеры вкл|выкл`\n"
+                "`кульш конфиг автоответ вкл|выкл`\n"
+                "`кульш конфиг рандом вкл|выкл`\n"
+                "`кульш конфиг промпт <текст|сброс>`\n"
+                "`кульш конфиг серия вкл|выкл`"
+            ),
+            inline=False,
+        )
+    else:
+        embed.add_field(name="🌐 Language", value=lang_disp, inline=True)
+        embed.add_field(name="🌓 Theme", value=theme_disp, inline=True)
+        embed.add_field(name="🧠 Model", value=model_display_name(cfg.get("model"), lang), inline=True)
+        embed.add_field(name="🎛 Temperature", value=str(cfg.get("temperature", 0.9)), inline=True)
+        embed.add_field(name="💬 Split", value=sep, inline=True)
+        embed.add_field(name="🎨 Stickers/GIFs", value=stickers, inline=True)
+        embed.add_field(name="🗣 Auto-reply", value=autoreply, inline=True)
+        embed.add_field(name="📢 Random messages", value=random_msgs, inline=True)
+        embed.add_field(name="🎬 Series reminder", value=series, inline=True)
+        embed.add_field(name="📝 Custom prompt", value=prompt, inline=False)
+        embed.add_field(
+            name="📖 Config commands",
+            value=(
+                "`kulsh config language ru|en`\n"
+                "`kulsh config theme dark|light`\n"
+                "`kulsh config model` — list\n"
+                "`kulsh config model <number|auto>`\n"
+                "`kulsh config temperature <0.0-2.0>`\n"
+                "`kulsh config split on|off`\n"
+                "`kulsh config stickers on|off`\n"
+                "`kulsh config autoreply on|off`\n"
+                "`kulsh config random on|off`\n"
+                "`kulsh config prompt <text|reset>`\n"
+                "`kulsh config series on|off`"
+            ),
+            inline=False,
+        )
     return embed
 
 
 async def ds_handle_config(message: discord.Message, user_id: int) -> None:
     chat_id = message.channel.id
     if message.guild and not message.author.guild_permissions.administrator:
-        await message.reply("изменение настроек доступно только администраторам канала")
+        cfg = get_user_config("ds", chat_id, user_id)
+        lang = cfg.get("language", "ru")
+        await message.reply(_t(lang, "ds_only_admins"))
         return
     embed = _ds_config_embed(chat_id, user_id)
     await message.reply(embed=embed)
@@ -3788,197 +4205,155 @@ async def ds_handle_config(message: discord.Message, user_id: int) -> None:
 
 async def ds_handle_config_param(message: discord.Message, user_id: int, parts: list[str]) -> None:
     chat_id = message.channel.id
-    if message.guild and not message.author.guild_permissions.administrator:
-        await message.reply("изменение настроек доступно только администраторам канала")
-        return
     cfg = get_user_config("ds", chat_id, user_id)
+    lang = cfg.get("language", "ru")
+    if message.guild and not message.author.guild_permissions.administrator:
+        await message.reply(_t(lang, "ds_only_admins"))
+        return
     if len(parts) < 3:
         await ds_handle_config(message, user_id)
         return
     param = parts[2].lower()
     val = parts[3].lower() if len(parts) >= 4 else ""
-    bool_on = val in ("вкл", "on", "1", "true", "да")
+    bool_on = val in ("вкл", "on", "1", "true", "да", "yes")
 
-    if param == "язык":
+    if param in ("язык", "language"):
         if val in ("ru", "русский", "russian"):
             cfg["language"] = "ru"
-            await message.reply("Язык: русский")
+            await message.reply(_t("ru", "ds_setting_lang", _t("ru", "russian")))
         elif val in ("en", "английский", "english"):
             cfg["language"] = "en"
-            await message.reply("Language: English")
+            await message.reply(_t("en", "ds_setting_lang", _t("en", "english")))
         else:
-            await message.reply("Укажите `ru` или `en`.")
-    elif param == "тема":
+            await message.reply(_t(lang, "ds_need_specify_ru_en"))
+    elif param in ("тема", "theme"):
         if val in ("тёмная", "темная", "dark"):
             cfg["theme"] = "dark"
-            await message.reply("Тема: тёмная")
+            await message.reply(_t(lang, "ds_setting_theme", _t(lang, "dark")))
         elif val in ("светлая", "light"):
             cfg["theme"] = "light"
-            await message.reply("Тема: светлая")
+            await message.reply(_t(lang, "ds_setting_theme", _t(lang, "light")))
         else:
-            await message.reply("Укажите `тёмная` или `светлая`.")
-    elif param == "серия":
+            await message.reply(_t(lang, "ds_need_specify_theme"))
+    elif param in ("серия", "series"):
         cfg["series_reminder_enabled"] = bool_on
-        await message.reply("Напоминание о серии: " + ("вкл" if bool_on else "выкл"))
-    elif param == "стикеры":
+        await message.reply(_t(lang, "ds_setting_series", _t(lang, "on") if bool_on else _t(lang, "off")))
+    elif param in ("стикеры", "stickers"):
         cfg["stickers_enabled"] = bool_on
-        await message.reply("Стикеры/гифки: " + ("вкл" if bool_on else "выкл"))
-    elif param == "разбивка":
+        await message.reply(_t(lang, "ds_setting_stickers", _t(lang, "on") if bool_on else _t(lang, "off")))
+    elif param in ("разбивка", "split"):
         cfg["separate_enabled"] = bool_on
-        await message.reply("Разбивка на сообщения: " + ("вкл" if bool_on else "выкл"))
-    elif param == "автоответ":
+        await message.reply(_t(lang, "ds_setting_sep", _t(lang, "on") if bool_on else _t(lang, "off")))
+    elif param in ("автоответ", "autoreply"):
         cfg["random_reply_enabled"] = bool_on
-        await message.reply("Автоответ: " + ("вкл" if bool_on else "выкл"))
-    elif param == "рандом":
+        await message.reply(_t(lang, "ds_setting_autoreply", _t(lang, "on") if bool_on else _t(lang, "off")))
+    elif param in ("рандом", "random"):
         cfg["random_messages_enabled"] = bool_on
-        await message.reply("Случайные сообщения: " + ("вкл" if bool_on else "выкл"))
-    elif param == "температура":
+        await message.reply(_t(lang, "ds_setting_random", _t(lang, "on") if bool_on else _t(lang, "off")))
+    elif param in ("температура", "temperature"):
         try:
             t = max(0.0, min(2.0, float(val)))
             cfg["temperature"] = t
-            await message.reply(f"Температура: {t}")
+            await message.reply(_t(lang, "ds_setting_temp", t))
         except ValueError:
-            await message.reply("Укажите число от 0.0 до 2.0.")
-    elif param == "промпт":
+            await message.reply(_t(lang, "ds_setting_temp_bad"))
+    elif param in ("промпт", "prompt"):
         new_prompt = " ".join(parts[3:]).strip()
-        if new_prompt.lower() in ("сброс", "убрать", "стандарт"):
+        if new_prompt.lower() in ("сброс", "reset", "убрать", "стандарт", "default"):
             cfg["custom_prompt"] = None
-            await message.reply("Промпт сброшен.")
+            await message.reply(_t(lang, "ds_setting_prompt_reset"))
         elif new_prompt:
             cfg["custom_prompt"] = new_prompt[:2000]
-            await message.reply("Промпт установлен.")
+            await message.reply(_t(lang, "ds_setting_prompt_set"))
         else:
-            await message.reply("Введите текст или `сброс`.")
-    elif param == "модель":
+            await message.reply(_t(lang, "ds_setting_prompt_need"))
+    elif param in ("модель", "model"):
         if not val:
             lines = [f"`{i}` — {MODEL_DISPLAY.get(m, m)}" for i, m in enumerate(MODEL_LIST)]
-            await message.reply(f"Текущая: {model_display_name(cfg.get('model'))}\n\n" + "\n".join(lines))
+            await message.reply(
+                f"{_t(lang, 'ds_setting_model', model_display_name(cfg.get('model'), lang))}\n\n" + "\n".join(lines)
+            )
         elif val in ("авто", "auto"):
             cfg["model"] = None
-            await message.reply("Модель: авто")
+            await message.reply(_t(lang, "ds_setting_model_auto"))
         else:
             try:
                 idx = int(val)
                 if 0 <= idx < len(MODEL_LIST):
                     cfg["model"] = MODEL_LIST[idx]
-                    await message.reply(f"Модель: {MODEL_DISPLAY.get(MODEL_LIST[idx], MODEL_LIST[idx])}")
+                    await message.reply(_t(lang, "ds_setting_model",
+                                            MODEL_DISPLAY.get(MODEL_LIST[idx], MODEL_LIST[idx])))
                 else:
-                    await message.reply("Неверный номер.")
+                    await message.reply(_t(lang, "ds_setting_model_badnum"))
             except ValueError:
-                await message.reply("Введите номер или `авто`.")
+                await message.reply(_t(lang, "ds_setting_model_bad"))
     else:
-        await message.reply("Неизвестный параметр. Используйте `кульш конфиг` для просмотра.")
+        await message.reply(_t(lang, "ds_unknown_param"))
 
 # ============================================================
-# DISCORD: SLASH-КОМАНДЫ
+# DISCORD SLASH
 # ============================================================
-def _ds_slash_help_text(lang: str) -> str:
-    if lang == "ru":
-        return (
-            "# Кульш — команды\n\n"
-            "**Основные**\n"
-            "- `/start` — приветствие\n"
-            "- `/menu` — интерактивное меню\n"
-            "- `/help` — эта справка\n"
-            "- `/donate` — поддержать проект\n"
-            "- `/credits` — баланс кредитов\n\n"
-            "**Настройки**\n"
-            "- `/config` — текущие параметры канала\n"
-            "Изменение: `кульш конфиг <параметр> <значение>`\n\n"
-            "**Утилиты**\n"
-            "- `/avatar` — описать аватарку\n"
-            "- `/recall` — вспомнить последние медиа\n"
-            "- `/logs` — логи сервера (админам)\n\n"
-            "**Развлечения**\n"
-            "- `/psl` — оценка внешности (looksmaxxing)\n"
-            "- `/battle` — баттл двух фото\n\n"
-            f"Веб-версия: {MINI_APP_URL}\n"
-            f"GitHub: {GITHUB_URL}"
-        )
-    return (
-        "# Kulsh — commands\n\n"
-        "**Basics**\n"
-        "- `/start` — greeting\n"
-        "- `/menu` — interactive menu\n"
-        "- `/help` — this help\n"
-        "- `/donate` — support the project\n"
-        "- `/credits` — credits balance\n\n"
-        "**Settings**\n"
-        "- `/config` — current channel settings\n"
-        "Change: `kulsh config <param> <value>`\n\n"
-        "**Tools**\n"
-        "- `/avatar` — describe avatar\n"
-        "- `/recall` — recall recent media\n"
-        "- `/logs` — server logs (admins)\n\n"
-        "**Entertainment**\n"
-        "- `/psl` — looksmaxxing\n"
-        "- `/battle` — two-photo battle\n\n"
-        f"Web version: {MINI_APP_URL}\n"
-        f"GitHub: {GITHUB_URL}"
-    )
+def _ds_slash_help(lang: str) -> str:
+    return _t(lang, "help_body", MINI_APP_URL, GITHUB_URL)
 
 
-def _ds_slash_menu_text(lang: str) -> str:
+def _ds_slash_menu(lang: str) -> str:
     if lang == "ru":
         return (
-            "# Меню Кульш AI\n\n"
-            "Открытая языковая модель с набором встроенных инструментов. "
-            "Ниже — основные разделы и команды.\n\n"
-            "**Основные**\n"
+            "# 🍷🗿 Меню Кульш AI\n\n"
+            "Открытая языковая модель с набором встроенных инструментов.\n\n"
+            "**📋 Основные**\n"
             "- `/start` — приветствие\n"
             "- `/help` — полный список команд\n"
             "- `/config` — настройки канала\n"
             "- `/donate` — поддержка разработки\n"
             "- `/credits` — баланс кредитов\n\n"
-            "**Инструменты**\n"
+            "**🛠 Инструменты**\n"
             "- `/avatar` — описать аватарку\n"
             "- `/recall` — вспомнить последние медиа\n"
             "- `/psl` — оценка внешности\n"
             "- `/battle` — баттл двух фото\n"
             "- `/logs` — логи сервера (админам)\n\n"
-            f"Веб-версия: {MINI_APP_URL}"
+            f"🚀 {MINI_APP_URL}"
         )
     return (
-        "# Kulsh AI Menu\n\n"
-        "An open-source language model with a set of built-in tools. "
-        "Below are the main sections and commands.\n\n"
-        "**Basics**\n"
+        "# 🍷🗿 Kulsh AI Menu\n\n"
+        "An open-source language model with a set of built-in tools.\n\n"
+        "**📋 Basics**\n"
         "- `/start` — greeting\n"
         "- `/help` — full command list\n"
         "- `/config` — channel settings\n"
         "- `/donate` — support development\n"
         "- `/credits` — credits balance\n\n"
-        "**Tools**\n"
+        "**🛠 Tools**\n"
         "- `/avatar` — describe avatar\n"
         "- `/recall` — recall recent media\n"
         "- `/psl` — looksmaxxing\n"
         "- `/battle` — two-photo battle\n"
         "- `/logs` — server logs (admins)\n\n"
-        f"Web version: {MINI_APP_URL}"
+        f"🚀 {MINI_APP_URL}"
     )
 
 
-def _ds_slash_start_text(lang: str) -> str:
+def _ds_slash_start(lang: str) -> str:
     if lang == "ru":
         return (
-            "# Кульш на связи\n\n"
-            "Открытая языковая модель с анализом изображений, оценкой внешности "
-            "и настройкой под себя. Работает в Telegram и Discord.\n\n"
-            "**С чего начать**\n"
+            "# 🍷🗿 Кульш на связи\n\n"
+            "Открытая языковая модель с анализом изображений и настройкой под себя.\n\n"
+            "**🚀 С чего начать**\n"
             "- `/menu` — все разделы\n"
             "- `/help` — список команд\n"
             "- `/config` — настройки канала\n\n"
-            f"Веб-версия: {MINI_APP_URL}"
+            f"🚀 {MINI_APP_URL}"
         )
     return (
-        "# Kulsh is online\n\n"
-        "An open-source language model with image analysis, looksmaxxing, "
-        "and personal configuration. Available in Telegram and Discord.\n\n"
-        "**Get started**\n"
+        "# 🍷🗿 Kulsh is online\n\n"
+        "An open-source language model with image analysis and personal configuration.\n\n"
+        "**🚀 Get started**\n"
         "- `/menu` — all sections\n"
         "- `/help` — command list\n"
         "- `/config` — channel settings\n\n"
-        f"Web version: {MINI_APP_URL}"
+        f"🚀 {MINI_APP_URL}"
     )
 
 
@@ -3992,19 +4367,19 @@ def _ds_lang_of(interaction: discord.Interaction) -> str:
 @ds_tree.command(name="start", description="Greeting / Приветствие")
 async def ds_slash_start(interaction: discord.Interaction):
     lang = _ds_lang_of(interaction)
-    await interaction.response.send_message(_ds_slash_start_text(lang))
+    await interaction.response.send_message(_ds_slash_start(lang))
 
 
 @ds_tree.command(name="menu", description="Menu / Меню")
 async def ds_slash_menu(interaction: discord.Interaction):
     lang = _ds_lang_of(interaction)
-    await interaction.response.send_message(_ds_slash_menu_text(lang))
+    await interaction.response.send_message(_ds_slash_menu(lang))
 
 
 @ds_tree.command(name="help", description="Command list / Список команд")
 async def ds_slash_help(interaction: discord.Interaction):
     lang = _ds_lang_of(interaction)
-    await interaction.response.send_message(_ds_slash_help_text(lang))
+    await interaction.response.send_message(_ds_slash_help(lang))
 
 
 @ds_tree.command(name="donate", description="Support the project / Поддержать проект")
@@ -4012,17 +4387,17 @@ async def ds_slash_donate(interaction: discord.Interaction):
     lang = _ds_lang_of(interaction)
     if lang == "ru":
         text = (
-            "# Поддержать Кульша\n\n"
-            "Донаты идут на серверы, домены и дальнейшую разработку.\n\n"
-            f"Онлайн-донат: {DONATE_URL}\n"
-            f"GitHub: {GITHUB_URL}"
+            "# 💎 Поддержать Кульша\n\n"
+            "💖 Донаты идут на серверы, домены и дальнейшую разработку.\n\n"
+            f"💳 Онлайн-донат: {DONATE_URL}\n"
+            f"🔗 GitHub: {GITHUB_URL}"
         )
     else:
         text = (
-            "# Support Kulsh\n\n"
-            "Donations go to servers, domains and further development.\n\n"
-            f"Donate online: {DONATE_URL}\n"
-            f"GitHub: {GITHUB_URL}"
+            "# 💎 Support Kulsh\n\n"
+            "💖 Donations go to servers, domains and further development.\n\n"
+            f"💳 Donate online: {DONATE_URL}\n"
+            f"🔗 GitHub: {GITHUB_URL}"
         )
     await interaction.response.send_message(text)
 
@@ -4031,21 +4406,16 @@ async def ds_slash_donate(interaction: discord.Interaction):
 async def ds_slash_credits(interaction: discord.Interaction):
     lang = _ds_lang_of(interaction)
     creds = get_user_credits("ds", interaction.user.id)
-    if lang == "ru":
-        await interaction.response.send_message(f"Кредиты: {creds}/{DAILY_CREDITS}")
-    else:
-        await interaction.response.send_message(f"Credits: {creds}/{DAILY_CREDITS}")
+    await interaction.response.send_message(_t(lang, "credits_balance", creds, DAILY_CREDITS))
 
 
 @ds_tree.command(name="config", description="Channel settings / Настройки канала")
 async def ds_slash_config(interaction: discord.Interaction):
     chat_id = interaction.channel_id or 0
     user_id = interaction.user.id
+    lang = _ds_lang_of(interaction)
     if interaction.guild and not interaction.user.guild_permissions.administrator:
-        lang = _ds_lang_of(interaction)
-        msg = "изменение настроек доступно только администраторам канала" if lang == "ru" \
-            else "only channel administrators can change settings"
-        await interaction.response.send_message(msg, ephemeral=True)
+        await interaction.response.send_message(_t(lang, "ds_only_admins"), ephemeral=True)
         return
     embed = _ds_config_embed(chat_id, user_id)
     await interaction.response.send_message(embed=embed)
@@ -4058,24 +4428,31 @@ async def ds_slash_avatar(interaction: discord.Interaction, user: discord.Member
     target = user or interaction.user
     chat_id = interaction.channel_id or 0
     user_id = interaction.user.id
+    lang = _ds_lang_of(interaction)
     try:
         img_bytes = await download_image_bytes(target.display_avatar.url)
+        prompt = (
+            f"Ты только что посмотрел аватарку пользователя {target.display_name}. "
+            f"Опиши коротко (1-2 предложения) в стиле Кульша. Без markdown. "
+            f"НЕ используй маркеры !separate, !avatar, !recall_media, !sticker, !gif."
+            if lang == "ru" else
+            f"You've just seen the avatar of {target.display_name}. "
+            f"Describe briefly (1-2 sentences) in Kulsh's style. No markdown. "
+            f"Do NOT use markers !separate, !avatar, !recall_media, !sticker, !gif."
+        )
         raw = await ask_ai_async(
-            prompt=(f"Ты только что посмотрел аватарку пользователя {target.display_name}. "
-                    f"Опиши коротко (1-2 предложения) в стиле Кульша. Без markdown. "
-                    f"НЕ используй маркеры !separate, !avatar, !recall_media, !sticker, !gif."),
-            image_bytes=img_bytes, image_mime="image/jpeg",
+            prompt=prompt, image_bytes=img_bytes, image_mime="image/jpeg",
             chat_id=chat_id, user_id=user_id, platform="ds",
         )
         segments = clean_extra_text(raw) if raw else []
         if not segments:
-            await interaction.followup.send("не удалось получить описание")
+            await interaction.followup.send(_t(lang, "ds_avatar_none"))
             return
         for seg in segments:
             await interaction.followup.send(seg)
     except Exception as e:
         logger.error(f"DS slash avatar: {e}")
-        await interaction.followup.send(f"Ошибка: {e}")
+        await interaction.followup.send(_t(lang, "tool_error", str(e)))
 
 
 @ds_tree.command(name="recall", description="Recall recent media / Вспомнить недавние медиа")
@@ -4084,21 +4461,28 @@ async def ds_slash_recall(interaction: discord.Interaction, count: int = 3):
     await interaction.response.defer()
     chat_id = interaction.channel_id or 0
     user_id = interaction.user.id
+    lang = _ds_lang_of(interaction)
     n = max(1, min(10, count))
     history = list(chat_media_history.get(f"ds_{chat_id}", []))
     if not history:
-        await interaction.followup.send("в памяти нет медиа")
+        await interaction.followup.send(_t(lang, "ds_no_memory"))
         return
     last = history[-n:]
-    lines = [f"- {it.get('type', 'media')} от {it.get('sender', '?')}: {(it.get('caption') or '')[:120]}"
+    lines = [f"- {it.get('type', 'media')} {it.get('sender', '?')}: {(it.get('caption') or '')[:120]}"
              for it in last]
     meta = "\n".join(lines)
     try:
+        prompt = (
+            f"Ты вспоминаешь недавние медиа. Список:\n{meta}\n\n"
+            f"Коротко прокомментируй в стиле Кульша. Без markdown. "
+            f"НЕ используй маркеры !separate, !avatar, !recall_media, !sticker, !gif."
+            if lang == "ru" else
+            f"You recall recent media. List:\n{meta}\n\n"
+            f"Comment briefly in Kulsh's style. No markdown. "
+            f"Do NOT use markers !separate, !avatar, !recall_media, !sticker, !gif."
+        )
         raw = await ask_ai_async(
-            prompt=(f"Ты вспоминаешь недавние медиа. Список:\n{meta}\n\n"
-                    f"Коротко прокомментируй в стиле Кульша. Без markdown. "
-                    f"НЕ используй маркеры !separate, !avatar, !recall_media, !sticker, !gif."),
-            chat_id=chat_id, user_id=user_id, platform="ds",
+            prompt=prompt, chat_id=chat_id, user_id=user_id, platform="ds",
         )
         segments = clean_extra_text(raw) if raw else []
         if not segments:
@@ -4108,24 +4492,26 @@ async def ds_slash_recall(interaction: discord.Interaction, count: int = 3):
             await interaction.followup.send(seg)
     except Exception as e:
         logger.error(f"DS slash recall: {e}")
-        await interaction.followup.send(f"Ошибка: {e}")
+        await interaction.followup.send(_t(lang, "tool_error", str(e)))
 
 
 @ds_tree.command(name="logs", description="Server logs (admins) / Логи сервера (админам)")
 async def ds_slash_logs(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
+    lang = _ds_lang_of(interaction)
     if interaction.user.id not in AUTHORIZED_UPDATERS:
-        await interaction.followup.send("недостаточно прав", ephemeral=True)
+        await interaction.followup.send(_t(lang, "ds_update_no_access"), ephemeral=True)
         return
     try:
         tail = read_log_tail(20)
-        content = f"{LOG_INTRO}\n```\n{tail}\n```" if len(tail) <= 1900 else f"{LOG_INTRO}\n\n{tail[:1900]}"
+        intro = _t(lang, "ds_logs_content")
+        content = f"{intro}\n```\n{tail}\n```" if len(tail) <= 1900 else f"{intro}\n\n{tail[:1900]}"
         try:
             await interaction.followup.send(content=content, file=discord.File('bot.log'), ephemeral=True)
         except FileNotFoundError:
             await interaction.followup.send(content=content, ephemeral=True)
     except Exception as e:
-        await interaction.followup.send(f"Ошибка: {e}", ephemeral=True)
+        await interaction.followup.send(_t(lang, "tool_error", str(e)), ephemeral=True)
 
 
 @ds_tree.command(name="psl", description="Looksmaxxing analysis / Оценка внешности")
@@ -4134,40 +4520,27 @@ async def ds_slash_psl(interaction: discord.Interaction, image: discord.Attachme
     await interaction.response.defer()
     chat_id = interaction.channel_id or 0
     user_id = interaction.user.id
+    lang = _ds_lang_of(interaction)
     try:
         img_bytes = await download_image_bytes(image.url)
         cfg = get_user_config("ds", chat_id, user_id)
-        lang = cfg.get("language", "ru")
         theme = cfg.get("theme", "dark")
         ai_data = await get_looksmaxxing_data(img_bytes, advice, lang=lang)
         if "error" in ai_data:
-            await interaction.followup.send(f"Ошибка: {ai_data['error']}")
+            await interaction.followup.send(f"❌ {ai_data['error']}")
             return
         infographic = await create_infographic(img_bytes, ai_data, theme=theme, lang=lang)
-        if lang == "ru":
-            report = (
-                f"**LOOKSMAXXING**\n"
-                f"Пол: {ai_data.get('gender', '?')}\n"
-                f"PSL: `{ai_data.get('psl', '?')}/8.0`\n"
-                f"Tier: `{ai_data.get('tier', '?')}`\n"
-            )
-            if ai_data.get("potential"):
-                report += f"Потенциал: `{ai_data['potential']}`\n"
-            report += f"\n{ai_data.get('summary', '')}"
-            if advice and ai_data.get("advice"):
-                report += f"\n\n**Рекомендации:**\n{ai_data['advice']}"
-        else:
-            report = (
-                f"**LOOKSMAXXING**\n"
-                f"Gender: {ai_data.get('gender', '?')}\n"
-                f"PSL: `{ai_data.get('psl', '?')}/8.0`\n"
-                f"Tier: `{ai_data.get('tier', '?')}`\n"
-            )
-            if ai_data.get("potential"):
-                report += f"Potential: `{ai_data['potential']}`\n"
-            report += f"\n{ai_data.get('summary', '')}"
-            if advice and ai_data.get("advice"):
-                report += f"\n\n**Advice:**\n{ai_data['advice']}"
+        report = (
+            f"**{_t(lang, 'psl_title')}**\n"
+            f"{_t(lang, 'psl_gender')}: {ai_data.get('gender', '?')}\n"
+            f"{_t(lang, 'psl_score')}: `{ai_data.get('psl', '?')}/8.0`\n"
+            f"{_t(lang, 'psl_tier')}: `{ai_data.get('tier', '?')}`\n"
+        )
+        if ai_data.get("potential"):
+            report += f"{_t(lang, 'psl_potential')}: `{ai_data['potential']}`\n"
+        report += f"\n{ai_data.get('summary', '')}"
+        if advice and ai_data.get("advice"):
+            report += f"\n\n**{_t(lang, 'psl_advice')}:**\n{ai_data['advice']}"
         await interaction.followup.send(
             content=report[:1900],
             file=discord.File(fp=infographic, filename="psl.png"),
@@ -4176,7 +4549,7 @@ async def ds_slash_psl(interaction: discord.Interaction, image: discord.Attachme
             await interaction.followup.send(report[1900:])
     except Exception as e:
         logger.error(f"DS slash psl: {e}")
-        await interaction.followup.send(f"Ошибка: {e}")
+        await interaction.followup.send(_t(lang, "tool_error", str(e)))
 
 
 @ds_tree.command(name="battle", description="Two-photo battle / Баттл двух фото")
@@ -4185,47 +4558,35 @@ async def ds_slash_battle(interaction: discord.Interaction, image1: discord.Atta
     await interaction.response.defer()
     chat_id = interaction.channel_id or 0
     user_id = interaction.user.id
+    lang = _ds_lang_of(interaction)
     try:
         p1 = await download_image_bytes(image1.url)
         p2 = await download_image_bytes(image2.url)
         cfg = get_user_config("ds", chat_id, user_id)
-        lang = cfg.get("language", "ru")
         theme = cfg.get("theme", "dark")
         ai_data = await get_battle_data(p1, p2, lang=lang)
         if "error" in ai_data:
-            await interaction.followup.send(f"Ошибка: {ai_data['error']}")
+            await interaction.followup.send(f"❌ {ai_data['error']}")
             return
         img = await create_battle_infographic(p1, p2, ai_data, theme=theme, lang=lang)
         winner_num = str(ai_data.get("winner", "1"))
-        if lang == "ru":
-            winner_label = "Первое фото" if winner_num == "1" else "Второе фото"
-            report = (
-                f"**РЕЗУЛЬТАТ БАТТЛА**\n\n"
-                f"Победитель: **{winner_label}**\n"
-                f"Причина: {ai_data.get('reason', '')}\n\n"
-                f"Фото 1: PSL {ai_data.get('photo1', {}).get('psl', '?')} | "
-                f"{ai_data.get('photo1', {}).get('tier', '?')}\n"
-                f"Фото 2: PSL {ai_data.get('photo2', {}).get('psl', '?')} | "
-                f"{ai_data.get('photo2', {}).get('tier', '?')}"
-            )
-        else:
-            winner_label = "First photo" if winner_num == "1" else "Second photo"
-            report = (
-                f"**BATTLE RESULT**\n\n"
-                f"Winner: **{winner_label}**\n"
-                f"Reason: {ai_data.get('reason', '')}\n\n"
-                f"Photo 1: PSL {ai_data.get('photo1', {}).get('psl', '?')} | "
-                f"{ai_data.get('photo1', {}).get('tier', '?')}\n"
-                f"Photo 2: PSL {ai_data.get('photo2', {}).get('psl', '?')} | "
-                f"{ai_data.get('photo2', {}).get('tier', '?')}"
-            )
+        winner_label = _t(lang, "battle_first") if winner_num == "1" else _t(lang, "battle_second")
+        report = (
+            f"**{_t(lang, 'battle_title')}**\n\n"
+            f"{_t(lang, 'battle_winner')}: **{winner_label}**\n"
+            f"{_t(lang, 'battle_reason')}: {ai_data.get('reason', '')}\n\n"
+            f"{_t(lang, 'battle_photo1')}: PSL {ai_data.get('photo1', {}).get('psl', '?')} | "
+            f"{ai_data.get('photo1', {}).get('tier', '?')}\n"
+            f"{_t(lang, 'battle_photo2')}: PSL {ai_data.get('photo2', {}).get('psl', '?')} | "
+            f"{ai_data.get('photo2', {}).get('tier', '?')}"
+        )
         await interaction.followup.send(
             content=report[:1900],
             file=discord.File(fp=img, filename="battle.png"),
         )
     except Exception as e:
         logger.error(f"DS slash battle: {e}")
-        await interaction.followup.send(f"Ошибка: {e}")
+        await interaction.followup.send(_t(lang, "tool_error", str(e)))
 
 # ============================================================
 # DISCORD: MESSAGE HANDLER
@@ -4240,35 +4601,35 @@ async def on_message(message: discord.Message) -> None:
     content_lower = message.content.lower()
     display_name = getattr(message.author, "display_name", message.author.name)
     username = message.author.name
+    cfg = get_user_config("ds", chat_id, user_id)
+    lang = cfg.get("language", "ru")
 
-    if not is_dm and content_lower.startswith("кульш обновись"):
+    if not is_dm and (content_lower.startswith("кульш обновись") or content_lower.startswith("kulsh update")):
         if message.author.id not in AUTHORIZED_UPDATERS:
-            await message.reply("недостаточно прав")
+            await message.reply(_t(lang, "ds_update_no_access"))
             return
-        await message.reply("обновляюсь с автооткатом при ошибке...")
+        await message.reply(_t(lang, "ds_update_start"))
         try:
             repo_path = os.getenv('REPO_PATH', os.getcwd())
             status, info = await perform_safe_git_update(repo_path)
             if status == "up_to_date":
-                await message.reply(f"уже актуальная версия:\n```\n{info[:1500]}\n```")
+                await message.reply(_t(lang, "ds_update_uptodate", info[:1500]))
             elif status == "ok":
-                await message.reply(f"изменения подтянуты, перезапускаюсь:\n```\n{info[:1500]}\n```")
+                await message.reply(_t(lang, "ds_update_ok", info[:1500]))
                 await asyncio.sleep(2)
                 os._exit(0)
             elif status == "rolled_back":
-                await message.reply(
-                    "новый коммит содержит ошибки — откатился к предыдущей версии. "
-                    "Бот продолжает работу.\n"
-                    f"```\n{info[:1500]}\n```"
-                )
+                await message.reply(_t(lang, "ds_update_rolled", info[:1500]))
             else:
-                await message.reply(f"ошибка обновления:\n```\n{info[:1500]}\n```")
+                await message.reply(_t(lang, "ds_update_error", info[:1500]))
         except Exception as e:
             logger.exception("update error")
-            await message.reply(f"ошибка обновления:\n```\n{e}\n```")
+            await message.reply(_t(lang, "ds_update_error", str(e)))
         return
 
-    if content_lower.startswith("кульш конфиг") or content_lower.startswith("кульш настройки"):
+    if (content_lower.startswith("кульш конфиг") or
+            content_lower.startswith("кульш настройки") or
+            content_lower.startswith("kulsh config")):
         parts = message.content.split()
         if len(parts) == 2:
             await ds_handle_config(message, user_id)
@@ -4276,21 +4637,23 @@ async def on_message(message: discord.Message) -> None:
             await ds_handle_config_param(message, user_id, parts)
         return
 
-    if content_lower.startswith("кульш донаты"):
+    if content_lower.startswith("кульш донаты") or content_lower.startswith("kulsh donations"):
         top = get_top_donators()
         if not top:
-            await message.reply(f"Пока никто не донатил.\n{DONATE_URL}")
+            await message.reply(_t(lang, "top_donators_empty", DONATE_URL))
             return
-        embed = discord.Embed(title="Топ донатеров", color=0x10B981)
+        embed = discord.Embed(title=_t(lang, "top_donators_title"), color=0x10B981)
         for i, (name, total) in enumerate(top, 1):
-            embed.add_field(name=f"{i}. {name}", value=f"{total} очков", inline=False)
+            embed.add_field(name=f"{i}. {name}", value=f"{total}", inline=False)
         await message.reply(embed=embed)
         return
 
-    if content_lower.startswith("кульш аватарк") or content_lower.startswith("кульш аватар"):
-        raw = await get_avatar_description_ds(message, chat_id, user_id)
+    if (content_lower.startswith("кульш аватарк") or
+            content_lower.startswith("кульш аватар") or
+            content_lower.startswith("kulsh avatar")):
+        raw = await get_avatar_description_ds(message, chat_id, user_id, lang=lang)
         if not raw:
-            await message.reply("не удалось получить аватарку")
+            await message.reply(_t(lang, "avatar_fail"))
             return
         for seg in clean_extra_text(raw):
             try:
@@ -4299,33 +4662,34 @@ async def on_message(message: discord.Message) -> None:
                 logger.warning(f"DS avatar: {e}")
         return
 
-    if not is_dm and "кульш логи" in content_lower:
+    if not is_dm and ("кульш логи" in content_lower or "kulsh logs" in content_lower):
         if message.author.id not in AUTHORIZED_UPDATERS:
-            await message.reply("недостаточно прав")
+            await message.reply(_t(lang, "ds_update_no_access"))
             return
         try:
             tail = read_log_tail(20)
+            intro = _t(lang, "ds_logs_content")
             try:
                 await message.reply(
-                    content=f"{LOG_INTRO}\n```\n{tail}\n```" if len(tail) <= 1900 else LOG_INTRO,
+                    content=f"{intro}\n```\n{tail}\n```" if len(tail) <= 1900 else intro,
                     file=discord.File('bot.log'),
                 )
             except FileNotFoundError:
                 await message.reply(
-                    f"{LOG_INTRO}\n```\n{tail}\n```" if len(tail) <= 1900 else f"{LOG_INTRO}\n\n{tail}"
+                    f"{intro}\n```\n{tail}\n```" if len(tail) <= 1900 else f"{intro}\n\n{tail}"
                 )
                 return
             if len(tail) > 1900:
                 for chunk in chunk_text(tail, 1900):
                     await message.channel.send(f"```\n{chunk}\n```")
         except Exception as e:
-            await message.reply(f"Ошибка: {e}")
+            await message.reply(_t(lang, "tool_error", str(e)))
         return
 
-    if not is_dm and "кульш зайди в войс" in content_lower:
+    if not is_dm and ("кульш зайди в войс" in content_lower or "kulsh join voice" in content_lower):
         author = cast(discord.Member, message.author)
         if not (author.voice and author.voice.channel):
-            await message.reply("вы не в голосовом канале")
+            await message.reply(_t(lang, "ds_voice_not_in"))
             return
         voice_channel = author.voice.channel
         try:
@@ -4338,38 +4702,38 @@ async def on_message(message: discord.Message) -> None:
                 else:
                     vc = await voice_channel.connect()
             voice_text_channels[message.guild.id] = message.channel
-            await message.reply(f"подключился к {voice_channel.name}")
+            await message.reply(_t(lang, "ds_voice_joined", voice_channel.name))
             if VOICE_RECOGNITION_ENABLED and VOICE_RECV_AVAILABLE:
                 sink = RecognitionSink(ds_bot, message.guild, message.channel)
                 vc.listen(sink)
                 setattr(vc, "_recognition_sink", sink)
         except Exception as e:
             logger.error(f"voice: {e}")
-            await message.reply("не удалось подключиться.")
+            await message.reply(_t(lang, "ds_voice_cant_join"))
         return
 
-    if not is_dm and "кульш выйди из войса" in content_lower:
+    if not is_dm and ("кульш выйди из войса" in content_lower or "kulsh leave voice" in content_lower):
         vc = cast(discord.VoiceChannel, message.guild.voice_client)
         if vc and vc.is_connected():
             if hasattr(vc, "_recognition_sink"):
                 getattr(vc, "_recognition_sink").cleanup()
             await vc.disconnect()
             voice_text_channels.pop(message.guild.id, None)
-            await message.reply("отключился")
+            await message.reply(_t(lang, "ds_voice_left"))
         else:
-            await message.reply("я и так не в голосовом")
+            await message.reply(_t(lang, "ds_voice_not_in_bot"))
         return
 
     if is_looksmaxxing_command(message.content) and len(message.attachments) == 0:
         add_user_memory(f"ds_{chat_id}", "DS", display_name, username, user_id,
                         message.content, message_id=message.id)
-        await message.reply("Пришлите фото с командой `кульш psl` или используйте `/psl`.")
+        await message.reply(_t(lang, "psl_need_photo"))
         return
 
     if is_battle_command(message.content) and len(message.attachments) == 0:
         add_user_memory(f"ds_{chat_id}", "DS", display_name, username, user_id,
                         message.content, message_id=message.id)
-        await message.reply("Для баттла пришлите два фото или используйте `/battle`.")
+        await message.reply(_t(lang, "battle_need_photos"))
         return
 
     image_attachments = [a for a in message.attachments if a.content_type and a.content_type.startswith('image/')]
@@ -4378,27 +4742,25 @@ async def on_message(message: discord.Message) -> None:
 
     if has_battle_cmd and len(image_attachments) >= 2:
         async with message.channel.typing():
-            status = await message.reply("сравниваю...")
+            status = await message.reply(_t(lang, "battle_waiting"))
             try:
                 p1 = await download_image_bytes(image_attachments[0].url)
                 p2 = await download_image_bytes(image_attachments[1].url)
-                cfg = get_user_config("ds", chat_id, user_id)
-                lang = cfg.get("language", "ru")
                 theme = cfg.get("theme", "dark")
                 ai_data = await get_battle_data(p1, p2, lang=lang)
                 if "error" in ai_data:
-                    await status.edit(content=f"Ошибка: {ai_data['error']}")
+                    await status.edit(content=f"❌ {ai_data['error']}")
                     return
                 img = await create_battle_infographic(p1, p2, ai_data, theme=theme, lang=lang)
                 winner_num = str(ai_data.get("winner", "1"))
-                winner_label = "Первое фото" if winner_num == "1" else "Второе фото"
+                winner_label = _t(lang, "battle_first") if winner_num == "1" else _t(lang, "battle_second")
                 report = (
-                    f"**РЕЗУЛЬТАТ БАТТЛА**\n\n"
-                    f"Победитель: **{winner_label}**\n"
-                    f"Причина: {ai_data.get('reason', '')}\n\n"
-                    f"Фото 1: PSL {ai_data.get('photo1', {}).get('psl', '?')} | "
+                    f"**{_t(lang, 'battle_title')}**\n\n"
+                    f"{_t(lang, 'battle_winner')}: **{winner_label}**\n"
+                    f"{_t(lang, 'battle_reason')}: {ai_data.get('reason', '')}\n\n"
+                    f"{_t(lang, 'battle_photo1')}: PSL {ai_data.get('photo1', {}).get('psl', '?')} | "
                     f"{ai_data.get('photo1', {}).get('tier', '?')}\n"
-                    f"Фото 2: PSL {ai_data.get('photo2', {}).get('psl', '?')} | "
+                    f"{_t(lang, 'battle_photo2')}: PSL {ai_data.get('photo2', {}).get('psl', '?')} | "
                     f"{ai_data.get('photo2', {}).get('tier', '?')}"
                 )
                 await message.reply(file=discord.File(fp=img, filename="battle.png"),
@@ -4409,7 +4771,7 @@ async def on_message(message: discord.Message) -> None:
                 add_bot_memory(f"ds_{chat_id}", "[battle результат]")
             except Exception as e:
                 logger.error(f"DS battle: {e}")
-                await status.edit(content=f"Ошибка: {e}")
+                await status.edit(content=_t(lang, "tool_error", str(e)))
         return
 
     has_looksmaxxing_cmd = is_looksmaxxing_command(message.content)
@@ -4418,32 +4780,30 @@ async def on_message(message: discord.Message) -> None:
             try:
                 img_bytes = await download_image_bytes(image_attachments[0].url)
                 include_advice = "совет" in content_lower or "advice" in content_lower
-                cfg = get_user_config("ds", chat_id, user_id)
-                lang = cfg.get("language", "ru")
                 theme = cfg.get("theme", "dark")
                 ai_data = await get_looksmaxxing_data(img_bytes, include_advice, lang=lang)
                 if "error" in ai_data:
-                    await message.reply(f"Ошибка: {ai_data['error']}")
+                    await message.reply(f"❌ {ai_data['error']}")
                     return
                 infographic = await create_infographic(img_bytes, ai_data, theme=theme, lang=lang)
                 report = (
-                    f"**LOOKSMAXXING**\n"
-                    f"Пол: {ai_data.get('gender', '?')}\n"
-                    f"PSL: `{ai_data.get('psl', '?')}/8.0`\n"
-                    f"Tier: `{ai_data.get('tier', '?')}`\n"
+                    f"**{_t(lang, 'psl_title')}**\n"
+                    f"{_t(lang, 'psl_gender')}: {ai_data.get('gender', '?')}\n"
+                    f"{_t(lang, 'psl_score')}: `{ai_data.get('psl', '?')}/8.0`\n"
+                    f"{_t(lang, 'psl_tier')}: `{ai_data.get('tier', '?')}`\n"
                 )
                 if ai_data.get("potential"):
-                    report += f"Потенциал: `{ai_data['potential']}`\n"
+                    report += f"{_t(lang, 'psl_potential')}: `{ai_data['potential']}`\n"
                 report += f"\n{ai_data.get('summary', '')}"
                 if include_advice and ai_data.get("advice"):
-                    report += f"\n\n**Рекомендации:**\n{ai_data['advice']}"
+                    report += f"\n\n**{_t(lang, 'psl_advice')}:**\n{ai_data['advice']}"
                 await message.reply(file=discord.File(fp=infographic, filename="psl.png"),
                                     content=report[:1900])
                 if len(report) > 1900:
                     await message.channel.send(report[1900:])
             except Exception as e:
                 logger.error(f"DS looksmaxxing: {e}")
-                await message.reply(f"Ошибка: {e}")
+                await message.reply(_t(lang, "tool_error", str(e)))
         return
 
     for att in image_attachments:
@@ -4471,7 +4831,7 @@ async def on_message(message: discord.Message) -> None:
                     frame = await extract_video_frame(vid, ".mp4")
                     if frame:
                         img_bytes = frame
-                prompt = message.content.strip() or "что на этом?"
+                prompt = message.content.strip() or ("что на этом?" if lang == "ru" else "what's this?")
                 add_user_memory(f"ds_{chat_id}", "DS", display_name, username, user_id,
                                 f"{prompt} [с медиа]",
                                 ["photo" if image_attachments else "video"],
@@ -4484,7 +4844,7 @@ async def on_message(message: discord.Message) -> None:
                 asyncio.create_task(extract_memory(f"ds_{chat_id}", f"{display_name}: [медиа]", answer))
             except Exception as e:
                 logger.info(f"DS media: {e}")
-                await message.reply("не удалось обработать вложение")
+                await message.reply(_t(lang, "ds_attachments_error"))
         return
 
     if addressed:
@@ -4507,7 +4867,7 @@ async def on_message(message: discord.Message) -> None:
                 messages=memory_to_messages(get_chat_memory(f"ds_{chat_id}")),
                 chat_id=chat_id, user_id=user_id, platform="ds",
             )
-            if answer and answer.strip() and answer.strip().upper() != "НЕТ":
+            if answer and answer.strip() and answer.strip().upper() not in ("НЕТ", "NO"):
                 last_random_reply[f"ds_{chat_id}"] = time.time()
                 await send_ds_ai_response(message, chat_id, user_id, answer)
         except Exception as e:
@@ -4518,15 +4878,15 @@ async def on_message(message: discord.Message) -> None:
 # ============================================================
 async def send_donation_alert(platform: str, name: str, amount: int, message_text: str = '') -> None:
     if platform == 'tg':
-        text = f"{name} задонатил {amount} звёзд. Спасибо за поддержку."
+        text = f"🍷🗿 {name} задонатил {amount} звёзд! Спасибо за поддержку!"
         if message_text:
-            text += f"\nСообщение: {message_text}"
+            text += f"\n💬 Сообщение: {message_text}"
         try:
             await send_tg_html(TG_TARGET_CHAT, text)
         except Exception as e:
             logger.error(f"Донат в ТГ: {e}")
     elif platform == 'ds':
-        text = f"{name} задонатил {amount} руб."
+        text = f"💎 {name} задонатил {amount} руб."
         if message_text:
             text += f"\n> {message_text}"
         if DS_DONATION_CHANNEL_ID:
@@ -4540,18 +4900,18 @@ async def send_donation_alert(platform: str, name: str, amount: int, message_tex
 
 async def donation_alerts_listener() -> None:
     if not DONATIONALERTS_TOKEN:
-        logger.info("DonationAlerts токен не задан.")
+        logger.info("🔕 DonationAlerts токен не задан.")
         return
     await ds_bot.wait_until_ready()
     sio = socketio.AsyncClient(query={'token': DONATIONALERTS_TOKEN})
 
     @sio.event
     async def connect() -> None:
-        logger.info("DonationAlerts подключён")
+        logger.info("🔌 DonationAlerts подключён")
 
     @sio.event
     async def disconnect() -> None:
-        logger.warning("DonationAlerts отключён")
+        logger.warning("🔌 DonationAlerts отключён")
 
     @sio.on('donation')
     async def on_donation(data: dict) -> None:
@@ -4563,7 +4923,7 @@ async def donation_alerts_listener() -> None:
             points = int(amount)
             username = data.get('username', 'Аноним')
             message = data.get('message', '')
-            logger.info(f"Донат {username} → {points}")
+            logger.info(f"💰 {username} → {points}")
             add_donation('ds', 0, points, name=username)
             await send_donation_alert('ds', username, points, message)
         except Exception as e:
@@ -4632,7 +4992,7 @@ if VOICE_RECOGNITION_ENABLED and VOICE_RECV_AVAILABLE:
                     pcm_data = bytes(self.buffers.pop(user_id))
                     text = await asyncio.to_thread(self._sync_recognize, pcm_data)
                     if text and random.random() <= 0.65:
-                        logger.info(f"Распознано: {text}")
+                        logger.info(f"🎤 Распознано: {text}")
             except asyncio.CancelledError:
                 pass
 
@@ -4680,7 +5040,7 @@ async def random_post_loop() -> None:
             else:
                 answer = await ask_ai_async(prompt=None, context_type="random",
                                             chat_id=TG_TARGET_CHAT, user_id=0, platform="tg")
-            if not answer or not answer.strip() or answer.strip().upper() == "НЕТ":
+            if not answer or not answer.strip() or answer.strip().upper() in ("НЕТ", "NO"):
                 continue
             segments, markers = process_ai_response(answer, separate_enabled=True)
             for seg in segments:
@@ -4727,14 +5087,13 @@ async def main() -> None:
     async def on_ready() -> None:
         logger.info(f'Discord {ds_bot.user} запущен, discord.py {discord.__version__}')
         if not VOICE_RECOGNITION_ENABLED:
-            logger.info("Распознавание голоса отключено")
+            logger.info("ℹ️ Распознавание голоса отключено")
 
-        # Синхронизация slash-команд с гильдией
         try:
             guild = discord.Object(id=DS_ALLOWED_GUILD_ID)
             ds_tree.copy_global_to(guild=guild)
             synced = await ds_tree.sync(guild=guild)
-            logger.info(f"Синхронизировано slash-команд: {len(synced)}")
+            logger.info(f"✅ Синхронизировано slash-команд: {len(synced)}")
         except Exception as e:
             logger.error(f"Не удалось синхронизировать slash-команды: {e}")
 
@@ -4752,7 +5111,7 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    logger.info(f">>> Кульш в эфире. МСК: {msk_datetime_str()}")
+    logger.info(f">>> 🍷🗿 Кульш в эфире. МСК: {msk_datetime_str()}")
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
