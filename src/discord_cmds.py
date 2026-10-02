@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.40.0
+# Kulsh GPT | v2.41.0
 # by (main author): starfall-apk
 # coauthor & bot hosting: pomidorka1515
 
@@ -33,9 +33,16 @@ from src.util import (
     MINI_APP_URL,
     MODEL_DISPLAY,
     MODEL_LIST,
+    REACT_PATTERN,
+    WHY_PATTERN,
+    add_typos,
     ds_user,
+    extract_reaction_and_why,
     human_uptime,
     json_str,
+    process_ai_response,
+    save_user_configs,
+    split_emojis,
     tr,
     add_bot_memory,
     chat_media_history,
@@ -44,7 +51,6 @@ from src.util import (
     get_user_credits,
     logger,
     model_display_name,
-    process_ai_response,
     read_log_tail,
 
     AUTHORIZED_UPDATERS,
@@ -79,9 +85,7 @@ async def typing_with_delay_ds(channel: discord.abc.Messageable, text: str, dela
         elapsed += step
 
 
-async def get_avatar_description_ds(
-    message: discord.Message, chat_id: int, user_id: int, lang: str = "ru",
-) -> str | None:
+async def get_avatar_description_ds(message: discord.Message, chat_id: int, user_id: int, lang: str = "ru") -> str | None:
     target = None
     me = ds_user(ds_bot)
     if message.mentions:
@@ -102,12 +106,9 @@ async def get_avatar_description_ds(
         img_bytes = await download_image_bytes(target.display_avatar.url)
         prompt = (
             f"Ты только что посмотрел аватарку пользователя {name}. "
-            f"Опиши коротко (1-2 предложения) в стиле Кульша. Без markdown. "
-            f"НЕ используй маркеры !separate, !avatar, !recall_media, !sticker, !gif, !search, !chart."
+            f"Опиши коротко (1-2 предложения) в стиле Кульша. Без markdown."
             if lang == "ru" else
-            f"You've just seen the avatar of {name}. "
-            f"Describe briefly (1-2 sentences) in Kulsh's style. No markdown. "
-            f"Do NOT use markers !separate, !avatar, !recall_media, !sticker, !gif, !search, !chart."
+            f"You've just seen the avatar of {name}. Describe briefly in Kulsh's style."
         )
         desc = json_str(await ask_ai_async(
             prompt=prompt, image_bytes=img_bytes, image_mime="image/jpeg",
@@ -137,32 +138,55 @@ async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: i
     cfg = get_user_config("ds", chat_id, user_id)
     lang = cfg.get("language", "ru")
     separate_enabled = cfg.get("separate_enabled", True)
+    orig_user_text = (user_text or message.content or "").strip()
 
+    # ---- react / why ----
+    applied_reactions: list[str] = []
+    if cfg.get("reactions_enabled", True):
+        m = REACT_PATTERN.search(answer_raw or "")
+        why_m = WHY_PATTERN.search(answer_raw or "")
+        if m:
+            emojis_str = m.group(1)
+            why_text = why_m.group(1).strip() if why_m else ""
+            reply_target: discord.Message | None = None
+            if message.reference and message.reference.resolved and isinstance(message.reference.resolved, discord.Message):
+                reply_target = message.reference.resolved
+            emojis = split_emojis(emojis_str)
+            for e in emojis[:3]:
+                try:
+                    target = reply_target or message
+                    await target.add_reaction(e)
+                    applied_reactions.append(e)
+                except Exception as ex:
+                    logger.warning(f"add_reaction {e}: {ex}")
+            if applied_reactions and why_text:
+                add_bot_memory(f"ds_{chat_id}", f"[реакция {' '.join(applied_reactions)}] {why_text}")
+            elif applied_reactions:
+                add_bot_memory(f"ds_{chat_id}", f"[реакция {' '.join(applied_reactions)}]")
+        answer_raw = REACT_PATTERN.sub(' ', answer_raw or "")
+        answer_raw = WHY_PATTERN.sub(' ', answer_raw).strip()
+
+    # ---- search ----
     if cfg.get("web_search_enabled", True):
         query, _ = extract_search_marker(answer_raw or "")
         if query:
             results = await web_search(query, max_results=6)
             if results:
                 context = format_search_results(results)
-                orig = user_text or message.content
                 follow_prompt = (
-                    f"Пользователь спросил: {orig}\n\n"
-                    f"Ты выполнил поиск: {query}\n\n"
-                    f"Результаты поиска:\n{context}\n\n"
-                    f"Ответь на основе этих результатов. Без маркеров !search, !chart. "
-                    f"Дай краткий точный ответ."
+                    f"Пользователь спросил: {orig_user_text}\n\n"
+                    f"Ты выполнил поиск: {query}\n\nРезультаты:\n{context}\n\n"
+                    f"Ответь кратко. Без !search, !chart."
                 )
-                answer_raw = await ask_ai_async(
-                    prompt=follow_prompt,
-                    chat_id=chat_id, user_id=user_id, platform="ds",
-                )
+                answer_raw = await ask_ai_async(prompt=follow_prompt, chat_id=chat_id, user_id=user_id, platform="ds")
             else:
                 answer_raw = tr(lang, "search_nothing")
 
+    # ---- chart ----
     if premium_functions_enabled:
         chart_spec, remaining = extract_chart_marker(answer_raw or "")
         if chart_spec:
-            user_asked_chart = user_wants_chart(user_text or message.content or "")
+            user_asked_chart = user_wants_chart(orig_user_text)
             if user_asked_chart:
                 try:
                     img = await render_infographic(chart_spec, user_images=None)
@@ -209,8 +233,9 @@ async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: i
         return
 
     for i, seg in enumerate(all_segments):
+        seg = add_typos(seg, probability=0.04)
         try:
-            await typing_with_delay_ds(message.channel, seg)
+            await typing_with_delay_ds(message.channel, seg, delay=calc_typing_delay(seg, segment_index=i))
         except Exception:
             pass
         if i == 0:
@@ -231,7 +256,7 @@ async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: i
 
 
 # ============================================================
-# DISCORD CONFIG
+# CONFIG
 # ============================================================
 def ds_config_embed(chat_id: int, user_id: int) -> discord.Embed:
     cfg = get_user_config("ds", chat_id, user_id)
@@ -242,24 +267,19 @@ def ds_config_embed(chat_id: int, user_id: int) -> discord.Embed:
     autoreply = tr(lang, "on") if cfg.get("random_reply_enabled", False) else tr(lang, "off")
     random_msgs = tr(lang, "on") if cfg.get("random_messages_enabled", True) else tr(lang, "off")
     websearch = tr(lang, "on") if cfg.get("web_search_enabled", True) else tr(lang, "off")
+    reactions = tr(lang, "on") if cfg.get("reactions_enabled", True) else tr(lang, "off")
     prompt = cfg.get("custom_prompt") or ("стандартный" if lang == "ru" else "default")
     if len(prompt) > 900:
         prompt = prompt[:900] + "..."
     theme_disp = tr(lang, "dark") if cfg.get("theme", "dark") == "dark" else tr(lang, "light")
     lang_disp = tr(lang, "russian") if lang == "ru" else tr(lang, "english")
     mode_raw = str(cfg.get("communication_mode", "kent"))
-    if mode_raw == "assistant":
-        mode_disp = tr(lang, "mode_assistant")
-    elif mode_raw == "pro":
-        mode_disp = tr(lang, "mode_pro")
-    else:
-        mode_disp = tr(lang, "mode_kent")
+    mode_disp = tr(lang, "mode_assistant") if mode_raw == "assistant" else (tr(lang, "mode_pro") if mode_raw == "pro" else tr(lang, "mode_kent"))
 
     title = "✦ Настройки Кульша ✦" if lang == "ru" else "✦ Kulsh Settings ✦"
     desc = ("Текущие параметры канала. Изменение — текстом через `кульш конфиг <параметр> <значение>`."
             if lang == "ru" else
             "Current channel parameters. Change via text `kulsh config <param> <value>`.")
-
     embed = discord.Embed(title=title, color=0x10B981, description=desc)
     if lang == "ru":
         embed.add_field(name="🌐 Язык", value=lang_disp, inline=True)
@@ -268,14 +288,15 @@ def ds_config_embed(chat_id: int, user_id: int) -> discord.Embed:
         embed.add_field(name="🧠 Модель", value=model_display_name(cfg.get("model"), lang), inline=True)
         embed.add_field(name="🎛 Температура", value=str(cfg.get("temperature", 0.9)), inline=True)
         embed.add_field(name="💬 Разбивка", value=sep, inline=True)
+        embed.add_field(name="😀 Реакции", value=reactions, inline=True)
         embed.add_field(name="🎨 Стикеры/гифки", value=stickers, inline=True)
         embed.add_field(name="🗣 Автоответ", value=autoreply, inline=True)
-        embed.add_field(name="📢 Случайные сообщения", value=random_msgs, inline=True)
+        embed.add_field(name="📢 Случайные", value=random_msgs, inline=True)
         embed.add_field(name="🔎 Веб-поиск", value=websearch, inline=True)
         embed.add_field(name="🎬 Серия", value=series, inline=True)
         embed.add_field(name="📝 Кастомный промпт", value=prompt, inline=False)
         embed.add_field(
-            name="📖 Команды настройки",
+            name="📖 Команды",
             value=(
                 "`кульш конфиг язык ru|en`\n"
                 "`кульш конфиг тема тёмная|светлая`\n"
@@ -284,12 +305,12 @@ def ds_config_embed(chat_id: int, user_id: int) -> discord.Embed:
                 "`кульш конфиг модель <номер|авто>`\n"
                 "`кульш конфиг температура <0.0-2.0>`\n"
                 "`кульш конфиг разбивка вкл|выкл`\n"
+                "`кульш конфиг реакции вкл|выкл`\n"
                 "`кульш конфиг стикеры вкл|выкл`\n"
                 "`кульш конфиг автоответ вкл|выкл`\n"
                 "`кульш конфиг рандом вкл|выкл`\n"
                 "`кульш конфиг поиск вкл|выкл`\n"
-                "`кульш конфиг промпт <текст|сброс>`\n"
-                "`кульш конфиг серия вкл|выкл`"
+                "`кульш конфиг промпт <текст|сброс>`"
             ),
             inline=False,
         )
@@ -300,31 +321,13 @@ def ds_config_embed(chat_id: int, user_id: int) -> discord.Embed:
         embed.add_field(name="🧠 Model", value=model_display_name(cfg.get("model"), lang), inline=True)
         embed.add_field(name="🎛 Temperature", value=str(cfg.get("temperature", 0.9)), inline=True)
         embed.add_field(name="💬 Split", value=sep, inline=True)
+        embed.add_field(name="😀 Reactions", value=reactions, inline=True)
         embed.add_field(name="🎨 Stickers/GIFs", value=stickers, inline=True)
         embed.add_field(name="🗣 Auto-reply", value=autoreply, inline=True)
-        embed.add_field(name="📢 Random messages", value=random_msgs, inline=True)
+        embed.add_field(name="📢 Random", value=random_msgs, inline=True)
         embed.add_field(name="🔎 Web search", value=websearch, inline=True)
-        embed.add_field(name="🎬 Series reminder", value=series, inline=True)
+        embed.add_field(name="🎬 Series", value=series, inline=True)
         embed.add_field(name="📝 Custom prompt", value=prompt, inline=False)
-        embed.add_field(
-            name="📖 Config commands",
-            value=(
-                "`kulsh config language ru|en`\n"
-                "`kulsh config theme dark|light`\n"
-                "`kulsh config mode kent|assistant`\n"
-                "`kulsh config model` — list\n"
-                "`kulsh config model <number|auto>`\n"
-                "`kulsh config temperature <0.0-2.0>`\n"
-                "`kulsh config split on|off`\n"
-                "`kulsh config stickers on|off`\n"
-                "`kulsh config autoreply on|off`\n"
-                "`kulsh config random on|off`\n"
-                "`kulsh config search on|off`\n"
-                "`kulsh config prompt <text|reset>`\n"
-                "`kulsh config series on|off`"
-            ),
-            inline=False,
-        )
     return embed
 
 
@@ -357,84 +360,84 @@ async def ds_handle_config_param(message: discord.Message, user_id: int, parts: 
 
     if param in ("язык", "language"):
         if val in ("ru", "русский", "russian"):
-            cfg["language"] = "ru"
+            cfg["language"] = "ru"; save_user_configs()
             await message.reply(tr("ru", "ds_setting_lang", tr("ru", "russian")))
         elif val in ("en", "английский", "english"):
-            cfg["language"] = "en"
+            cfg["language"] = "en"; save_user_configs()
             await message.reply(tr("en", "ds_setting_lang", tr("en", "english")))
         else:
             await message.reply(tr(lang, "ds_need_specify_ru_en"))
     elif param in ("тема", "theme"):
         if val in ("тёмная", "темная", "dark"):
-            cfg["theme"] = "dark"
+            cfg["theme"] = "dark"; save_user_configs()
             await message.reply(tr(lang, "ds_setting_theme", tr(lang, "dark")))
         elif val in ("светлая", "light"):
-            cfg["theme"] = "light"
+            cfg["theme"] = "light"; save_user_configs()
             await message.reply(tr(lang, "ds_setting_theme", tr(lang, "light")))
         else:
             await message.reply(tr(lang, "ds_need_specify_theme"))
     elif param in ("режим", "mode"):
         if val in ("кент", "kent", "default"):
-            cfg["communication_mode"] = "kent"
+            cfg["communication_mode"] = "kent"; save_user_configs()
             await message.reply(tr(lang, "ds_setting_mode", tr(lang, "mode_kent")))
         elif val in ("ассистент", "assistant"):
-            cfg["communication_mode"] = "assistant"
+            cfg["communication_mode"] = "assistant"; save_user_configs()
             await message.reply(tr(lang, "ds_setting_mode", tr(lang, "mode_assistant")))
-        elif val in ("pro",):
+        elif val == "pro":
             await message.reply(tr(lang, "mode_need_dm"))
         else:
             await message.reply(tr(lang, "ds_unknown_param"))
     elif param in ("серия", "series"):
-        cfg["series_reminder_enabled"] = bool_on
+        cfg["series_reminder_enabled"] = bool_on; save_user_configs()
         await message.reply(tr(lang, "ds_setting_series", tr(lang, "on") if bool_on else tr(lang, "off")))
     elif param in ("стикеры", "stickers"):
-        cfg["stickers_enabled"] = bool_on
+        cfg["stickers_enabled"] = bool_on; save_user_configs()
         await message.reply(tr(lang, "ds_setting_stickers", tr(lang, "on") if bool_on else tr(lang, "off")))
     elif param in ("разбивка", "split"):
-        cfg["separate_enabled"] = bool_on
+        cfg["separate_enabled"] = bool_on; save_user_configs()
         await message.reply(tr(lang, "ds_setting_sep", tr(lang, "on") if bool_on else tr(lang, "off")))
+    elif param in ("реакции", "reactions"):
+        cfg["reactions_enabled"] = bool_on; save_user_configs()
+        await message.reply(tr(lang, "ds_setting_reactions", tr(lang, "on") if bool_on else tr(lang, "off")))
     elif param in ("автоответ", "autoreply"):
-        cfg["random_reply_enabled"] = bool_on
+        cfg["random_reply_enabled"] = bool_on; save_user_configs()
         await message.reply(tr(lang, "ds_setting_autoreply", tr(lang, "on") if bool_on else tr(lang, "off")))
     elif param in ("рандом", "random"):
-        cfg["random_messages_enabled"] = bool_on
+        cfg["random_messages_enabled"] = bool_on; save_user_configs()
         await message.reply(tr(lang, "ds_setting_random", tr(lang, "on") if bool_on else tr(lang, "off")))
     elif param in ("поиск", "search"):
-        cfg["web_search_enabled"] = bool_on
+        cfg["web_search_enabled"] = bool_on; save_user_configs()
         await message.reply(tr(lang, "ds_setting_websearch", tr(lang, "on") if bool_on else tr(lang, "off")))
     elif param in ("температура", "temperature"):
         try:
             t = max(0.0, min(2.0, float(val)))
-            cfg["temperature"] = t
+            cfg["temperature"] = t; save_user_configs()
             await message.reply(tr(lang, "ds_setting_temp", t))
         except ValueError:
             await message.reply(tr(lang, "ds_setting_temp_bad"))
     elif param in ("промпт", "prompt"):
         new_prompt = " ".join(parts[3:]).strip()
         if new_prompt.lower() in ("сброс", "reset", "убрать", "стандарт", "default"):
-            cfg["custom_prompt"] = None
+            cfg["custom_prompt"] = None; save_user_configs()
             await message.reply(tr(lang, "ds_setting_prompt_reset"))
         elif new_prompt:
-            cfg["custom_prompt"] = new_prompt[:2000]
+            cfg["custom_prompt"] = new_prompt[:2000]; save_user_configs()
             await message.reply(tr(lang, "ds_setting_prompt_set"))
         else:
             await message.reply(tr(lang, "ds_setting_prompt_need"))
     elif param in ("модель", "model"):
         if not val:
             lines = [f"`{i}` — {MODEL_DISPLAY.get(m, m)}" for i, m in enumerate(MODEL_LIST)]
-            await message.reply(
-                f"{tr(lang, 'ds_setting_model', model_display_name(cfg.get('model'), lang))}\n\n" + "\n".join(lines)
-            )
+            await message.reply(f"{tr(lang, 'ds_setting_model', model_display_name(cfg.get('model'), lang))}\n\n" + "\n".join(lines))
         elif val in ("авто", "auto"):
-            cfg["model"] = None
+            cfg["model"] = None; save_user_configs()
             await message.reply(tr(lang, "ds_setting_model_auto"))
         else:
             try:
                 idx = int(val)
                 if 0 <= idx < len(MODEL_LIST):
-                    cfg["model"] = MODEL_LIST[idx]
-                    await message.reply(tr(lang, "ds_setting_model",
-                                            MODEL_DISPLAY.get(MODEL_LIST[idx], MODEL_LIST[idx])))
+                    cfg["model"] = MODEL_LIST[idx]; save_user_configs()
+                    await message.reply(tr(lang, "ds_setting_model", MODEL_DISPLAY.get(MODEL_LIST[idx], MODEL_LIST[idx])))
                 else:
                     await message.reply(tr(lang, "ds_setting_model_badnum"))
             except ValueError:
@@ -450,45 +453,28 @@ def ds_slash_help(lang: str) -> str:
 def ds_slash_menu(lang: str) -> str:
     if lang == "ru":
         return (
-            "# ✦ Кульш AI — меню ✦\n\n"
-            "✦彡巛〢 ✦ 彡 巛 〢 ✦\n\n"
-            "Открытая языковая модель с набором встроенных инструментов.\n\n"
-            "**Основные**\n\n"
-            "- `/start` — приветствие\n"
-            "- `/help` — полный список команд\n"
-            "- `/status` — состояние бота\n"
-            "- `/config` — настройки канала\n"
-            "- `/donate` — поддержка разработки\n"
-            "- `/credits` — баланс кредитов\n\n"
-            "**Инструменты**\n\n"
-            "- `/avatar` — описать аватарку\n"
-            "- `/recall` — вспомнить последние медиа\n"
-            "- `/psl` — оценка внешности\n"
-            "- `/battle` — баттл двух фото\n"
-            "- `/femboy` — Femboy Rate\n"
-            "- `/femboy-battle` — фембой-баттл двух фото\n"
-            "- `/logs` — логи сервера (админам)\n\n"
+            "# ✦ Кульш AI — меню ✦\n\n✦彡巛〢 ✦ 彡 巛 〢 ✦\n\n"
+            "Открытая языковая модель с набором инструментов.\n\n"
+            "**Основные**\n\n- `/start` — приветствие\n- `/help` — полный список команд\n"
+            "- `/status` — состояние бота\n- `/config` — настройки канала\n"
+            "- `/donate` — поддержка\n- `/credits` — кредиты\n\n"
+            "**Инструменты**\n\n- `/avatar` — аватарка\n- `/recall` — последние медиа\n"
+            "- `/search` — веб-поиск\n- `/chart` — инфографика\n"
+            "- `/psl` — оценка внешности\n- `/battle` — баттл фото\n"
+            "- `/femboy` — Femboy Rate\n- `/femboy-battle` — фембой-баттл\n"
+            "- `/groupinfo` — инфо о сервере\n- `/userinfo` — инфо о пользователе\n"
+            "- `/logs` — логи (админам)\n\n"
             f"🍷🗿 {MINI_APP_URL}"
         )
     return (
-        "# ✦ Kulsh AI — menu ✦\n\n"
-        "✦彡巛〢 ✦ 彡 巛 〢 ✦\n\n"
+        "# ✦ Kulsh AI — menu ✦\n\n✦彡巛〢 ✦ 彡 巛 〢 ✦\n\n"
         "An open-source language model with built-in tools.\n\n"
-        "**Basics**\n\n"
-        "- `/start` — greeting\n"
-        "- `/help` — command list\n"
-        "- `/status` — bot status\n"
-        "- `/config` — channel settings\n"
-        "- `/donate` — support development\n"
-        "- `/credits` — credits balance\n\n"
-        "**Tools**\n\n"
-        "- `/avatar` — describe avatar\n"
-        "- `/recall` — recall recent media\n"
-        "- `/psl` — looksmaxxing\n"
-        "- `/battle` — two-photo battle\n"
-        "- `/femboy` — Femboy Rate\n"
-        "- `/femboy-battle` — femboy two-photo battle\n"
-        "- `/logs` — server logs (admins)\n\n"
+        "**Basics**\n\n- `/start` — greeting\n- `/help` — command list\n"
+        "- `/status` — bot status\n- `/config` — settings\n"
+        "- `/donate` — support\n- `/credits` — credits\n\n"
+        "**Tools**\n\n- `/avatar`, `/recall`, `/search`, `/chart`\n"
+        "- `/psl`, `/battle`, `/femboy`, `/femboy-battle`\n"
+        "- `/groupinfo`, `/userinfo`, `/logs`\n\n"
         f"🍷🗿 {MINI_APP_URL}"
     )
 
@@ -496,25 +482,15 @@ def ds_slash_menu(lang: str) -> str:
 def ds_slash_start(lang: str) -> str:
     if lang == "ru":
         return (
-            "# 🍷🗿 Кульш на связи\n\n"
-            "✦彡巛〢 ✦ 彡 巛 〢 ✦\n\n"
-            "Открытая языковая модель с анализом изображений и настройкой под себя.\n\n"
-            "**🚀 С чего начать**\n\n"
-            "- `/menu` — все разделы\n"
-            "- `/help` — список команд\n"
-            "- `/status` — состояние бота\n"
-            "- `/config` — настройки канала\n\n"
+            "# 🍷🗿 Кульш на связи\n\n✦彡巛〢 ✦ 彡 巛 〢 ✦\n\n"
+            "Открытая языковая модель с анализом изображений.\n\n"
+            "**🚀 С чего начать**\n\n- `/menu` — все разделы\n- `/help` — команды\n"
+            "- `/status` — состояние\n- `/config` — настройки\n\n"
             f"🍷🗿 {MINI_APP_URL}"
         )
     return (
-        "# 🍷🗿 Kulsh is online\n\n"
-        "✦彡巛〢 ✦ 彡 巛 〢 ✦\n\n"
-        "An open-source language model with image analysis and personal configuration.\n\n"
-        "**🚀 Get started**\n\n"
-        "- `/menu` — all sections\n"
-        "- `/help` — command list\n"
-        "- `/status` — bot status\n"
-        "- `/config` — channel settings\n\n"
+        "# 🍷🗿 Kulsh is online\n\n✦彡巛〢 ✦ 彡 巛 〢 ✦\n\n"
+        "An open-source language model with image analysis.\n\n"
         f"🍷🗿 {MINI_APP_URL}"
     )
 
@@ -546,19 +522,13 @@ async def ds_slash_status(interaction: discord.Interaction) -> None:
     lang = ds_lang_of(interaction)
     cfg = get_user_config("ds", interaction.channel_id or 0, interaction.user.id)
     mode_raw = str(cfg.get("communication_mode", "kent"))
-    if mode_raw == "assistant":
-        mode_label = tr(lang, "mode_assistant")
-    elif mode_raw == "pro":
-        mode_label = tr(lang, "mode_pro")
-    else:
-        mode_label = tr(lang, "mode_kent")
+    mode_label = tr(lang, "mode_assistant") if mode_raw == "assistant" else (tr(lang, "mode_pro") if mode_raw == "pro" else tr(lang, "mode_kent"))
     try:
         latency_ms = round(interaction.client.latency * 1000)
     except Exception:
         latency_ms = 50
     text = (
-        f"# 🟢 {tr(lang, 'status_title')}\n\n"
-        f"✦ 彡 巛 〢 ✦ 彡 巛 〢 ✦\n\n"
+        f"# 🟢 {tr(lang, 'status_title')}\n\n✦ 彡 巛 〢 ✦ 彡 巛 〢 ✦\n\n"
         f"**{tr(lang, 'status_online')}**\n\n"
         f"- {tr(lang, 'status_uptime')}: `{human_uptime()}`\n"
         f"- {tr(lang, 'status_latency')}: `~{latency_ms} ms`\n"
@@ -572,11 +542,9 @@ async def ds_slash_status(interaction: discord.Interaction) -> None:
 async def ds_slash_donate(interaction: discord.Interaction) -> None:
     lang = ds_lang_of(interaction)
     text = (
-        f"# {tr(lang, 'donate_title')}\n\n"
-        f"✦ 彡 巛 〢 ✦ 彡 巛 〢 ✦\n\n"
+        f"# {tr(lang, 'donate_title')}\n\n✦ 彡 巛 〢 ✦ 彡 巛 〢 ✦\n\n"
         f"{tr(lang, 'donate_intro')}\n\n"
-        f"- {tr(lang, 'donate_online')}: {DONATE_URL}\n"
-        f"- 🔗 GitHub: {GITHUB_URL}"
+        f"- {tr(lang, 'donate_online')}: {DONATE_URL}\n- 🔗 GitHub: {GITHUB_URL}"
     )
     await interaction.response.send_message(text)
 
@@ -610,17 +578,12 @@ async def ds_slash_avatar(interaction: discord.Interaction, user: discord.Member
         img_bytes = await download_image_bytes(target.display_avatar.url)
         prompt = (
             f"Ты только что посмотрел аватарку пользователя {target.display_name}. "
-            f"Опиши коротко (1-2 предложения) в стиле Кульша. Без markdown. "
-            f"НЕ используй маркеры !separate, !avatar, !recall_media, !sticker, !gif, !search, !chart."
+            f"Опиши коротко (1-2 предложения) в стиле Кульша. Без markdown."
             if lang == "ru" else
-            f"You've just seen the avatar of {target.display_name}. "
-            f"Describe briefly (1-2 sentences) in Kulsh's style. No markdown. "
-            f"Do NOT use markers !separate, !avatar, !recall_media, !sticker, !gif, !search, !chart."
+            f"You've just seen the avatar of {target.display_name}. Describe briefly in Kulsh's style."
         )
-        raw = await ask_ai_async(
-            prompt=prompt, image_bytes=img_bytes, image_mime="image/jpeg",
-            chat_id=chat_id, user_id=user_id, platform="ds",
-        )
+        raw = await ask_ai_async(prompt=prompt, image_bytes=img_bytes, image_mime="image/jpeg",
+                                 chat_id=chat_id, user_id=user_id, platform="ds")
         segments = clean_extra_text(raw) if raw else []
         if not segments:
             await interaction.followup.send(tr(lang, "avatar_fail"))
@@ -644,31 +607,8 @@ async def ds_slash_recall(interaction: discord.Interaction, count: int = 3) -> N
         await interaction.followup.send(tr(lang, "recall_fail"))
         return
     last = history[-n:]
-    lines = [f"- {it.get('type', 'media')} {it.get('sender', '?')}: {(it.get('caption') or '')[:120]}"
-             for it in last]
-    meta = "\n".join(lines)
-    try:
-        prompt = (
-            f"Ты вспоминаешь недавние медиа. Список:\n{meta}\n\n"
-            f"Коротко прокомментируй в стиле Кульша. Без markdown. "
-            f"НЕ используй маркеры !separate, !avatar, !recall_media, !sticker, !gif, !search, !chart."
-            if lang == "ru" else
-            f"You recall recent media. List:\n{meta}\n\n"
-            f"Comment briefly in Kulsh's style. No markdown. "
-            f"Do NOT use markers !separate, !avatar, !recall_media, !sticker, !gif, !search, !chart."
-        )
-        raw = await ask_ai_async(
-            prompt=prompt, chat_id=chat_id, user_id=user_id, platform="ds",
-        )
-        segments = clean_extra_text(raw) if raw else []
-        if not segments:
-            await interaction.followup.send(meta)
-            return
-        for seg in segments:
-            await interaction.followup.send(seg)
-    except Exception as e:
-        logger.error(f"DS slash recall: {e}")
-        await interaction.followup.send(f"Ошибка: {e}")
+    lines = [f"- {it.get('type', 'media')} {it.get('sender', '?')}: {(it.get('caption') or '')[:120]}" for it in last]
+    await interaction.followup.send("\n".join(lines))
 
 
 async def ds_slash_logs(interaction: discord.Interaction) -> None:
@@ -705,16 +645,10 @@ async def ds_slash_search(interaction: discord.Interaction, query: str) -> None:
         return
     context = format_search_results(results)
     prompt = (
-        f"Пользователь искал в интернете: {query}\n\n"
-        f"Найденные результаты:\n{context}\n\n"
-        f"Сформулируй краткий ответ (3-6 предложений) на основе этих результатов. "
-        f"Ответь в стиле Кульша. Без маркеров !search, !chart."
+        f"Пользователь искал: {query}\n\n{context}\n\nКраткий ответ в стиле Кульша. Без !search, !chart."
     )
     answer = await ask_ai_async(prompt=prompt, chat_id=chat_id, user_id=user_id, platform="ds")
     full = f"🔎 **{query}**\n\n{answer or ''}"
-    sources = [f"{i}. [{r.get('title', '')[:60]}]({r.get('url', '')})" for i, r in enumerate(results[:4], 1)]
-    if sources:
-        full += "\n\n**" + tr(lang, "search_source") + ":**\n" + "\n".join(sources)
     await interaction.followup.send(full[:1900])
 
 
@@ -726,15 +660,11 @@ async def ds_slash_chart(interaction: discord.Interaction, description: str) -> 
     lang = ds_lang_of(interaction)
     chart_prompt = (
         f"Сгенерируй JSON-спецификацию инфографики по описанию:\n\n{description}\n\n"
-        f"Верни ТОЛЬКО JSON-объект без markdown и текста вокруг. "
-        f'Структура: {{"theme": "dark_modern|light_minimal|ocean|retro", "title": "...", "subtitle": "...", '
-        f'"blocks": [{{"type": "heading"|"text"|"divider"|"bar"|"line"|"pie"|"pie3d"|"table", ...}}]}}'
+        f"Верни ТОЛЬКО JSON-объект без markdown."
     )
     raw = await ask_ai_async(
         prompt=chart_prompt,
-        system_instruction_override=(
-            "You are a data-visualization JSON generator. Output ONLY valid JSON. No markdown, no prose."
-        ),
+        system_instruction_override="You are a data-visualization JSON generator. Output ONLY valid JSON.",
         chat_id=chat_id, user_id=user_id, platform="ds",
     )
     spec = None
@@ -782,20 +712,10 @@ async def ds_slash_psl(interaction: discord.Interaction, image: discord.Attachme
         report = (
             f"**{tr(lang, 'psl_title')}**\n"
             f"{tr(lang, 'psl_gender')} {ai_data.get('gender', '?')}\n"
-            f"{tr(lang, 'psl_score')} `{ai_data.get('psl', '?')}/8.0`\n"
-            f"{tr(lang, 'psl_tier')} `{ai_data.get('tier', '?')}`\n"
+            f"{tr(lang, 'psl_score')} `{ai_data.get('psl', '?')}/8.0`"
         )
-        if ai_data.get("potential"):
-            report += f"{tr(lang, 'psl_potential')} `{ai_data['potential']}`\n"
-        report += f"\n{ai_data.get('summary', '')}"
-        if advice and ai_data.get("advice"):
-            report += f"\n\n**{tr(lang, 'psl_advice')}**\n{ai_data['advice']}"
-        await interaction.followup.send(
-            content=report[:1900],
-            file=discord.File(fp=infographic, filename="psl.png"),
-        )
-        if len(report) > 1900:
-            await interaction.followup.send(report[1900:])
+        await interaction.followup.send(content=report[:1900],
+                                        file=discord.File(fp=infographic, filename="psl.png"))
     except Exception as e:
         logger.error(f"DS slash psl: {e}")
         await interaction.followup.send(f"Ошибка: {e}")
@@ -819,19 +739,9 @@ async def ds_slash_battle(interaction: discord.Interaction, image1: discord.Atta
         img = await create_battle_infographic(p1, p2, ai_data, theme=theme, lang=lang)
         winner_num = str(ai_data.get("winner", "1"))
         winner_label = tr(lang, "battle_first") if winner_num == "1" else tr(lang, "battle_second")
-        report = (
-            f"**{tr(lang, 'battle_title')}**\n\n"
-            f"{tr(lang, 'battle_winner')} **{winner_label}**\n"
-            f"{tr(lang, 'battle_reason')} {ai_data.get('reason', '')}\n\n"
-            f"{tr(lang, 'battle_photo1')} PSL {ai_data.get('photo1', {}).get('psl', '?')} | "
-            f"{ai_data.get('photo1', {}).get('tier', '?')}\n"
-            f"{tr(lang, 'battle_photo2')} PSL {ai_data.get('photo2', {}).get('psl', '?')} | "
-            f"{ai_data.get('photo2', {}).get('tier', '?')}"
-        )
-        await interaction.followup.send(
-            content=report[:1900],
-            file=discord.File(fp=img, filename="battle.png"),
-        )
+        report = f"**{tr(lang, 'battle_title')}**\n\n{tr(lang, 'battle_winner')} **{winner_label}**"
+        await interaction.followup.send(content=report[:1900],
+                                        file=discord.File(fp=img, filename="battle.png"))
     except Exception as e:
         logger.error(f"DS slash battle: {e}")
         await interaction.followup.send(f"Ошибка: {e}")
@@ -855,20 +765,10 @@ async def ds_slash_femboy(interaction: discord.Interaction, image: discord.Attac
         report = (
             f"**{tr(lang, 'femboy_title')}**\n"
             f"{tr(lang, 'femboy_gender')} {ai_data.get('gender', '?')}\n"
-            f"{tr(lang, 'femboy_score')} `{ai_data.get('fmb', '?')}/10.0`\n"
-            f"{tr(lang, 'femboy_tier')} `{ai_data.get('tier', '?')}`\n"
+            f"{tr(lang, 'femboy_score')} `{ai_data.get('fmb', '?')}/10.0`"
         )
-        if ai_data.get("potential"):
-            report += f"{tr(lang, 'femboy_potential')} `{ai_data['potential']}`\n"
-        report += f"\n{ai_data.get('summary', '')}"
-        if advice and ai_data.get("advice"):
-            report += f"\n\n**{tr(lang, 'femboy_advice')}**\n{ai_data['advice']}"
-        await interaction.followup.send(
-            content=report[:1900],
-            file=discord.File(fp=infographic, filename="femboy.png"),
-        )
-        if len(report) > 1900:
-            await interaction.followup.send(report[1900:])
+        await interaction.followup.send(content=report[:1900],
+                                        file=discord.File(fp=infographic, filename="femboy.png"))
     except Exception as e:
         logger.error(f"DS slash femboy: {e}")
         await interaction.followup.send(f"Ошибка: {e}")
@@ -892,19 +792,56 @@ async def ds_slash_femboy_battle(interaction: discord.Interaction, image1: disco
         img = await create_femboy_battle_infographic(p1, p2, ai_data, theme=theme, lang=lang)
         winner_num = str(ai_data.get("winner", "1"))
         winner_label = tr(lang, "femboy_battle_first") if winner_num == "1" else tr(lang, "femboy_battle_second")
-        report = (
-            f"**{tr(lang, 'femboy_battle_title')}**\n\n"
-            f"{tr(lang, 'femboy_battle_winner')} **{winner_label}**\n"
-            f"{tr(lang, 'femboy_battle_reason')} {ai_data.get('reason', '')}\n\n"
-            f"{tr(lang, 'femboy_battle_photo1')} FMB {ai_data.get('photo1', {}).get('fmb', '?')} | "
-            f"{ai_data.get('photo1', {}).get('tier', '?')}\n"
-            f"{tr(lang, 'femboy_battle_photo2')} FMB {ai_data.get('photo2', {}).get('fmb', '?')} | "
-            f"{ai_data.get('photo2', {}).get('tier', '?')}"
-        )
-        await interaction.followup.send(
-            content=report[:1900],
-            file=discord.File(fp=img, filename="femboy_battle.png"),
-        )
+        report = f"**{tr(lang, 'femboy_battle_title')}**\n\n{tr(lang, 'femboy_battle_winner')} **{winner_label}**"
+        await interaction.followup.send(content=report[:1900],
+                                        file=discord.File(fp=img, filename="femboy_battle.png"))
     except Exception as e:
         logger.error(f"DS slash femboy battle: {e}")
         await interaction.followup.send(f"Ошибка: {e}")
+
+
+# ============================================================
+# GROUP / USER INFO (slash)
+# ============================================================
+async def ds_slash_groupinfo(interaction: discord.Interaction) -> None:
+    lang = ds_lang_of(interaction)
+    if interaction.guild is None:
+        await interaction.response.send_message(
+            "не в гильдии, че сказать" if lang == "ru" else "not in a guild, nothing to say",
+            ephemeral=True,
+        )
+        return
+    g = interaction.guild
+    lines = []
+    lines.append(("Название: " if lang == "ru" else "Name: ") + (g.name or "?"))
+    lines.append(f"ID: {g.id}")
+    if g.owner_id:
+        lines.append(f"Owner ID: {g.owner_id}")
+    lines.append(("Участников: " if lang == "ru" else "Members: ") + str(g.member_count or "?"))
+    lines.append(("Бустов: " if lang == "ru" else "Boosts: ") + str(g.premium_subscription_count or 0))
+    lines.append(("Создан: " if lang == "ru" else "Created: ") + (g.created_at.strftime('%d.%m.%Y') if g.created_at else "?"))
+    if g.description:
+        lines.append(("Описание: " if lang == "ru" else "Description: ") + str(g.description)[:300])
+    text = "\n".join(lines)
+    await interaction.response.send_message(text[:1900])
+
+
+@app_commands.describe(user="User to inspect / Пользователь")
+async def ds_slash_userinfo(interaction: discord.Interaction, user: discord.Member | None = None) -> None:
+    lang = ds_lang_of(interaction)
+    target = user or interaction.user
+    lines = []
+    lines.append(("Имя: " if lang == "ru" else "Name: ") + str(target.display_name))
+    lines.append(f"Username: @{target.name}")
+    lines.append(f"ID: {target.id}")
+    if isinstance(target, discord.Member):
+        if target.nick:
+            lines.append(("Ник: " if lang == "ru" else "Nickname: ") + target.nick)
+        if target.joined_at:
+            lines.append(("Вступил: " if lang == "ru" else "Joined: ") + target.joined_at.strftime('%d.%m.%Y'))
+        roles = [r.name for r in target.roles if r.name != "@everyone"]
+        if roles:
+            lines.append(("Роли: " if lang == "ru" else "Roles: ") + ", ".join(roles[:8]))
+    if target.bot:
+        lines.append(("Бот: " if lang == "ru" else "Bot: ") + "да" if lang == "ru" else "yes")
+    await interaction.response.send_message("\n".join(lines)[:1900])

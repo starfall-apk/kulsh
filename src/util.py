@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.40.0
+# Kulsh GPT | v2.41.0
 # by (main author): starfall-apk
 # coauthor & bot hosting: pomidorka1515
 
@@ -30,7 +30,7 @@ from PIL import ImageFont
 from telebot.async_telebot import AsyncTeleBot
 
 # ============================================================
-# ЛОГГЕР (более структурный вывод)
+# ЛОГГЕР
 # ============================================================
 logger = logging.getLogger('KulshBot')
 logger.setLevel(logging.DEBUG)
@@ -45,9 +45,8 @@ console_handler.setFormatter(log_formatter)
 logger.addHandler(file_handler)
 logger.addHandler(console_handler)
 
-# Время старта процесса — для /status
 BOT_START_TS: float = time.time()
-BOT_VERSION: str = "2.40.0"
+BOT_VERSION: str = "2.41.0"
 
 # ============================================================
 # ВРЕМЯ
@@ -158,21 +157,10 @@ def mode_is_valid(mode: str) -> bool:
 # ДЕКОР
 # ============================================================
 DECO = {
-    "sparkle": "✦",
-    "wave": "彡",
-    "rivers": "巛",
-    "stroke": "〢",
-    "line": "─",
-    "dline": "═",
-    "dot": "▪",
-    "hollow": "▫",
-    "arrow": "▸",
-    "diamond": "◈",
-    "star": "★",
-    "star_hollow": "☆",
-    "flower": "❋",
-    "dash": "─",
-    "bul": "•",
+    "sparkle": "✦", "wave": "彡", "rivers": "巛", "stroke": "〢",
+    "line": "─", "dline": "═", "dot": "▪", "hollow": "▫",
+    "arrow": "▸", "diamond": "◈", "star": "★", "star_hollow": "☆",
+    "flower": "❋", "dash": "─", "bul": "•",
 }
 
 
@@ -311,6 +299,7 @@ tools_sessions: dict[int, dict[str, Any]] = {}
 chat_media_history: dict[str, deque[dict[str, Any]]] = defaultdict(lambda: deque(maxlen=50))
 last_random_reply: dict[str, float] = {}
 last_old_reply: dict[str, float] = {}
+last_bot_reply: dict[str, float] = {}   # cooldown для общения с ботами
 battle_media_groups: dict[str, asyncio.Task[None]] = {}
 battle_photos: dict[str, list[bytes]] = {}
 pending_donations: dict[int, int] = {}
@@ -320,12 +309,14 @@ user_femboy_state: defaultdict[int, bool] = defaultdict(lambda: False)
 DONATIONS_FILE = 'donations.json'
 MEMORY_FILE = 'long_term_memory.json'
 CREDITS_FILE = 'credits.json'
+USER_CONFIGS_FILE = 'user_configs.json'
 DAILY_CREDITS = 500
 COST_ARCHIVE_EDIT = 500
 COST_CONSOLE_CMD = 25
 MAX_FILE_SIZE = 500 * 1024
 MAX_TOTAL_UNPACKED = 5 * 1024 * 1024
 MAX_FILES = 100
+MAX_SEPARATE_PARTS = 8   # лимит !separate
 
 # ============================================================
 # ФАЙЛЫ СОСТОЯНИЯ
@@ -363,6 +354,33 @@ def save_long_term_memory(data: JsonDict) -> None:
 
 def save_credits() -> None:
     save_json_file(CREDITS_FILE, credits_data)
+
+
+def save_user_configs() -> None:
+    """Сохраняет per-user настройки на диск — чтобы не слетали при рестарте."""
+    try:
+        data = {k: dict(v) for k, v in user_configs.items()}
+        with open(USER_CONFIGS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"save_user_configs: {e}")
+
+
+def load_user_configs() -> None:
+    if not os.path.exists(USER_CONFIGS_FILE):
+        return
+    try:
+        with open(USER_CONFIGS_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            return
+        for k, v in data.items():
+            if isinstance(v, dict):
+                merged = DEFAULT_USER_CONFIG.copy()
+                merged.update(v)
+                user_configs[k] = merged
+    except Exception as e:
+        logger.error(f"load_user_configs: {e}")
 
 
 def add_donation(platform: str, user_id: int, amount: int, name: str = "Аноним") -> None:
@@ -435,6 +453,7 @@ DEFAULT_USER_CONFIG = {
     "tools_enabled": False,
     "web_search_enabled": True,
     "communication_mode": DEFAULT_COMMUNICATION_MODE,
+    "reactions_enabled": True,
 }
 
 
@@ -638,15 +657,21 @@ TYPING_MAX_DELAY = 5.0
 TYPING_JITTER_MIN = 0.85
 TYPING_JITTER_MAX = 1.25
 
+# Множитель задержки для сегментов после !separate (чтобы выглядело живее)
+SEPARATED_TYPING_MULTIPLIER = 2.4
 
-def calc_typing_delay(text: str) -> float:
+
+def calc_typing_delay(text: str, segment_index: int = 0) -> float:
     if not text:
         return TYPING_MIN_DELAY
     n = len(text)
     per_char = random.uniform(TYPING_MS_PER_CHAR_MIN, TYPING_MS_PER_CHAR_MAX)
     delay = n * per_char
     delay *= random.uniform(TYPING_JITTER_MIN, TYPING_JITTER_MAX)
-    return max(TYPING_MIN_DELAY, min(TYPING_MAX_DELAY, delay))
+    # Дополнительные сегменты (после !separate) печатаются медленнее — пауза между сообщениями.
+    if segment_index > 0:
+        delay *= SEPARATED_TYPING_MULTIPLIER
+    return max(TYPING_MIN_DELAY, min(TYPING_MAX_DELAY * (1 + segment_index * 0.5), delay))
 
 # ============================================================
 # MEMORY EXTRACTION
@@ -662,41 +687,131 @@ def clean_json_text(text: str) -> str:
     return text.strip()
 
 # ============================================================
+# ОПЕЧАТКИ — соседние клавиши
+# ============================================================
+# Физически соседние клавиши на QWERTY (и соответствующие им в ЙЦУКЕН).
+_EN_ADJ = {
+    'q': 'wa', 'w': 'qeas', 'e': 'wrsd', 'r': 'etdf', 't': 'ryfg',
+    'y': 'tugh', 'u': 'yihj', 'i': 'uojk', 'o': 'ipkl', 'p': 'ol',
+    'a': 'qwsxz', 's': 'awedxz', 'd': 'serfcx', 'f': 'drtgvc', 'g': 'ftyhbv',
+    'h': 'gyujnb', 'j': 'huikmn', 'k': 'jiolm', 'l': 'kop',
+    'z': 'asx', 'x': 'zsdc', 'c': 'xdfv', 'v': 'cfgb', 'b': 'vghn',
+    'n': 'bhjm', 'm': 'njk',
+}
+_RU_ADJ = {
+    'й': 'цф', 'ц': 'йуыв', 'у': 'цкeв', 'к': 'уенa', 'е': 'кнр',
+    'н': 'егт', 'г': 'нш', 'ш': 'гщ', 'щ': 'шз', 'з': 'щх',
+    'х': 'зъ', 'ъ': 'х',
+    'ф': 'йыa', 'ы': 'фцв', 'в': 'ыуа', 'а': 'впf', 'п': 'ар',
+    'р': 'по', 'о': 'рл', 'л': 'од', 'д': 'лж', 'ж': 'дэ', 'э': 'ж',
+    'я': 'ч', 'ч': 'яс', 'с': 'чм', 'м': 'си', 'и': 'мт',
+    'т': 'иь', 'ь': 'тб', 'б': 'ью', 'ю': 'б',
+}
+
+_TYPO_SKIP_PREFIXES = ("http://", "https://", "www.", "t.me/", "@", "#", "/", "`", "```")
+
+
+def _apply_typo_word(word: str) -> str:
+    """Заменяет одну букву в слове на соседнюю по клавиатуре."""
+    if len(word) < 3:
+        return word
+    # Индексы букв, кроме первой (чтобы не ломать начало слова)
+    letter_positions = [i for i, c in enumerate(word) if c.isalpha()]
+    if len(letter_positions) < 3:
+        return word
+    # Выбираем из всех кроме первой
+    pos = random.choice(letter_positions[1:])
+    c = word[pos]
+    adj = _EN_ADJ.get(c.lower()) or _RU_ADJ.get(c.lower())
+    if not adj:
+        return word
+    sub = random.choice(adj)
+    if c.isupper():
+        sub = sub.upper()
+    return word[:pos] + sub + word[pos + 1:]
+
+
+def add_typos(text: str, probability: float = 0.04) -> str:
+    """
+    Редкие реалистичные опечатки: буква заменяется на соседнюю по клавиатуре.
+    Не трогает URL, упоминания, хэштеги, маркеры (!), inline-код и markdown-разметку.
+    """
+    if not text or probability <= 0:
+        return text
+    # Разбиваем с сохранением пробелов
+    parts = re.split(r'(\s+)', text)
+    out: list[str] = []
+    for part in parts:
+        if not part or part.isspace():
+            out.append(part)
+            continue
+        low = part.lower()
+        if any(low.startswith(p) for p in _TYPO_SKIP_PREFIXES):
+            out.append(part)
+            continue
+        # Пропускаем токены с кодом/разметкой
+        if any(ch in part for ch in ('`', '\\', '_', '*', '[', ']', '(', ')')):
+            out.append(part)
+            continue
+        if random.random() > probability:
+            out.append(part)
+            continue
+        out.append(_apply_typo_word(part))
+    return ''.join(out)
+
+# ============================================================
 # УТИЛИТЫ-МАРКЕРЫ
 # ============================================================
 # Матчим ТОЛЬКО варианты с ведущим "!".
-# ВАЖНО: НЕ используем \b — в Python \b юникод-осведомлён, а \w включает кириллицу,
-# поэтому "!separateпривет" без пробела не матчился (между 'e' и 'п' нет границы слова).
-# Используем (?![A-Za-z]) — запрещаем только латинскую букву сразу после маркера.
+# НЕ используем \b — \b в Python юникод-осведомлён, и кириллица тоже "слово".
 UTILITY_PATTERNS = {
     "avatar": re.compile(r'!\s*avatar(?![A-Za-z])', re.IGNORECASE),
     "recall_media": re.compile(r'!\s*recall[\s_]*media(?![A-Za-z])', re.IGNORECASE),
     "sticker": re.compile(r'!\s*sticker(?![A-Za-z])', re.IGNORECASE),
     "gif": re.compile(r'!\s*gif(?![A-Za-z])', re.IGNORECASE),
+    "group_info": re.compile(r'!\s*group[\s_]*info(?![A-Za-z])', re.IGNORECASE),
+    "user_info": re.compile(r'!\s*user[\s_]*info(?::\s*(\d+))?(?![A-Za-z])', re.IGNORECASE),
 }
 SEPARATOR_PATTERN = re.compile(r'!\s*sep[ae]rate(?![A-Za-z])', re.IGNORECASE)
 
+# Реакции. Формат: !react:👍 или !react:👍🔥 (несколько подряд).
+REACT_PATTERN = re.compile(r'!\s*react\s*:\s*([^\s\n]+)', re.IGNORECASE)
+# Причина/мысль (для внутренней памяти, не отправляется):
+WHY_PATTERN = re.compile(r'!\s*why\s*:\s*([^\n]+)', re.IGNORECASE)
 
-def split_by_separator(text: str) -> list[str]:
+
+def split_by_separator(text: str, max_parts: int = MAX_SEPARATE_PARTS) -> list[str]:
     if not text:
         return []
     parts = SEPARATOR_PATTERN.split(text)
-    return [p.strip() for p in parts if p and p.strip()]
+    parts = [p.strip() for p in parts if p and p.strip()]
+    if len(parts) > max_parts:
+        # Слишком много — склеиваем хвост в последний сегмент.
+        head = parts[:max_parts - 1]
+        tail = " ".join(parts[max_parts - 1:])
+        head.append(tail)
+        parts = head
+    return parts
 
 
-def extract_utility_markers(text: str) -> tuple[str, list[str]]:
+def extract_utility_markers(text: str) -> tuple[str, list[str], dict[str, str]]:
     text = text or ""
     markers: list[str] = []
+    extras: dict[str, str] = {}
     for name, pat in UTILITY_PATTERNS.items():
-        if pat.search(text):
+        m = pat.search(text)
+        if m:
             markers.append(name)
+            # Для user_info берём id, если был
+            if name == "user_info" and m.group(1):
+                extras["user_info_id"] = m.group(1)
         text = pat.sub(' ', text)
-    # мягкая нормализация пробелов — но НЕ режем одиночные пробелы внутри слов
+    # Нормализация
     text = re.sub(r'[ \t]{2,}', ' ', text)
     text = re.sub(r'[ \t]+([,.!?;:])', r'\1', text)
     text = re.sub(r'[ \t]+\n', '\n', text)
     text = re.sub(r'\n{3,}', '\n\n', text)
-    return text.strip(), markers
+    return text.strip(), markers, extras
 
 
 def dedupe_markers(markers: list[str]) -> list[str]:
@@ -710,7 +825,8 @@ def dedupe_markers(markers: list[str]) -> list[str]:
 
 
 def process_ai_response(raw: str, separate_enabled: bool = True) -> tuple[list[str], list[str]]:
-    raw_clean, markers = extract_utility_markers(raw or "")
+    """Возвращает (сегменты_текста, маркеры_утилит). Реакции/why обрабатываются отдельно."""
+    raw_clean, markers, _ = extract_utility_markers(raw or "")
     markers = dedupe_markers(markers)
     if separate_enabled:
         segments = split_by_separator(raw_clean)
@@ -722,11 +838,64 @@ def process_ai_response(raw: str, separate_enabled: bool = True) -> tuple[list[s
     return clean_segments, markers
 
 
+def extract_reaction_and_why(text: str) -> tuple[list[str], str | None, str | None]:
+    """
+    Возвращает (очищенный_текст_по_абзацам, emoji_строка, why_строка).
+    Эмодзи могут быть перечислены в одном токене: !react:👍🔥
+    """
+    if not text:
+        return [], None, None
+    react_match = REACT_PATTERN.search(text)
+    why_match = WHY_PATTERN.search(text)
+    emojis: str | None = None
+    why: str | None = None
+    if react_match:
+        emojis = react_match.group(1).strip()
+    if why_match:
+        why = why_match.group(1).strip()
+    cleaned = REACT_PATTERN.sub(' ', text)
+    cleaned = WHY_PATTERN.sub(' ', cleaned)
+    cleaned = re.sub(r'[ \t]{2,}', ' ', cleaned).strip()
+    return [p.strip() for p in cleaned.split('\n') if p.strip()], emojis, why
+
+
+def split_emojis(emojis: str) -> list[str]:
+    """Разбивает строку эмодзи на отдельные символы (грубая, но рабочая)."""
+    if not emojis:
+        return []
+    out: list[str] = []
+    i = 0
+    while i < len(emojis):
+        cp = ord(emojis[i])
+        # Пропускаем комбинирующие модификаторы
+        if 0xFE00 <= cp <= 0xFE0F or cp in (0x200D,):
+            i += 1
+            continue
+        # Emoji ranges
+        if 0x1F000 <= cp <= 0x1FAFF or 0x2600 <= cp <= 0x27BF or 0x2B00 <= cp <= 0x2BFF \
+                or 0x1F1E6 <= cp <= 0x1F1FF:
+            j = i + 1
+            # Соберём следующие ZWJ / variation selectors
+            while j < len(emojis) and (
+                ord(emojis[j]) == 0x200D
+                or 0xFE00 <= ord(emojis[j]) <= 0xFE0F
+                or 0x1F000 <= ord(emojis[j]) <= 0x1FAFF
+            ):
+                j += 1
+            out.append(emojis[i:j])
+            i = j
+        else:
+            i += 1
+    return out
+
+
 def clean_extra_text(raw: str) -> list[str]:
     if not raw:
         return []
-    cleaned, _ = extract_utility_markers(raw)
+    cleaned, _, _ = extract_utility_markers(raw)
     cleaned = SEPARATOR_PATTERN.sub(' ', cleaned)
+    cleaned = REACT_PATTERN.sub(' ', cleaned)
+    cleaned = WHY_PATTERN.sub(' ', cleaned)
     cleaned = re.sub(r'[ \t]{2,}', ' ', cleaned).strip()
     return [s.strip() for s in cleaned.split('\n\n') if s and s.strip()]
 
@@ -1028,5 +1197,12 @@ async def perform_safe_git_update(repo_path: str) -> tuple[str, str]:
 
     return "ok", pull_out
 
+
+# Загружаем сохранённые настройки (после определения DEFAULT_USER_CONFIG)
+try:
+    load_user_configs()
+    logger.info(f"✅ Загружено настроек пользователей: {len(user_configs)}")
+except Exception as e:
+    logger.warning(f"load_user_configs на старте: {e}")
 
 from src.i18n import TEXTS, html_to_md, tr

@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.40.1
+# Kulsh GPT | v2.41.0
 # by (main author): starfall-apk
 # coauthor & bot hosting: pomidorka1515
 
@@ -69,19 +69,27 @@ from src.util import (
     PREMIUM_ADMIN_ID,
     STICKER_POOL,
     UTILITY_PATTERNS,
+    REACT_PATTERN,
+    WHY_PATTERN,
+    add_typos,
+    calc_typing_delay,
     cb_id,
+    clean_extra_text,
+    clean_json_text,
+    extract_reaction_and_why,
     human_uptime,
     is_femboy_battle_command,
     is_femboy_rate_command,
     mode_is_valid,
+    process_ai_response,
+    save_user_configs,
+    split_emojis,
     tr,
     tg_msg,
     add_bot_memory,
     add_donation,
     chat_media_history,
     chat_memories,
-    clean_extra_text,
-    clean_json_text,
     config_children_msgs,
     config_msg_owners,
     config_trigger_msgs,
@@ -94,7 +102,6 @@ from src.util import (
     logger,
     long_term_memory,
     pending_donations,
-    process_ai_response,
     prompt_waiting,
     save_long_term_memory,
     user_femboy_state,
@@ -127,7 +134,6 @@ def bind(bot: Any) -> None:
 
 
 def _strip_recall_marker(text: str) -> str:
-    """Удаляет !recall_media из текста без побочных эффектов."""
     if not text:
         return text
     pat = UTILITY_PATTERNS.get("recall_media")
@@ -141,15 +147,78 @@ def _strip_recall_marker(text: str) -> str:
 
 
 # ============================================================
+# РЕАКЦИИ
+# ============================================================
+async def _apply_tg_reaction(chat_id: int, message_id: int, emojis_str: str) -> list[str]:
+    """Возвращает список реально поставленных эмодзи (или пустой)."""
+    if not state.premium_functions_enabled:
+        # реагировать можно и без premium, но в некоторых чатах запрещено
+        pass
+    emojis = split_emojis(emojis_str)
+    if not emojis:
+        return []
+    applied: list[str] = []
+    try:
+        from telebot.types import ReactionTypeEmoji  # type: ignore
+    except Exception:
+        ReactionTypeEmoji = None  # type: ignore
+    if ReactionTypeEmoji is None:
+        logger.warning("ReactionTypeEmoji недоступен в этой версии pyTelegramBotAPI")
+        return []
+    try:
+        reaction_list = [ReactionTypeEmoji(emoji=e) for e in emojis[:1]]
+        await tg_bot.set_message_reaction(chat_id, message_id, reaction=reaction_list)
+        applied = emojis[:1]
+    except Exception as e:
+        logger.warning(f"set_message_reaction: {e}")
+        return []
+    return applied
+
+
+async def _handle_reaction_markers(
+    message: telebot.types.Message,
+    chat_id: int,
+    user_id: int,
+    text: str,
+    cfg: dict[str, Any],
+) -> tuple[str, list[str]]:
+    """Возвращает (текст_без_маркеров, применённые_эмодзи). Пишет thought в память."""
+    if not cfg.get("reactions_enabled", True):
+        cleaned = REACT_PATTERN.sub(' ', text)
+        cleaned = WHY_PATTERN.sub(' ', cleaned)
+        return cleaned.strip(), []
+    m = REACT_PATTERN.search(text or "")
+    why_m = WHY_PATTERN.search(text or "")
+    if not m:
+        return text, []
+    emojis_str = m.group(1)
+    why_text = why_m.group(1).strip() if why_m else ""
+    target_msg_id = message.message_id
+    # Если это реплай — реагируем на то, на что отвечаем.
+    if message.reply_to_message and message.reply_to_message.message_id:
+        target_msg_id = message.reply_to_message.message_id
+    applied = await _apply_tg_reaction(chat_id, target_msg_id, emojis_str)
+    if applied and why_text:
+        # Пишем мысль в память бота — чтобы при вопросе про реакцию он помнил.
+        mem_text = f"[реакция {' '.join(applied)}] {why_text}"
+        add_bot_memory(f"tg_{chat_id}", mem_text)
+        logger.info(f"😀 Реакция {' '.join(applied)} + мысль: {why_text[:80]}")
+    elif applied:
+        add_bot_memory(f"tg_{chat_id}", f"[реакция {' '.join(applied)}]")
+    # Убираем маркеры из текста
+    cleaned = REACT_PATTERN.sub(' ', text)
+    cleaned = WHY_PATTERN.sub(' ', cleaned)
+    cleaned = re.sub(r'[ \t]{2,}', ' ', cleaned).strip()
+    return cleaned, applied
+
+
+# ============================================================
 # CALLBACK HANDLER (cfg:)
 # ============================================================
 async def edit_or_send(call: telebot.types.CallbackQuery, text: str, kb: InlineKeyboardMarkup) -> None:
     msg = tg_msg(call)
     try:
-        await tg_bot.edit_message_text(
-            text, msg.chat.id, msg.message_id,
-            parse_mode='HTML', reply_markup=kb,
-        )
+        await tg_bot.edit_message_text(text, msg.chat.id, msg.message_id, parse_mode='HTML', reply_markup=kb)
     except Exception as e:
         logger.warning(f"edit_message_text fail: {e}")
 
@@ -191,6 +260,7 @@ async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
                 toast = tr(lang, "mode_set", tr(lang, "mode_pro"))
             else:
                 toast = tr(lang, "mode_set", tr(lang, "mode_kent"))
+            save_user_configs()
         await edit_or_send(call, config_text("tg", chat_id, user_id),
                             build_main_config_keyboard("tg", chat_id, user_id))
         await tg_bot.answer_callback_query(cb_id(call), toast)
@@ -209,6 +279,7 @@ async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
                     toast = tr(lang, "cfg_model_set", MODEL_DISPLAY.get(MODEL_LIST[idx], MODEL_LIST[idx]))
             except ValueError:
                 pass
+        save_user_configs()
         await edit_or_send(call, model_picker_text("tg", chat_id, user_id),
                             build_model_keyboard("tg", chat_id, user_id))
         await tg_bot.answer_callback_query(cb_id(call), toast)
@@ -237,6 +308,7 @@ async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
             cfg["language"] = val
             lang = val
             toast = tr(lang, "cfg_lang_set_ru") if val == "ru" else tr(lang, "cfg_lang_set_en")
+            save_user_configs()
         await edit_or_send(call, config_text("tg", chat_id, user_id),
                             build_main_config_keyboard("tg", chat_id, user_id))
         await tg_bot.answer_callback_query(cb_id(call), toast)
@@ -252,6 +324,7 @@ async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
         if val in ("dark", "light"):
             cfg["theme"] = val
             toast = tr(lang, "cfg_theme_dark") if val == "dark" else tr(lang, "cfg_theme_light")
+            save_user_configs()
         await edit_or_send(call, config_text("tg", chat_id, user_id),
                             build_main_config_keyboard("tg", chat_id, user_id))
         await tg_bot.answer_callback_query(cb_id(call), toast)
@@ -268,6 +341,7 @@ async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
             temp_val = max(0.0, min(2.0, float(parts[2])))
             cfg["temperature"] = temp_val
             toast = tr(lang, "cfg_temp", temp_val)
+            save_user_configs()
         except (ValueError, IndexError):
             pass
         await edit_or_send(call, config_text("tg", chat_id, user_id),
@@ -279,8 +353,7 @@ async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
         try:
             sent = await tg_bot.send_message(
                 chat_id, tr(lang, "cfg_edit_prompt_ask"),
-                parse_mode='HTML',
-                reply_markup=ForceReply(selective=True),
+                parse_mode='HTML', reply_markup=ForceReply(selective=True),
                 reply_to_message_id=msg.message_id,
             )
             prompt_waiting[user_id] = sent.message_id
@@ -301,6 +374,7 @@ async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
             except Exception:
                 pass
         await cleanup_config_children(chat_id, user_id)
+        save_user_configs()
         await tg_bot.answer_callback_query(cb_id(call), tr(lang, "cfg_done"))
         asyncio.create_task(play_apply_animation(chat_id, msg.message_id))
         return
@@ -311,6 +385,7 @@ async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
             await tg_bot.answer_callback_query(cb_id(call), tr(lang, "cfg_mutex"), show_alert=False)
             return
         cfg["separate_enabled"] = new_val
+        save_user_configs()
     elif action == "streaming":
         if not state.premium_functions_enabled:
             await tg_bot.answer_callback_query(cb_id(call), tr(lang, "cfg_premium_off"), show_alert=False)
@@ -320,16 +395,26 @@ async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
             await tg_bot.answer_callback_query(cb_id(call), tr(lang, "cfg_mutex"), show_alert=False)
             return
         cfg["streaming_enabled"] = new_val
+        save_user_configs()
     elif action == "stickers":
         cfg["stickers_enabled"] = not cfg.get("stickers_enabled", True)
+        save_user_configs()
     elif action == "autoreply":
         cfg["random_reply_enabled"] = not cfg.get("random_reply_enabled", False)
+        save_user_configs()
     elif action == "random":
         cfg["random_messages_enabled"] = not cfg.get("random_messages_enabled", True)
+        save_user_configs()
     elif action == "websearch":
         cfg["web_search_enabled"] = not cfg.get("web_search_enabled", True)
+        save_user_configs()
+    elif action == "reactions":
+        cfg["reactions_enabled"] = not cfg.get("reactions_enabled", True)
+        toast = tr(lang, "cfg_reactions_on") if cfg["reactions_enabled"] else tr(lang, "cfg_reactions_off")
+        save_user_configs()
     elif action == "reset_prompt":
         cfg["custom_prompt"] = None
+        save_user_configs()
         toast = tr(lang, "cfg_prompt_reset")
     elif action == "reset_memory":
         chat_key = f"tg_{chat_id}"
@@ -373,10 +458,7 @@ async def handle_menu_callback(call: telebot.types.CallbackQuery) -> None:
         cfg_text = config_text("tg", chat_id, user_id)
         kb = build_main_config_keyboard("tg", chat_id, user_id)
         try:
-            await tg_bot.edit_message_text(
-                cfg_text, chat_id, msg.message_id,
-                parse_mode='HTML', reply_markup=kb,
-            )
+            await tg_bot.edit_message_text(cfg_text, chat_id, msg.message_id, parse_mode='HTML', reply_markup=kb)
             config_msg_owners[msg.message_id] = user_id
         except Exception as e:
             logger.warning(f"menu:settings edit: {e}")
@@ -410,28 +492,27 @@ async def handle_menu_callback(call: telebot.types.CallbackQuery) -> None:
 
 
 # ============================================================
-# TELEGRAM: HELP / MENU / START / DONATE / STATUS
+# HELP / MENU / START / DONATE / STATUS
 # ============================================================
 async def handle_start(message: telebot.types.Message) -> None:
     args = telebot.util.extract_arguments(message.text or "")
-    if args:
-        if args.startswith('donate_stars_'):
-            try:
-                stars = int(args.split('_')[-1])
-                if stars <= 0:
-                    raise ValueError
-            except (ValueError, IndexError):
-                await reply_tg_html(message, "❌ Неверное количество звёзд.")
-                return
-            pending_donations[message.chat.id] = stars
-            prices = [cast(Any, telebot.types.LabeledPrice)(label="💎 Поддержать Кульша", amount=stars)]
-            await tg_bot.send_invoice(
-                chat_id=message.chat.id, title="💎 Донат Кульшу",
-                description=f"💖 Поддержка разработки на {stars} ⭐",
-                invoice_payload=f"donate_{stars}_stars", provider_token="",
-                currency="XTR", prices=prices, start_parameter="donate",
-            )
+    if args and args.startswith('donate_stars_'):
+        try:
+            stars = int(args.split('_')[-1])
+            if stars <= 0:
+                raise ValueError
+        except (ValueError, IndexError):
+            await reply_tg_html(message, "❌ Неверное количество звёзд.")
             return
+        pending_donations[message.chat.id] = stars
+        prices = [cast(Any, telebot.types.LabeledPrice)(label="💎 Поддержать Кульша", amount=stars)]
+        await tg_bot.send_invoice(
+            chat_id=message.chat.id, title="💎 Донат Кульшу",
+            description=f"💖 Поддержка разработки на {stars} ⭐",
+            invoice_payload=f"donate_{stars}_stars", provider_token="",
+            currency="XTR", prices=prices, start_parameter="donate",
+        )
+        return
 
     if message.from_user is None:
         return
@@ -440,7 +521,6 @@ async def handle_start(message: telebot.types.Message) -> None:
     cfg = get_user_config("tg", chat_id, user_id)
     lang = cfg.get("language", "ru")
     is_private = (message.chat.type == 'private')
-
     start_text = build_start_text(lang)
     kb = build_start_keyboard(lang, is_private=is_private)
     await send_formatted(chat_id, start_text, reply_to=message.message_id, reply_markup=kb)
@@ -454,7 +534,6 @@ async def handle_menu(message: telebot.types.Message) -> None:
     cfg = get_user_config("tg", chat_id, user_id)
     lang = cfg.get("language", "ru")
     is_private = (message.chat.type == 'private')
-
     menu_text = build_menu_text(lang)
     kb = build_menu_keyboard(lang, is_private=is_private)
     await send_formatted(chat_id, menu_text, reply_to=message.message_id, reply_markup=kb)
@@ -481,13 +560,10 @@ async def handle_donate(message: telebot.types.Message) -> None:
     cfg = get_user_config("tg", message.chat.id, message.from_user.id)
     lang = cfg.get("language", "ru")
     text = (
-        f"# {tr(lang, 'donate_title')}\n\n"
-        f"✦ 彡 巛 〢 ✦ 彡 巛 〢 ✦\n\n"
-        f"{tr(lang, 'donate_intro')}\n\n"
-        f"**{tr(lang, 'donate_methods')}**\n\n"
+        f"# {tr(lang, 'donate_title')}\n\n✦ 彡 巛 〢 ✦ 彡 巛 〢 ✦\n\n"
+        f"{tr(lang, 'donate_intro')}\n\n**{tr(lang, 'donate_methods')}**\n\n"
         f"- {tr(lang, 'donate_online')}: {DONATE_URL}\n"
-        f"- {tr(lang, 'donate_stars_hint')}\n\n"
-        f"🔗 GitHub: {GITHUB_URL}"
+        f"- {tr(lang, 'donate_stars_hint')}\n\n🔗 GitHub: {GITHUB_URL}"
     )
     try:
         await send_formatted(message.chat.id, text, reply_to=message.message_id)
@@ -516,14 +592,10 @@ async def handle_donate_stars(message: telebot.types.Message) -> None:
     prices = [cast(Any, telebot.types.LabeledPrice)(label="Поддержать Кульша", amount=stars)]
     try:
         await tg_bot.send_invoice(
-            chat_id=chat_id,
-            title="Донат Кульшу",
+            chat_id=chat_id, title="Донат Кульшу",
             description=f"Поддержка разработки на {stars} ⭐",
-            invoice_payload=f"donate_{stars}_stars",
-            provider_token="",
-            currency="XTR",
-            prices=prices,
-            start_parameter="donate",
+            invoice_payload=f"donate_{stars}_stars", provider_token="",
+            currency="XTR", prices=prices, start_parameter="donate",
             reply_to_message_id=message.message_id,
         )
     except Exception as e:
@@ -553,22 +625,13 @@ async def handle_status(message: telebot.types.Message) -> None:
         mode_label = tr(lang, "mode_pro")
     else:
         mode_label = tr(lang, "mode_kent")
-
     try:
         proc_load = __import__("os").getloadavg()[0]
     except Exception:
         proc_load = 0.5
-    if proc_load < 1.0:
-        mood = "🍷🗿"
-    elif proc_load < 2.5:
-        mood = "😎"
-    else:
-        mood = "🔥"
-    status_emoji = "🟢"
-
+    mood = "🍷🗿" if proc_load < 1.0 else ("😎" if proc_load < 2.5 else "🔥")
     text = (
-        f"# {status_emoji} {tr(lang, 'status_title')}\n\n"
-        f"✦ 彡 巛 〢 ✦ 彡 巛 〢 ✦\n\n"
+        f"# 🟢 {tr(lang, 'status_title')}\n\n✦ 彡 巛 〢 ✦ 彡 巛 〢 ✦\n\n"
         f"**{tr(lang, 'status_online')}**\n\n"
         f"- {tr(lang, 'status_uptime')}: `{human_uptime()}`\n"
         f"- {tr(lang, 'status_latency')}: `~{max(1, int(proc_load * 40))} ms`\n"
@@ -615,7 +678,7 @@ async def handle_successful_payment(message: telebot.types.Message) -> None:
 
 
 # ============================================================
-# TG CONFIG / AVATAR / RECALL / SEARCH / CHART / FMB
+# CONFIG / AVATAR / RECALL / SEARCH / CHART / FMB
 # ============================================================
 async def tg_handle_config(message: telebot.types.Message) -> None:
     if message.from_user is None:
@@ -626,9 +689,7 @@ async def tg_handle_config(message: telebot.types.Message) -> None:
     config_trigger_msgs[chat_key] = message.message_id
     try:
         sent = await tg_bot.send_message(
-            chat_id,
-            config_text("tg", chat_id, user_id),
-            parse_mode='HTML',
+            chat_id, config_text("tg", chat_id, user_id), parse_mode='HTML',
             reply_markup=build_main_config_keyboard("tg", chat_id, user_id),
             reply_to_message_id=message.message_id,
         )
@@ -637,8 +698,7 @@ async def tg_handle_config(message: telebot.types.Message) -> None:
         logger.warning(f"Config send failed: {e}")
         try:
             await tg_bot.send_message(
-                chat_id,
-                re.sub(r'<[^>]+>', '', config_text("tg", chat_id, user_id)),
+                chat_id, re.sub(r'<[^>]+>', '', config_text("tg", chat_id, user_id)),
                 reply_markup=build_main_config_keyboard("tg", chat_id, user_id),
             )
         except Exception as e2:
@@ -703,11 +763,9 @@ async def tg_handle_search(message: telebot.types.Message, query: str, chat_id: 
         return
     context = format_search_results(results)
     prompt = (
-        f"Пользователь искал в интернете: {query}\n\n"
-        f"Найденные результаты:\n{context}\n\n"
+        f"Пользователь искал в интернете: {query}\n\nНайденные результаты:\n{context}\n\n"
         f"Сформулируй краткий ответ (3-6 предложений) на основе этих результатов. "
-        f"Если результаты не по теме — скажи об этом. "
-        f"Не выдумывай факты. Ответь в стиле Кульша. "
+        f"Если результаты не по теме — скажи об этом. Не выдумывай факты. "
         f"Без маркеров !search, !chart, !separate."
     )
     answer = await ask_ai_async(prompt=prompt, chat_id=chat_id, user_id=user_id, platform="tg")
@@ -733,17 +791,11 @@ async def tg_handle_chart_request(message: telebot.types.Message, description: s
     chart_prompt = (
         f"Сгенерируй JSON-спецификацию инфографики по описанию:\n\n{description}\n\n"
         f"Верни ТОЛЬКО JSON-объект без markdown и без текста вокруг. "
-        f"Структура:\n"
-        f'{{"theme": "dark_modern|light_minimal|ocean|retro", "title": "...", "subtitle": "...", '
-        f'"blocks": [{{"type": "heading"|"text"|"divider"|"bar"|"line"|"pie"|"pie3d"|"table"|"image", ...}}]}}\n'
-        f"Используй реальные числовые данные, красивые заголовки. "
-        f"Для изображений с URL — {{'type':'image','url':'https://...'}}."
+        f'Структура: {{"theme": "dark_modern|light_minimal|ocean|retro", "title": "...", "blocks": [...]}}'
     )
     raw = await ask_ai_async(
         prompt=chart_prompt,
-        system_instruction_override=(
-            "You are a data-visualization JSON generator. Output ONLY valid JSON. No markdown, no prose."
-        ),
+        system_instruction_override="You are a data-visualization JSON generator. Output ONLY valid JSON.",
         chat_id=chat_id, user_id=user_id, platform="tg",
     )
     spec = None
@@ -814,8 +866,7 @@ async def tg_handle_femboy_rate(message: telebot.types.Message, chat_id: int, us
         if include_advice and ai_data.get("advice"):
             report += f"\n\n<b>{tr(lang, 'femboy_advice')}</b>\n{html.escape(ai_data['advice'])}"
         try:
-            await tg_bot.send_photo(chat_id, InputFile(infographic),
-                                    caption=tr(lang, "femboy_report"))
+            await tg_bot.send_photo(chat_id, InputFile(infographic), caption=tr(lang, "femboy_report"))
         except Exception as e:
             logger.error(f"femboy infographic send: {e}")
         for chunk in [report[i:i + 3900] for i in range(0, len(report), 3900)]:
@@ -856,10 +907,6 @@ async def tg_process_femboy_album(media_group_id: str, chat_id: int, user_id: in
         f"<b>{tr(lang, 'femboy_battle_title')}</b>\n\n"
         f"{tr(lang, 'femboy_battle_winner')} <b>{winner_label}</b>\n"
         f"{tr(lang, 'femboy_battle_reason')} {html.escape(ai_data.get('reason', ''))}\n\n"
-        f"{tr(lang, 'femboy_battle_photo1')} FMB {ai_data.get('photo1', {}).get('fmb', '?')} | "
-        f"Tier {html.escape(str(ai_data.get('photo1', {}).get('tier', '?')))}\n"
-        f"{tr(lang, 'femboy_battle_photo2')} FMB {ai_data.get('photo2', {}).get('fmb', '?')} | "
-        f"Tier {html.escape(str(ai_data.get('photo2', {}).get('tier', '?')))}\n"
     )
     try:
         await tg_bot.send_photo(chat_id, InputFile(battle_img), caption=tr(lang, "femboy_battle_caption"))
@@ -873,7 +920,7 @@ async def tg_process_femboy_album(media_group_id: str, chat_id: int, user_id: in
 
 
 # ============================================================
-# UTILITY EXECUTION
+# UTILITY / GROUP & USER INFO
 # ============================================================
 async def execute_utility_tg(message: telebot.types.Message, marker: str, chat_id: int, user_id: int) -> None:
     cfg = get_user_config("tg", chat_id, user_id)
@@ -886,13 +933,70 @@ async def execute_utility_tg(message: telebot.types.Message, marker: str, chat_i
             logger.error(f"sticker error: {e}")
 
 
+async def fetch_group_info_tg(chat_id: int, lang: str = "ru") -> str | None:
+    try:
+        chat = await tg_bot.get_chat(chat_id)
+    except Exception as e:
+        logger.warning(f"get_chat: {e}")
+        return None
+    lines: list[str] = []
+    title = getattr(chat, "title", None)
+    if title:
+        lines.append(f"Название: {title}" if lang == "ru" else f"Title: {title}")
+    ctype = getattr(chat, "type", "?")
+    lines.append(f"Тип: {ctype}" if lang == "ru" else f"Type: {ctype}")
+    username = getattr(chat, "username", None)
+    if username:
+        lines.append(f"@username: @{username}")
+    description = getattr(chat, "description", None)
+    if description:
+        lines.append(("Описание: " if lang == "ru" else "Description: ") + str(description)[:300])
+    try:
+        count = await tg_bot.get_chat_member_count(chat_id)
+        lines.append(("Участников: " if lang == "ru" else "Members: ") + str(count))
+    except Exception:
+        pass
+    if not lines:
+        return None
+    return "\n".join(lines)
+
+
+async def fetch_user_info_tg(user_id: int, chat_id: int, lang: str = "ru") -> str | None:
+    lines: list[str] = []
+    # Пробуем получить через get_chat — работает для пользователей в чате.
+    try:
+        chat = await tg_bot.get_chat(user_id)
+        name = getattr(chat, "first_name", "") or ""
+        last = getattr(chat, "last_name", "") or ""
+        full = f"{name} {last}".strip()
+        if full:
+            lines.append(("Имя: " if lang == "ru" else "Name: ") + full)
+        uname = getattr(chat, "username", None)
+        if uname:
+            lines.append(f"@username: @{uname}")
+        bio = getattr(chat, "bio", None)
+        if bio:
+            lines.append(("Описание: " if lang == "ru" else "Bio: ") + str(bio)[:300])
+    except Exception as e:
+        logger.debug(f"get_chat(user): {e}")
+    lines.append(("ID: " if lang == "ru" else "ID: ") + str(user_id))
+    # Статус в текущем чате
+    try:
+        member = await tg_bot.get_chat_member(chat_id, user_id)
+        status = getattr(member, "status", "?")
+        lines.append(("Статус в чате: " if lang == "ru" else "Chat status: ") + status)
+    except Exception:
+        pass
+    if not lines:
+        return None
+    return "\n".join(lines)
+
+
 # ============================================================
 # STREAMING
 # ============================================================
 async def stream_text_via_drafts(chat_id: int, text: str, is_private: bool = True) -> bool:
-    if not state.premium_functions_enabled:
-        return False
-    if not is_private:
+    if not state.premium_functions_enabled or not is_private:
         return False
     draft_id = random.randint(1, 2 ** 30)
     words = text.split()
@@ -911,7 +1015,7 @@ async def stream_text_via_drafts(chat_id: int, text: str, is_private: bool = Tru
 
 
 # ============================================================
-# SEND TG AI RESPONSE
+# SEND TG AI RESPONSE (главный пайплайн)
 # ============================================================
 async def send_tg_ai_response(message: telebot.types.Message, chat_id: int, user_id: int,
                               answer_raw: str, user_text: str | None = None,
@@ -920,9 +1024,13 @@ async def send_tg_ai_response(message: telebot.types.Message, chat_id: int, user
     lang = cfg.get("language", "ru")
     separate_enabled = cfg.get("separate_enabled", True)
     streaming = cfg.get("streaming_enabled", False) and state.premium_functions_enabled
-
     if streaming and separate_enabled:
         streaming = False
+
+    orig_user_text = (user_text or (message.text or message.caption or "")).strip()
+
+    # ---- !react / !why ----
+    answer_raw, applied_reactions = await _handle_reaction_markers(message, chat_id, user_id, answer_raw or "", cfg)
 
     # ---- !search ----
     if cfg.get("web_search_enabled", True):
@@ -931,61 +1039,81 @@ async def send_tg_ai_response(message: telebot.types.Message, chat_id: int, user
             results = await web_search(query, max_results=6)
             if results:
                 context = format_search_results(results)
-                orig = user_text or (message.text or message.caption or "")
                 follow_prompt = (
-                    f"Пользователь спросил: {orig}\n\n"
-                    f"Ты выполнил поиск: {query}\n\n"
-                    f"Результаты поиска:\n{context}\n\n"
-                    f"Ответь на основе этих результатов. Без маркеров !search, !chart. "
-                    f"Дай краткий точный ответ, ссылайся на факты, не выдумывай."
+                    f"Пользователь спросил: {orig_user_text}\n\n"
+                    f"Ты выполнил поиск: {query}\n\nРезультаты:\n{context}\n\n"
+                    f"Ответь на основе результатов. Без !search, !chart, !react. "
+                    f"Краткий точный ответ."
                 )
-                answer_raw = await ask_ai_async(
-                    prompt=follow_prompt,
-                    chat_id=chat_id, user_id=user_id, platform="tg",
-                )
+                answer_raw = await ask_ai_async(prompt=follow_prompt, chat_id=chat_id, user_id=user_id, platform="tg")
             else:
                 answer_raw = tr(lang, "search_nothing")
 
-    # ---- !recall_media: подтягиваем последнее медиа и перезапускаем AI с ним ----
+    # ---- !recall_media ----
     if UTILITY_PATTERNS["recall_media"].search(answer_raw or ""):
-        orig = (user_text or (message.text or message.caption or "")).strip()
         media_bytes: bytes | None = None
         media_kind: str = ""
         try:
             media_bytes, media_kind = await _media().fetch_last_media_tg(chat_id)
         except Exception as e:
             logger.warning(f"recall fetch: {e}")
-            media_bytes, media_kind = None, ""
-
         if media_bytes:
             kind_label = {"photo": "фото", "video": "видео", "animation": "гифку"}.get(media_kind, "медиа")
             follow_prompt = (
-                f"Пользователь написал: {orig or 'покажи последнее медиа'}\n\n"
-                f"Вот последнее медиа в чате — это {kind_label}. Опиши, что на нём, и ответь на запрос "
-                f"пользователя естественно, как ты обычно общаешься (маленькие буквы, без вычурной "
-                f"пунктуации). Можешь разбить на 1-2 сообщения через !separate, если хочется. "
-                f"НЕ используй маркеры !search, !chart, !recall_media, !avatar, !sticker, !gif."
+                f"Пользователь написал: {orig_user_text or 'покажи последнее медиа'}\n\n"
+                f"Вот последнее медиа в чате — это {kind_label}. Опиши что на нём и ответь "
+                f"пользователю естественно, живо. НЕ используй !search, !chart, !recall_media, !avatar."
             )
             new_answer = await ask_ai_async(
-                prompt=follow_prompt,
-                image_bytes=media_bytes, image_mime="image/jpeg",
+                prompt=follow_prompt, image_bytes=media_bytes, image_mime="image/jpeg",
                 chat_id=chat_id, user_id=user_id, platform="tg",
             )
             if new_answer and new_answer.strip():
-                logger.info(f"✅ recall_media: kind={media_kind}, bytes={len(media_bytes)}")
                 answer_raw = new_answer
             else:
-                logger.warning("recall_media: AI вернул пусто на медиа")
                 answer_raw = _strip_recall_marker(answer_raw) + "\n" + tr(lang, "recall_fail")
         else:
-            logger.info("recall_media: медиа в истории не найдено")
             answer_raw = _strip_recall_marker(answer_raw) + "\n" + tr(lang, "recall_fail")
+
+    # ---- !group_info / !user_info ----
+    gi = UTILITY_PATTERNS["group_info"].search(answer_raw or "")
+    ui = UTILITY_PATTERNS["user_info"].search(answer_raw or "")
+    if gi:
+        info = await fetch_group_info_tg(chat_id, lang=lang)
+        # Убираем маркер
+        answer_raw = UTILITY_PATTERNS["group_info"].sub(' ', answer_raw)
+        if info:
+            follow_prompt = (
+                f"Пользователь попросил инфо о текущей группе. Вот данные:\n{info}\n\n"
+                f"Кратко и живо перескажи в своём стиле. Без !group_info, !user_info, !chart."
+            )
+        else:
+            follow_prompt = "Не удалось получить инфо о группе. Скажи об этом кратко."
+        answer_raw = await ask_ai_async(prompt=follow_prompt, chat_id=chat_id, user_id=user_id, platform="tg")
+    if ui:
+        m_ui = UTILITY_PATTERNS["user_info"].search(answer_raw)
+        target_uid = user_id
+        if m_ui and m_ui.group(1):
+            try:
+                target_uid = int(m_ui.group(1))
+            except ValueError:
+                target_uid = user_id
+        info = await fetch_user_info_tg(target_uid, chat_id, lang=lang)
+        answer_raw = UTILITY_PATTERNS["user_info"].sub(' ', answer_raw)
+        if info:
+            follow_prompt = (
+                f"Пользователь попросил инфо о пользователе id {target_uid}. Данные:\n{info}\n\n"
+                f"Кратко перескажи в своём стиле. Без !group_info, !user_info, !chart."
+            )
+        else:
+            follow_prompt = "Не удалось получить инфо о пользователе. Скажи об этом."
+        answer_raw = await ask_ai_async(prompt=follow_prompt, chat_id=chat_id, user_id=user_id, platform="tg")
 
     # ---- !chart ----
     if state.premium_functions_enabled:
         chart_spec, remaining = extract_chart_marker(answer_raw or "")
         if chart_spec:
-            user_asked_chart = user_wants_chart(user_text or message.text or message.caption or "")
+            user_asked_chart = user_wants_chart(orig_user_text)
             if user_asked_chart:
                 try:
                     img = await render_infographic(chart_spec, user_images=user_images)
@@ -1004,6 +1132,7 @@ async def send_tg_ai_response(message: telebot.types.Message, chat_id: int, user
             if chart_spec is not None or not user_asked_chart:
                 answer_raw = remaining
 
+    # ---- Split into segments and send ----
     clean_segments, markers = process_ai_response(answer_raw, separate_enabled=separate_enabled)
 
     extra_segments: list[str] = []
@@ -1016,12 +1145,12 @@ async def send_tg_ai_response(message: telebot.types.Message, chat_id: int, user
         except Exception as e:
             logger.warning(f"avatar desc failed: {e}")
     if "recall_media" in markers:
-        # Этот маркер уже обработан выше — просто вырезаем его из списка.
         markers.remove("recall_media")
 
     all_segments = clean_segments + extra_segments
 
     if not all_segments:
+        # Ничего текстом — если реакции были, уже поставлены. Остальные маркеры — обработать.
         for m in markers:
             try:
                 await execute_utility_tg(message, m, chat_id, user_id)
@@ -1032,8 +1161,10 @@ async def send_tg_ai_response(message: telebot.types.Message, chat_id: int, user
     is_private_chat = (message.chat.type == 'private')
 
     for i, seg in enumerate(all_segments):
+        # Опечатки (кроме markdown/code/URL)
+        seg = add_typos(seg, probability=0.04)
         try:
-            await typing_with_delay_tg(message.chat.id, seg)
+            await typing_with_delay_tg(message.chat.id, seg, delay=calc_typing_delay(seg, segment_index=i))
         except Exception:
             pass
 
@@ -1072,10 +1203,9 @@ async def send_tg_ai_response(message: telebot.types.Message, chat_id: int, user
 
 
 # ============================================================
-# OLD MESSAGE REPLY (TG) — в стиле обычного чата
+# OLD MESSAGE REPLY
 # ============================================================
 async def maybe_reply_to_old_message_tg(message: telebot.types.Message, chat_id: int, user_id: int) -> None:
-    # Небольшая пауза, чтобы «внезапный» ответ не прилетал мгновенно после основного.
     try:
         await asyncio.sleep(3)
     except asyncio.CancelledError:
@@ -1088,12 +1218,9 @@ async def maybe_reply_to_old_message_tg(message: telebot.types.Message, chat_id:
         return
     mem = list(get_chat_memory(chat_key))
     current_msg_id = message.message_id
-    # Исключаем ТЕКУЩЕЕ сообщение из кандидатов — иначе бот отвечает на ту же просьбу повторно.
     candidates = [
         e for e in mem[:-2]
-        if e.get("type") == "user"
-        and e.get("text")
-        and e.get("message_id") != current_msg_id
+        if e.get("type") == "user" and e.get("text") and e.get("message_id") != current_msg_id
     ]
     if not candidates:
         return
@@ -1103,14 +1230,11 @@ async def maybe_reply_to_old_message_tg(message: telebot.types.Message, chat_id:
             prompt=(
                 f"Сейчас идёт живая переписка. Ты краем глаза заметил старое сообщение от "
                 f"{old.get('display','?')}: \"{old.get('text','')}\". Хочешь коротко и по-пацански "
-                f"прокомментировать его прямо сейчас, не прерывая текущий вайб? Если да — напиши одно "
-                f"короткое сообщение в том же стиле, в котором ты общаешься со всеми: маленькие буквы, "
-                f"без лишней пунктуации, естественно, эмодзи только если очень хочется. "
+                f"прокомментировать? Если да — одно короткое сообщение в стиле общения со всеми. "
                 f"Если не хочешь — ответь ровно 'НЕТ'."
             ),
             system_instruction_override=(
-                "Ты Кульш. Если комментируешь — пиши как в обычном чате с кентами: "
-                "маленькими буквами, без вычурной пунктуации, живо. Или ответь 'НЕТ'."
+                "Ты Кульш. Если комментируешь — маленькими буквами, живо. Или 'НЕТ'."
             ),
             chat_id=chat_id, user_id=user_id, platform="tg",
         )
@@ -1120,8 +1244,9 @@ async def maybe_reply_to_old_message_tg(message: telebot.types.Message, chat_id:
             segments, markers = process_ai_response(comment, separate_enabled=cfg.get("separate_enabled", True))
             old_msg_id = old.get("message_id")
             for i, seg in enumerate(segments):
+                seg = add_typos(seg, probability=0.04)
                 try:
-                    await typing_with_delay_tg(message.chat.id, seg)
+                    await typing_with_delay_tg(message.chat.id, seg, delay=calc_typing_delay(seg, segment_index=i))
                 except Exception:
                     pass
                 if i == 0 and old_msg_id:

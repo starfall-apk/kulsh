@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.40.1
+# Kulsh GPT | v2.41.0
 # by (main author): starfall-apk
 # coauthor & bot hosting: pomidorka1515
 
@@ -93,14 +93,10 @@ async def get_avatar_description_tg(
 
 
 async def fetch_last_media_tg(chat_id: int) -> tuple[bytes | None, str]:
-    """
-    Возвращает (байты_изображения, тип) для последнего медиа в истории чата.
-    Поддерживает фото, видео, анимации. Пропускает стикеры/документы (для них байты бесполезны).
-    """
+    """Возвращает (байты изображения, тип) для последнего реально скачиваемого медиа."""
     history = list(chat_media_history.get(f"tg_{chat_id}", []))
     if not history:
         return None, ""
-    # Идём по истории с конца — берём первое, что реально можем скачать.
     for item in reversed(history):
         fid = item.get("file_id")
         mtype = str(item.get("type") or "")
@@ -113,11 +109,9 @@ async def fetch_last_media_tg(chat_id: int) -> tuple[bytes | None, str]:
                     return b, "photo"
             elif mtype in ("video", "animation"):
                 raw = await get_tg_file_bytes(_tg().tg_bot, fid)
-                # Для анимаций Telegram обычно отдаёт mp4 — ffmpeg справится.
                 frame = await extract_video_frame(raw, ".mp4")
                 if frame:
                     return frame, mtype
-            # sticker/document — пропускаем
         except Exception as e:
             logger.warning(f"fetch_last_media ({mtype}): {e}")
             continue
@@ -131,8 +125,6 @@ async def get_recall_media_description_tg(
     if not history:
         return None
     last = history[-n:]
-
-    # Пытаемся достать байты последнего «настоящего» медиа (фото/видео/анимация).
     img_bytes: bytes | None = None
     img_kind: str = ""
     for item in reversed(last):
@@ -157,7 +149,6 @@ async def get_recall_media_description_tg(
             continue
 
     if img_bytes is None:
-        # Fallback: просто текстовый список медиа.
         lines = []
         for item in last:
             mtype = item.get("type", "media")
@@ -173,8 +164,7 @@ async def get_recall_media_description_tg(
                 f"НЕ используй маркеры !separate, !avatar, !recall_media, !sticker, !gif, !search, !chart."
                 if lang == "ru" else
                 f"You recall recent media. List:\n{meta}\n\n"
-                f"Comment briefly in Kulsh's style. No markdown. "
-                f"Do NOT use markers !separate, !avatar, !recall_media, !sticker, !gif, !search, !chart."
+                f"Comment briefly in Kulsh's style. No markdown."
             )
             return json_str(await ask_ai_async(
                 prompt=prompt, chat_id=chat_id, user_id=user_id, platform="tg",
@@ -190,9 +180,7 @@ async def get_recall_media_description_tg(
             f"в стиле Кульша. Без markdown. "
             f"НЕ используй маркеры !separate, !avatar, !recall_media, !sticker, !gif, !search, !chart."
             if lang == "ru" else
-            f"You recall the last media in chat — it's a {img_kind}. Describe briefly what's on it, "
-            f"in Kulsh's style. No markdown. "
-            f"Do NOT use markers !separate, !avatar, !recall_media, !sticker, !gif, !search, !chart."
+            f"You recall the last media — it's a {img_kind}. Describe briefly in Kulsh's style. No markdown."
         )
         return json_str(await ask_ai_async(
             prompt=prompt, image_bytes=img_bytes, image_mime="image/jpeg",
@@ -220,6 +208,7 @@ from src.util import (
     is_femboy_battle_command,
     is_femboy_rate_command,
     is_looksmaxxing_command,
+    last_bot_reply,
     last_random_reply,
     logger,
     memory_to_messages,
@@ -241,6 +230,26 @@ from src.util import (
     chunk_text,
 )
 
+
+def _is_addressed_from_bot_tg(message: telebot.types.Message) -> bool:
+    """Разрешить ли реагировать на сообщение от другого бота."""
+    bot_id = tg_bot_id()
+    reply_ok = bool(
+        message.reply_to_message and message.reply_to_message.from_user
+        and message.reply_to_message.from_user.id == bot_id
+    )
+    text = (message.text or message.caption or "")
+    mentions_kulsh = bool(re.search(r'(?i)\bкульш\b', text))
+    mentions_uname = False
+    try:
+        uname = _tg().tg_bot.user.username if _tg().tg_bot.user else None
+        if uname and f"@{uname}".lower() in text.lower():
+            mentions_uname = True
+    except Exception:
+        pass
+    return reply_ok or mentions_kulsh or mentions_uname
+
+
 # ============================================================
 # MEDIA HANDLER
 # ============================================================
@@ -258,6 +267,15 @@ async def handle_tg_media(message: telebot.types.Message) -> None:
 
     display_name = message.from_user.full_name or "Unknown"
     username = message.from_user.username or ""
+
+    # Обработка ботов
+    if message.from_user.is_bot:
+        if not _is_addressed_from_bot_tg(message):
+            return
+        now = time.time()
+        if now - last_bot_reply.get(chat_key, 0) < 8:
+            return
+        last_bot_reply[chat_key] = now
 
     media_tag = None
     file_id = None
@@ -288,7 +306,7 @@ async def handle_tg_media(message: telebot.types.Message) -> None:
     if file_id and media_tag:
         add_media_history(chat_key, None, media_type or "media", display_name, file_id=file_id, caption=caption)
 
-    # ----- FEMBOY BATTLE ALBUM -----
+    # FEMBOY BATTLE
     if is_femboy_battle_command(caption) and message.photo:
         if message.media_group_id:
             mgid = message.media_group_id
@@ -308,7 +326,7 @@ async def handle_tg_media(message: telebot.types.Message) -> None:
         battle_photos[message.media_group_id].append(img_bytes)
         return
 
-    # ----- PSL BATTLE ALBUM -----
+    # PSL BATTLE
     if is_battle_command(caption) and message.photo:
         if message.media_group_id:
             mgid = message.media_group_id
@@ -323,7 +341,7 @@ async def handle_tg_media(message: telebot.types.Message) -> None:
             await _tg().reply_tg_html(message, tr(lang, "battle_need_photos"))
         return
 
-    # ----- CHART (по описанию + фото) -----
+    # CHART
     if is_dm or re.search(r'(?i)\bкульш\s+(график|chart|инфографика)', caption or ""):
         m = re.match(r'(?i)кульш\s+(график|chart|инфографика)\s*(.*)', caption or "", re.DOTALL)
         if m and message.photo:
@@ -335,11 +353,11 @@ async def handle_tg_media(message: telebot.types.Message) -> None:
                 logger.error(f"chart with user image err: {e}")
             return
 
-    # ----- FEMBOY RATE (фото) -----
+    # FEMBOY RATE
     is_femboy = (
         is_femboy_rate_command(caption) or
         (message.reply_to_message and message.reply_to_message.from_user
-         and message.reply_to_message.from_user.id == (_tg().tg_bot.user.id if _tg().tg_bot.user else 0)
+         and message.reply_to_message.from_user.id == (tg_bot_id() or 0)
          and message.reply_to_message.text
          and is_femboy_rate_command(message.reply_to_message.text)) or
         user_femboy_state.get(chat_id, False)
@@ -357,11 +375,11 @@ async def handle_tg_media(message: telebot.types.Message) -> None:
             await _tg().reply_tg_html(message, f"🌋 Ошибка: {e}")
         return
 
-    # ----- PSL (фото) -----
+    # PSL
     is_looksmaxxing = (
         is_looksmaxxing_command(caption) or
         (message.reply_to_message and message.reply_to_message.from_user
-         and message.reply_to_message.from_user.id == (_tg().tg_bot.user.id if _tg().tg_bot.user else 0)
+         and message.reply_to_message.from_user.id == (tg_bot_id() or 0)
          and message.reply_to_message.text
          and is_looksmaxxing_command(message.reply_to_message.text)) or
         user_looksmaxxing_state.get(chat_id, False)
@@ -394,8 +412,7 @@ async def handle_tg_media(message: telebot.types.Message) -> None:
             if include_advice and ai_data.get("advice"):
                 report_text += f"\n\n<b>{tr(lang, 'psl_advice')}</b>\n{html.escape(ai_data['advice'])}"
             try:
-                await _tg().tg_bot.send_photo(chat_id, InputFile(infographic),
-                                        caption=tr(lang, "psl_report"))
+                await _tg().tg_bot.send_photo(chat_id, InputFile(infographic), caption=tr(lang, "psl_report"))
             except Exception as e:
                 logger.error(f"infographic send: {e}")
             for chunk in [report_text[i:i + 3900] for i in range(0, len(report_text), 3900)]:
@@ -416,14 +433,10 @@ async def handle_tg_media(message: telebot.types.Message) -> None:
         mime = message.document.mime_type or ""
         doc_name = message.document.file_name or ""
         ext = doc_name.lower().rsplit('.', 1)[-1] if '.' in doc_name else ""
-
         if ext == "zip":
             credits = get_user_credits("tg", user_id)
             if credits < COST_ARCHIVE_EDIT:
-                await _tg().reply_tg_html(
-                    message,
-                    tr(lang, "tool_no_credits", COST_ARCHIVE_EDIT, credits, DAILY_CREDITS),
-                )
+                await _tg().reply_tg_html(message, tr(lang, "tool_no_credits", COST_ARCHIVE_EDIT, credits, DAILY_CREDITS))
                 return
             spend_credits("tg", user_id, COST_ARCHIVE_EDIT)
             try:
@@ -432,10 +445,8 @@ async def handle_tg_media(message: telebot.types.Message) -> None:
                 await _tg().reply_tg_html(message, tr(lang, "tool_download_fail", str(e)))
                 return
             default_req = "отредактируй что-нибудь полезное" if lang == "ru" else "edit something useful"
-            await tool_edit_archive(message, caption.strip() or default_req,
-                                    file_bytes, doc_name or "archive.zip")
+            await tool_edit_archive(message, caption.strip() or default_req, file_bytes, doc_name or "archive.zip")
             return
-
         if ext in TEXT_EXTS or mime.startswith("text/"):
             try:
                 file_bytes = await get_tg_file_bytes(_tg().tg_bot, message.document.file_id)
@@ -447,7 +458,7 @@ async def handle_tg_media(message: telebot.types.Message) -> None:
             return
 
     is_reply_to_bot = (message.reply_to_message and message.reply_to_message.from_user
-                       and message.reply_to_message.from_user.id == (_tg().tg_bot.user.id if _tg().tg_bot.user else 0))
+                       and message.reply_to_message.from_user.id == (tg_bot_id() or 0))
     addressed = bool(is_reply_to_bot or re.search(r'(?i)\bкульш\b', caption) or is_dm)
 
     if not addressed:
@@ -523,26 +534,31 @@ async def handle_tg_text(message: telebot.types.Message) -> None:
         new_prompt = text.strip()
         if new_prompt.lower() in ("отмена", "cancel", "/cancel", "отменить"):
             cfg["custom_prompt"] = None
+            save_user_configs()
             if waiting_msg_id:
                 try:
-                    await _tg().tg_bot.edit_message_text(
-                        tr(lang, "prompt_cancelled"),
-                        chat_id, waiting_msg_id,
-                    )
+                    await _tg().tg_bot.edit_message_text(tr(lang, "prompt_cancelled"), chat_id, waiting_msg_id)
                 except Exception:
                     pass
         else:
             truncated = new_prompt[:2000]
             cfg["custom_prompt"] = truncated
+            save_user_configs()
             if waiting_msg_id:
                 try:
-                    await _tg().tg_bot.edit_message_text(
-                        tr(lang, "prompt_saved", len(truncated)),
-                        chat_id, waiting_msg_id,
-                    )
+                    await _tg().tg_bot.edit_message_text(tr(lang, "prompt_saved", len(truncated)), chat_id, waiting_msg_id)
                 except Exception:
                     pass
         return
+
+    # Боты
+    if message.from_user.is_bot:
+        if not _is_addressed_from_bot_tg(message):
+            return
+        now = time.time()
+        if now - last_bot_reply.get(chat_key, 0) < 8:
+            return
+        last_bot_reply[chat_key] = now
 
     if tl.startswith("кульш конфиг") or tl.startswith("кульш настройки") or tl.startswith("kulsh config"):
         await _tg().tg_handle_config(message)
@@ -552,13 +568,11 @@ async def handle_tg_text(message: telebot.types.Message) -> None:
         await _tg().handle_status(message)
         return
 
-    # ---- поиск ----
     m = re.match(r'(?i)^(?:кульш\s+)?(?:поиск|search|найди|найти)\s+(.+)$', text.strip(), re.DOTALL)
     if m:
         await _tg().tg_handle_search(message, m.group(1).strip(), chat_id, user_id)
         return
 
-    # ---- график ----
     m = re.match(r'(?i)^(?:кульш\s+)?(?:график|chart|инфографика|диаграмма)\s+(.+)$', text.strip(), re.DOTALL)
     if m:
         await _tg().tg_handle_chart_request(message, m.group(1).strip(), chat_id, user_id)
@@ -597,8 +611,7 @@ async def handle_tg_text(message: telebot.types.Message) -> None:
             tail = read_log_tail(20)
             full_caption = f"{LOG_INTRO}\n\n{tail}"
             if len(full_caption) <= 1024:
-                caption = full_caption
-                extra_text = None
+                caption, extra_text = full_caption, None
             else:
                 available = 1024 - len(LOG_INTRO) - 5
                 caption = f"{LOG_INTRO}\n\n{tail[:available]}..."
@@ -612,8 +625,7 @@ async def handle_tg_text(message: telebot.types.Message) -> None:
             if extra_text:
                 for chunk in chunk_text(extra_text, 3900):
                     try:
-                        await _tg().tg_bot.send_message(chat_id, f"<pre>{html.escape(chunk)}</pre>",
-                                                  parse_mode='HTML')
+                        await _tg().tg_bot.send_message(chat_id, f"<pre>{html.escape(chunk)}</pre>", parse_mode='HTML')
                     except Exception:
                         await _tg().tg_bot.send_message(chat_id, chunk)
         except Exception as e:
@@ -643,7 +655,7 @@ async def handle_tg_text(message: telebot.types.Message) -> None:
         return
 
     is_reply_to_bot = (message.reply_to_message and message.reply_to_message.from_user
-                       and message.reply_to_message.from_user.id == (_tg().tg_bot.user.id if _tg().tg_bot.user else 0))
+                       and message.reply_to_message.from_user.id == (tg_bot_id() or 0))
     addressed = bool(is_reply_to_bot or re.search(r'(?i)\bкульш\b', text) or is_dm)
 
     if addressed:
@@ -703,18 +715,13 @@ async def process_battle_media_group(media_group_id: str, tg_chat_id: int, user_
     if "error" in ai_data:
         await _tg().tg_bot.edit_message_text(ai_data['error'], tg_chat_id, status.message_id)
         return
-    battle_img = await create_battle_infographic(photo1_bytes, photo2_bytes, ai_data,
-                                                  theme=theme, lang=lang)
+    battle_img = await create_battle_infographic(photo1_bytes, photo2_bytes, ai_data, theme=theme, lang=lang)
     winner_num = str(ai_data.get("winner", "1"))
     winner_label = tr(lang, "battle_first") if winner_num == "1" else tr(lang, "battle_second")
     report_text = (
         f"<b>{tr(lang, 'battle_title')}</b>\n\n"
         f"{tr(lang, 'battle_winner')} <b>{winner_label}</b>\n"
         f"{tr(lang, 'battle_reason')} {html.escape(ai_data.get('reason', ''))}\n\n"
-        f"{tr(lang, 'battle_photo1')} PSL {ai_data.get('photo1', {}).get('psl', '?')} | "
-        f"Tier {html.escape(str(ai_data.get('photo1', {}).get('tier', '?')))}\n"
-        f"{tr(lang, 'battle_photo2')} PSL {ai_data.get('photo2', {}).get('psl', '?')} | "
-        f"Tier {html.escape(str(ai_data.get('photo2', {}).get('tier', '?')))}\n"
     )
     try:
         await _tg().tg_bot.send_photo(tg_chat_id, InputFile(battle_img), caption=tr(lang, "battle_caption"))

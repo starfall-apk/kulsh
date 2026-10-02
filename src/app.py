@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.40.0
+# Kulsh GPT | v2.41.0
 # by (main author): starfall-apk
 # coauthor & bot hosting: pomidorka1515
 
@@ -31,6 +31,7 @@ tg_bot = AsyncTeleBot(TG_TOKEN)
 intents = discord.Intents.default()
 intents.message_content = True
 intents.guilds = True
+intents.members = True
 ds_bot = discord.Client(intents=intents)
 ds_tree = app_commands.CommandTree(ds_bot)
 
@@ -68,6 +69,7 @@ def register_discord() -> None:
     tree.command(name="credits", description="Credits balance / Баланс кредитов")(discord_cmds.ds_slash_credits)
     tree.command(name="config", description="Channel settings / Настройки канала")(discord_cmds.ds_slash_config)
     tree.command(name="logs", description="Server logs (admins) / Логи сервера (админам)")(discord_cmds.ds_slash_logs)
+    tree.command(name="groupinfo", description="Server info / Инфо о сервере")(discord_cmds.ds_slash_groupinfo)
 
     @tree.command(name="avatar", description="Describe avatar / Описать аватарку")
     @app_commands.describe(user="Whose avatar to describe / Чью аватарку описать")
@@ -109,6 +111,11 @@ def register_discord() -> None:
     async def femboy_battle(interaction: discord.Interaction, image1: discord.Attachment, image2: discord.Attachment) -> None:
         await discord_cmds.ds_slash_femboy_battle(interaction, image1, image2)
 
+    @tree.command(name="userinfo", description="User profile info / Инфо о пользователе")
+    @app_commands.describe(user="User to inspect / Пользователь (оставь пусто для себя)")
+    async def userinfo(interaction: discord.Interaction, user: discord.Member | None = None) -> None:
+        await discord_cmds.ds_slash_userinfo(interaction, user)
+
     ds_bot.event(discord_msg.on_message)
 
 
@@ -120,6 +127,7 @@ def register() -> None:
 async def main() -> None:
     register()
     asyncio.create_task(loops.random_post_loop())
+    asyncio.create_task(loops.periodic_config_save_loop())
 
     @ds_bot.event
     async def on_ready() -> None:

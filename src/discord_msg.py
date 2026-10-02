@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.40.0
+# Kulsh GPT | v2.41.0
 # by (main author): starfall-apk
 # coauthor & bot hosting: pomidorka1515
 
@@ -39,6 +39,7 @@ from src.util import (
     voice_recognition_enabled,
     voice_recv_available,
     AudioSegment,
+    add_typos,
     tr,
     voice_client,
     add_bot_memory,
@@ -50,6 +51,7 @@ from src.util import (
     get_user_config,
     is_femboy_battle_command,
     is_femboy_rate_command,
+    last_bot_reply,
     last_random_reply,
     logger,
     memory_to_messages,
@@ -70,8 +72,77 @@ from src.util import (
 from src import discord_cmds as dcmd
 
 
+async def _is_addressed_from_bot_ds(message: discord.Message) -> bool:
+    me = dcmd.ds_bot.user if dcmd.ds_bot else None
+    if me is None:
+        return False
+    # reply to bot?
+    if message.reference and message.reference.resolved and isinstance(message.reference.resolved, discord.Message):
+        if message.reference.resolved.author == me:
+            return True
+    content = (message.content or "").lower()
+    if "кульш" in content or "kulsh" in content:
+        return True
+    if me.mention in message.content:
+        return True
+    if me.name.lower() in content:
+        return True
+    return False
+
+
+async def _apply_ds_reaction(message: discord.Message, emojis_str: str, reply_target: discord.Message | None = None) -> list[str]:
+    if not emojis_str:
+        return []
+    from src.util import split_emojis
+    emojis = split_emojis(emojis_str)
+    if not emojis:
+        return []
+    target = reply_target or message
+    applied: list[str] = []
+    for e in emojis[:3]:
+        try:
+            await target.add_reaction(e)
+            applied.append(e)
+        except Exception as ex:
+            logger.warning(f"add_reaction {e}: {ex}")
+    return applied
+
+
+async def _handle_reaction_markers_ds(
+    message: discord.Message,
+    chat_id: int,
+    text: str,
+    cfg: dict[str, Any],
+) -> tuple[str, list[str]]:
+    from src.util import REACT_PATTERN, WHY_PATTERN
+    if not cfg.get("reactions_enabled", True):
+        cleaned = REACT_PATTERN.sub(' ', text or "")
+        cleaned = WHY_PATTERN.sub(' ', cleaned)
+        return cleaned.strip(), []
+    m = REACT_PATTERN.search(text or "")
+    why_m = WHY_PATTERN.search(text or "")
+    if not m:
+        return text, []
+    emojis_str = m.group(1)
+    why_text = why_m.group(1).strip() if why_m else ""
+    reply_target: discord.Message | None = None
+    if message.reference and message.reference.resolved and isinstance(message.reference.resolved, discord.Message):
+        reply_target = message.reference.resolved
+    applied = await _apply_ds_reaction(message, emojis_str, reply_target=reply_target)
+    if applied and why_text:
+        mem_text = f"[реакция {' '.join(applied)}] {why_text}"
+        add_bot_memory(f"ds_{chat_id}", mem_text)
+        logger.info(f"😀 DS реакция {' '.join(applied)}: {why_text[:80]}")
+    elif applied:
+        add_bot_memory(f"ds_{chat_id}", f"[реакция {' '.join(applied)}]")
+    cleaned = REACT_PATTERN.sub(' ', text or "")
+    cleaned = WHY_PATTERN.sub(' ', cleaned)
+    cleaned = re.sub(r'[ \t]{2,}', ' ', cleaned).strip()
+    return cleaned, applied
+
+
 async def on_message(message: discord.Message) -> None:
-    if message.author == dcmd.ds_bot.user or message.author.bot:
+    if message.author == dcmd.ds_bot.user:
         return
     guild = message.guild
     is_dm = guild is None
@@ -83,6 +154,16 @@ async def on_message(message: discord.Message) -> None:
     cfg = get_user_config("ds", chat_id, user_id)
     lang_raw = cfg.get("language", "ru")
     lang = lang_raw if isinstance(lang_raw, str) else "ru"
+
+    # Bot-to-bot
+    if message.author.bot:
+        if not await _is_addressed_from_bot_ds(message):
+            return
+        now = time.time()
+        chat_key = f"ds_{chat_id}"
+        if now - last_bot_reply.get(chat_key, 0) < 8:
+            return
+        last_bot_reply[chat_key] = now
 
     if not is_dm and (content_lower.startswith("кульш обновись") or content_lower.startswith("kulsh update")):
         if message.author.id not in AUTHORIZED_UPDATERS:
@@ -117,7 +198,6 @@ async def on_message(message: discord.Message) -> None:
             await ds_handle_config_param(message, user_id, parts)
         return
 
-    # статус
     if content_lower.strip() in ("кульш статус", "kulsh status", "кульш состояние"):
         mode_raw = str(cfg.get("communication_mode", "kent"))
         if mode_raw == "assistant":
@@ -132,8 +212,7 @@ async def on_message(message: discord.Message) -> None:
             latency_ms = 50
         from src.util import human_uptime, BOT_VERSION
         text = (
-            f"# 🟢 {tr(lang, 'status_title')}\n\n"
-            f"**{tr(lang, 'status_online')}**\n\n"
+            f"# 🟢 {tr(lang, 'status_title')}\n\n**{tr(lang, 'status_online')}**\n\n"
             f"- {tr(lang, 'status_uptime')}: `{human_uptime()}`\n"
             f"- {tr(lang, 'status_latency')}: `~{latency_ms} ms`\n"
             f"- {tr(lang, 'status_mode')}: `{mode_label}`\n"
@@ -143,7 +222,6 @@ async def on_message(message: discord.Message) -> None:
         await message.reply(text)
         return
 
-    # ---- поиск ----
     m = re.match(r'(?i)^(?:кульш\s+)?(?:поиск|search|найди|найти)\s+(.+)$', message.content.strip(), re.DOTALL)
     if m:
         if not cfg.get("web_search_enabled", True):
@@ -156,28 +234,23 @@ async def on_message(message: discord.Message) -> None:
                 return
             context = format_search_results(results)
             prompt = (
-                f"Пользователь искал: {m.group(1).strip()}\n\n"
-                f"Результаты:\n{context}\n\n"
-                f"Дай краткий ответ. Без маркеров !search, !chart."
+                f"Пользователь искал: {m.group(1).strip()}\n\nРезультаты:\n{context}\n\n"
+                f"Дай краткий ответ. Без !search, !chart."
             )
             answer = await ask_ai_async(prompt=prompt, chat_id=chat_id, user_id=user_id, platform="ds")
             full = f"🔎 **{m.group(1).strip()}**\n\n{answer or ''}"
-            sources = [f"{i}. [{r.get('title', '')[:60]}]({r.get('url', '')})"
-                       for i, r in enumerate(results[:4], 1)]
+            sources = [f"{i}. [{r.get('title', '')[:60]}]({r.get('url', '')})" for i, r in enumerate(results[:4], 1)]
             if sources:
                 full += "\n\n**" + tr(lang, "search_source") + ":**\n" + "\n".join(sources)
             await message.reply(full[:1900])
         return
 
-    # ---- график ----
-    m = re.match(r'(?i)^(?:кульш\s+)?(?:график|chart|инфографика|диаграмма)\s+(.+)$',
-                 message.content.strip(), re.DOTALL)
+    m = re.match(r'(?i)^(?:кульш\s+)?(?:график|chart|инфографика|диаграмма)\s+(.+)$', message.content.strip(), re.DOTALL)
     if m:
         async with message.channel.typing():
             chart_prompt = (
-                f"Сгенерируй JSON-спецификацию инфографики по описанию:\n\n{m.group(1).strip()}\n\n"
-                f"Верни ТОЛЬКО JSON. Структура: {{\"theme\": \"dark_modern|light_minimal|ocean|retro\", "
-                f"\"title\": \"...\", \"blocks\": [{{\"type\": \"bar|line|pie|pie3d|table|heading|text|divider\", ...}}]}}"
+                f"Сгенерируй JSON-спецификацию инфографики:\n\n{m.group(1).strip()}\n\n"
+                f"Верни ТОЛЬКО JSON. Структура: {{theme, title, blocks}}"
             )
             raw = await ask_ai_async(
                 prompt=chart_prompt,
@@ -216,9 +289,8 @@ async def on_message(message: discord.Message) -> None:
         await message.reply(embed=embed)
         return
 
-    if (content_lower.startswith("кульш аватарк") or
-            content_lower.startswith("кульш аватар") or
-            content_lower.startswith("kulsh avatar")):
+    if (content_lower.startswith("кульш аватарк") or content_lower.startswith("кульш аватар")
+            or content_lower.startswith("kulsh avatar")):
         avatar_raw: str | None = await get_avatar_description_ds(message, chat_id, user_id, lang=str(lang))
         if not avatar_raw:
             await message.reply(tr(lang, "avatar_fail"))
@@ -243,9 +315,7 @@ async def on_message(message: discord.Message) -> None:
                     file=discord.File('bot.log'),
                 )
             except FileNotFoundError:
-                await message.reply(
-                    f"{intro}\n```\n{tail}\n```" if len(tail) <= 1900 else f"{intro}\n\n{tail}"
-                )
+                await message.reply(f"{intro}\n```\n{tail}\n```" if len(tail) <= 1900 else f"{intro}\n\n{tail}")
                 return
             if len(tail) > 1900:
                 for chunk in chunk_text(tail, 1900):
@@ -296,26 +366,22 @@ async def on_message(message: discord.Message) -> None:
         return
 
     if is_looksmaxxing_command(message.content) and len(message.attachments) == 0:
-        add_user_memory(f"ds_{chat_id}", "DS", display_name, username, user_id,
-                        message.content, message_id=message.id)
+        add_user_memory(f"ds_{chat_id}", "DS", display_name, username, user_id, message.content, message_id=message.id)
         await message.reply(tr(lang, "psl_need_photo"))
         return
 
     if is_femboy_rate_command(message.content) and len(message.attachments) == 0:
-        add_user_memory(f"ds_{chat_id}", "DS", display_name, username, user_id,
-                        message.content, message_id=message.id)
+        add_user_memory(f"ds_{chat_id}", "DS", display_name, username, user_id, message.content, message_id=message.id)
         await message.reply(tr(lang, "femboy_need_photo"))
         return
 
     if is_battle_command(message.content) and len(message.attachments) == 0:
-        add_user_memory(f"ds_{chat_id}", "DS", display_name, username, user_id,
-                        message.content, message_id=message.id)
+        add_user_memory(f"ds_{chat_id}", "DS", display_name, username, user_id, message.content, message_id=message.id)
         await message.reply(tr(lang, "battle_need_photos"))
         return
 
     if is_femboy_battle_command(message.content) and len(message.attachments) == 0:
-        add_user_memory(f"ds_{chat_id}", "DS", display_name, username, user_id,
-                        message.content, message_id=message.id)
+        add_user_memory(f"ds_{chat_id}", "DS", display_name, username, user_id, message.content, message_id=message.id)
         await message.reply(tr(lang, "femboy_battle_need_photos"))
         return
 
@@ -341,18 +407,10 @@ async def on_message(message: discord.Message) -> None:
                 report = (
                     f"**{tr(lang, 'battle_title')}**\n\n"
                     f"{tr(lang, 'battle_winner')} **{winner_label}**\n"
-                    f"{tr(lang, 'battle_reason')} {ai_data.get('reason', '')}\n\n"
-                    f"{tr(lang, 'battle_photo1')} PSL {ai_data.get('photo1', {}).get('psl', '?')} | "
-                    f"{ai_data.get('photo1', {}).get('tier', '?')}\n"
-                    f"{tr(lang, 'battle_photo2')} PSL {ai_data.get('photo2', {}).get('psl', '?')} | "
-                    f"{ai_data.get('photo2', {}).get('tier', '?')}"
+                    f"{tr(lang, 'battle_reason')} {ai_data.get('reason', '')}"
                 )
-                await message.reply(file=discord.File(fp=img, filename="battle.png"),
-                                    content=report[:1900])
+                await message.reply(file=discord.File(fp=img, filename="battle.png"), content=report[:1900])
                 await status_msg.delete()
-                add_user_memory(f"ds_{chat_id}", "DS", display_name, username, user_id,
-                                "[battle]", message_id=message.id)
-                add_bot_memory(f"ds_{chat_id}", "[battle результат]")
             except Exception as e:
                 logger.error(f"DS battle: {e}")
                 await status_msg.edit(content=f"Ошибка: {e}")
@@ -374,19 +432,10 @@ async def on_message(message: discord.Message) -> None:
                 winner_label = tr(lang, "femboy_battle_first") if winner_num == "1" else tr(lang, "femboy_battle_second")
                 report = (
                     f"**{tr(lang, 'femboy_battle_title')}**\n\n"
-                    f"{tr(lang, 'femboy_battle_winner')} **{winner_label}**\n"
-                    f"{tr(lang, 'femboy_battle_reason')} {ai_data.get('reason', '')}\n\n"
-                    f"{tr(lang, 'femboy_battle_photo1')} FMB {ai_data.get('photo1', {}).get('fmb', '?')} | "
-                    f"{ai_data.get('photo1', {}).get('tier', '?')}\n"
-                    f"{tr(lang, 'femboy_battle_photo2')} FMB {ai_data.get('photo2', {}).get('fmb', '?')} | "
-                    f"{ai_data.get('photo2', {}).get('tier', '?')}"
+                    f"{tr(lang, 'femboy_battle_winner')} **{winner_label}**"
                 )
-                await message.reply(file=discord.File(fp=img, filename="femboy_battle.png"),
-                                    content=report[:1900])
+                await message.reply(file=discord.File(fp=img, filename="femboy_battle.png"), content=report[:1900])
                 await status_msg.delete()
-                add_user_memory(f"ds_{chat_id}", "DS", display_name, username, user_id,
-                                "[femboy battle]", message_id=message.id)
-                add_bot_memory(f"ds_{chat_id}", "[femboy battle результат]")
             except Exception as e:
                 logger.error(f"DS femboy battle: {e}")
                 await status_msg.edit(content=f"Ошибка: {e}")
@@ -410,17 +459,9 @@ async def on_message(message: discord.Message) -> None:
                     f"**{tr(lang, 'psl_title')}**\n"
                     f"{tr(lang, 'psl_gender')} {ai_data.get('gender', '?')}\n"
                     f"{tr(lang, 'psl_score')} `{ai_data.get('psl', '?')}/8.0`\n"
-                    f"{tr(lang, 'psl_tier')} `{ai_data.get('tier', '?')}`\n"
+                    f"{tr(lang, 'psl_tier')} `{ai_data.get('tier', '?')}`"
                 )
-                if ai_data.get("potential"):
-                    report += f"{tr(lang, 'psl_potential')} `{ai_data['potential']}`\n"
-                report += f"\n{ai_data.get('summary', '')}"
-                if include_advice and ai_data.get("advice"):
-                    report += f"\n\n**{tr(lang, 'psl_advice')}**\n{ai_data['advice']}"
-                await message.reply(file=discord.File(fp=infographic, filename="psl.png"),
-                                    content=report[:1900])
-                if len(report) > 1900:
-                    await message.channel.send(report[1900:])
+                await message.reply(file=discord.File(fp=infographic, filename="psl.png"), content=report[:1900])
             except Exception as e:
                 logger.error(f"DS looksmaxxing: {e}")
                 await message.reply(f"Ошибка: {e}")
@@ -440,18 +481,9 @@ async def on_message(message: discord.Message) -> None:
                 report = (
                     f"**{tr(lang, 'femboy_title')}**\n"
                     f"{tr(lang, 'femboy_gender')} {ai_data.get('gender', '?')}\n"
-                    f"{tr(lang, 'femboy_score')} `{ai_data.get('fmb', '?')}/10.0`\n"
-                    f"{tr(lang, 'femboy_tier')} `{ai_data.get('tier', '?')}`\n"
+                    f"{tr(lang, 'femboy_score')} `{ai_data.get('fmb', '?')}/10.0`"
                 )
-                if ai_data.get("potential"):
-                    report += f"{tr(lang, 'femboy_potential')} `{ai_data['potential']}`\n"
-                report += f"\n{ai_data.get('summary', '')}"
-                if include_advice and ai_data.get("advice"):
-                    report += f"\n\n**{tr(lang, 'femboy_advice')}**\n{ai_data['advice']}"
-                await message.reply(file=discord.File(fp=infographic, filename="femboy.png"),
-                                    content=report[:1900])
-                if len(report) > 1900:
-                    await message.channel.send(report[1900:])
+                await message.reply(file=discord.File(fp=infographic, filename="femboy.png"), content=report[:1900])
             except Exception as e:
                 logger.error(f"DS femboy: {e}")
                 await message.reply(f"Ошибка: {e}")
@@ -467,7 +499,8 @@ async def on_message(message: discord.Message) -> None:
         if message.reference.resolved.author == dcmd.ds_bot.user:
             is_reply_to_bot = True
 
-    addressed = bool(is_reply_to_bot or re.search(r'(?i)\bкульш\b', message.content) or is_dm)
+    addressed = bool(is_reply_to_bot or re.search(r'(?i)\bкульш\b', message.content) or is_dm
+                     or (message.author.bot and await _is_addressed_from_bot_ds(message)))
 
     if (image_attachments or video_attachments) and addressed:
         async with message.channel.typing():
@@ -509,8 +542,7 @@ async def on_message(message: discord.Message) -> None:
             asyncio.create_task(extract_memory(f"ds_{chat_id}", f"{display_name}: {message.content}", answer))
         return
 
-    add_user_memory(f"ds_{chat_id}", "DS", display_name, username, user_id,
-                    message.content, message_id=message.id)
+    add_user_memory(f"ds_{chat_id}", "DS", display_name, username, user_id, message.content, message_id=message.id)
     if await should_random_reply("ds", chat_id, user_id):
         try:
             answer = await ask_ai_async(
@@ -527,12 +559,7 @@ async def on_message(message: discord.Message) -> None:
 
 if voice_recognition_enabled and voice_recv_available:
     class RecognitionSink(voice_recv.AudioSink):  # type: ignore[misc]
-        def __init__(
-            self,
-            bot: discord.Client,
-            guild: discord.Guild,
-            text_channel: discord.abc.Messageable,
-        ) -> None:
+        def __init__(self, bot: discord.Client, guild: discord.Guild, text_channel: discord.abc.Messageable) -> None:
             super().__init__()
             self.bot = bot
             self.guild = guild
