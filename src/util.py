@@ -80,6 +80,7 @@ def human_uptime() -> str:
     parts.append(f"{m}м")
     return " ".join(parts)
 
+
 # ============================================================
 # КОНФИГ .env
 # ============================================================
@@ -663,15 +664,17 @@ def clean_json_text(text: str) -> str:
 # ============================================================
 # УТИЛИТЫ-МАРКЕРЫ
 # ============================================================
-# ВАЖНО: матчим ТОЛЬКО варианты с ведущим "!" — иначе обычные английские
-# слова "avatar"/"separate"/"gif"/"sticker" в тексте ломают пробелы.
+# Матчим ТОЛЬКО варианты с ведущим "!".
+# ВАЖНО: НЕ используем \b — в Python \b юникод-осведомлён, а \w включает кириллицу,
+# поэтому "!separateпривет" без пробела не матчился (между 'e' и 'п' нет границы слова).
+# Используем (?![A-Za-z]) — запрещаем только латинскую букву сразу после маркера.
 UTILITY_PATTERNS = {
-    "avatar": re.compile(r'!\s*avatar\b', re.IGNORECASE),
-    "recall_media": re.compile(r'!\s*recall[\s_]*media\b', re.IGNORECASE),
-    "sticker": re.compile(r'!\s*sticker\b', re.IGNORECASE),
-    "gif": re.compile(r'!\s*gif\b', re.IGNORECASE),
+    "avatar": re.compile(r'!\s*avatar(?![A-Za-z])', re.IGNORECASE),
+    "recall_media": re.compile(r'!\s*recall[\s_]*media(?![A-Za-z])', re.IGNORECASE),
+    "sticker": re.compile(r'!\s*sticker(?![A-Za-z])', re.IGNORECASE),
+    "gif": re.compile(r'!\s*gif(?![A-Za-z])', re.IGNORECASE),
 }
-SEPARATOR_PATTERN = re.compile(r'!\s*sep[ae]rate\b', re.IGNORECASE)
+SEPARATOR_PATTERN = re.compile(r'!\s*sep[ae]rate(?![A-Za-z])', re.IGNORECASE)
 
 
 def split_by_separator(text: str) -> list[str]:
