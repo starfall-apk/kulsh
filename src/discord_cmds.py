@@ -1,11 +1,8 @@
-# Kulsh GPT | v2.39.0
+# Kulsh GPT | v2.40.0
 # by (main author): starfall-apk
 # coauthor & bot hosting: pomidorka1515
 
-"""Discord slash commands and channel-config helpers.
-
-Commands are plain coroutines. app.register_discord() attaches them to the tree.
-"""
+"""Discord slash commands and channel-config helpers."""
 
 import asyncio
 import json
@@ -16,10 +13,20 @@ from typing import Any
 import discord
 from discord import app_commands
 
-from src.ai import extract_search_marker, format_search_results, ask_ai_async, web_search
+from src.ai import extract_search_marker, format_search_results, ask_ai_async, web_search, user_wants_chart
 from src.charts import extract_chart_marker, render_infographic
-from src.looks import create_battle_infographic, create_infographic, get_battle_data, get_looksmaxxing_data
+from src.looks import (
+    create_battle_infographic,
+    create_femboy_battle_infographic,
+    create_femboy_infographic,
+    create_infographic,
+    get_battle_data,
+    get_femboy_battle_data,
+    get_femboy_data,
+    get_looksmaxxing_data,
+)
 from src.util import (
+    BOT_VERSION,
     DAILY_CREDITS,
     DONATE_URL,
     GITHUB_URL,
@@ -27,6 +34,7 @@ from src.util import (
     MODEL_DISPLAY,
     MODEL_LIST,
     ds_user,
+    human_uptime,
     json_str,
     tr,
     add_bot_memory,
@@ -45,7 +53,8 @@ from src.util import (
     calc_typing_delay,
     clean_extra_text,
     clean_json_text,
-    premium_functions_enabled,)
+    premium_functions_enabled,
+)
 
 ds_bot: Any = None
 
@@ -54,9 +63,8 @@ def bind(bot: Any) -> None:
     global ds_bot
     ds_bot = bot
 
-async def typing_with_delay_ds(
-    channel: discord.abc.Messageable, text: str, delay: float | None = None,
-) -> None:
+
+async def typing_with_delay_ds(channel: discord.abc.Messageable, text: str, delay: float | None = None) -> None:
     if delay is None:
         delay = calc_typing_delay(text)
     elapsed = 0.0
@@ -69,6 +77,7 @@ async def typing_with_delay_ds(
         except Exception:
             await asyncio.sleep(step)
         elapsed += step
+
 
 async def get_avatar_description_ds(
     message: discord.Message, chat_id: int, user_id: int, lang: str = "ru",
@@ -109,6 +118,7 @@ async def get_avatar_description_ds(
         logger.warning(f"DS avatar desc: {e}")
         return None
 
+
 async def execute_utility_ds(message: discord.Message, marker: str, chat_id: int, user_id: int) -> None:
     cfg = get_user_config("ds", chat_id, user_id)
     if marker in ("sticker", "gif"):
@@ -121,13 +131,13 @@ async def execute_utility_ds(message: discord.Message, marker: str, chat_id: int
         except Exception as e:
             logger.error(f"gif error: {e}")
 
+
 async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: int,
                               answer_raw: str, user_text: str | None = None) -> None:
     cfg = get_user_config("ds", chat_id, user_id)
     lang = cfg.get("language", "ru")
     separate_enabled = cfg.get("separate_enabled", True)
 
-    # !search
     if cfg.get("web_search_enabled", True):
         query, _ = extract_search_marker(answer_raw or "")
         if query:
@@ -149,21 +159,24 @@ async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: i
             else:
                 answer_raw = tr(lang, "search_nothing")
 
-    # !chart
     if premium_functions_enabled:
         chart_spec, remaining = extract_chart_marker(answer_raw or "")
         if chart_spec:
-            try:
-                img = await render_infographic(chart_spec, user_images=None)
+            user_asked_chart = user_wants_chart(user_text or message.content or "")
+            if user_asked_chart:
                 try:
-                    await message.reply(file=discord.File(fp=img, filename="infographic.png"),
-                                        content=(chart_spec.get("title") or tr(lang, "chart_built"))[:1900])
+                    img = await render_infographic(chart_spec, user_images=None)
+                    try:
+                        await message.reply(file=discord.File(fp=img, filename="infographic.png"),
+                                            content=(chart_spec.get("title") or tr(lang, "chart_built"))[:1900])
+                    except Exception as e:
+                        logger.error(f"ds chart send: {e}")
                 except Exception as e:
-                    logger.error(f"ds chart send: {e}")
+                    logger.error(f"ds chart render: {e}")
+                    answer_raw = remaining + "\n" + tr(lang, "chart_error", str(e))
+                    chart_spec = None
+            if chart_spec is not None or not user_asked_chart:
                 answer_raw = remaining
-            except Exception as e:
-                logger.error(f"ds chart render: {e}")
-                answer_raw = remaining + "\n" + tr(lang, "chart_error", str(e))
 
     clean_segments, markers = process_ai_response(answer_raw, separate_enabled=separate_enabled)
 
@@ -216,6 +229,7 @@ async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: i
             except Exception as e:
                 logger.warning(f"ds utility {m}: {e}")
 
+
 # ============================================================
 # DISCORD CONFIG
 # ============================================================
@@ -233,6 +247,13 @@ def ds_config_embed(chat_id: int, user_id: int) -> discord.Embed:
         prompt = prompt[:900] + "..."
     theme_disp = tr(lang, "dark") if cfg.get("theme", "dark") == "dark" else tr(lang, "light")
     lang_disp = tr(lang, "russian") if lang == "ru" else tr(lang, "english")
+    mode_raw = str(cfg.get("communication_mode", "kent"))
+    if mode_raw == "assistant":
+        mode_disp = tr(lang, "mode_assistant")
+    elif mode_raw == "pro":
+        mode_disp = tr(lang, "mode_pro")
+    else:
+        mode_disp = tr(lang, "mode_kent")
 
     title = "✦ Настройки Кульша ✦" if lang == "ru" else "✦ Kulsh Settings ✦"
     desc = ("Текущие параметры канала. Изменение — текстом через `кульш конфиг <параметр> <значение>`."
@@ -243,6 +264,7 @@ def ds_config_embed(chat_id: int, user_id: int) -> discord.Embed:
     if lang == "ru":
         embed.add_field(name="🌐 Язык", value=lang_disp, inline=True)
         embed.add_field(name="🌓 Тема", value=theme_disp, inline=True)
+        embed.add_field(name="🧩 Режим", value=mode_disp, inline=True)
         embed.add_field(name="🧠 Модель", value=model_display_name(cfg.get("model"), lang), inline=True)
         embed.add_field(name="🎛 Температура", value=str(cfg.get("temperature", 0.9)), inline=True)
         embed.add_field(name="💬 Разбивка", value=sep, inline=True)
@@ -257,6 +279,7 @@ def ds_config_embed(chat_id: int, user_id: int) -> discord.Embed:
             value=(
                 "`кульш конфиг язык ru|en`\n"
                 "`кульш конфиг тема тёмная|светлая`\n"
+                "`кульш конфиг режим кент|ассистент`\n"
                 "`кульш конфиг модель` — список\n"
                 "`кульш конфиг модель <номер|авто>`\n"
                 "`кульш конфиг температура <0.0-2.0>`\n"
@@ -273,6 +296,7 @@ def ds_config_embed(chat_id: int, user_id: int) -> discord.Embed:
     else:
         embed.add_field(name="🌐 Language", value=lang_disp, inline=True)
         embed.add_field(name="🌓 Theme", value=theme_disp, inline=True)
+        embed.add_field(name="🧩 Mode", value=mode_disp, inline=True)
         embed.add_field(name="🧠 Model", value=model_display_name(cfg.get("model"), lang), inline=True)
         embed.add_field(name="🎛 Temperature", value=str(cfg.get("temperature", 0.9)), inline=True)
         embed.add_field(name="💬 Split", value=sep, inline=True)
@@ -287,6 +311,7 @@ def ds_config_embed(chat_id: int, user_id: int) -> discord.Embed:
             value=(
                 "`kulsh config language ru|en`\n"
                 "`kulsh config theme dark|light`\n"
+                "`kulsh config mode kent|assistant`\n"
                 "`kulsh config model` — list\n"
                 "`kulsh config model <number|auto>`\n"
                 "`kulsh config temperature <0.0-2.0>`\n"
@@ -348,6 +373,17 @@ async def ds_handle_config_param(message: discord.Message, user_id: int, parts: 
             await message.reply(tr(lang, "ds_setting_theme", tr(lang, "light")))
         else:
             await message.reply(tr(lang, "ds_need_specify_theme"))
+    elif param in ("режим", "mode"):
+        if val in ("кент", "kent", "default"):
+            cfg["communication_mode"] = "kent"
+            await message.reply(tr(lang, "ds_setting_mode", tr(lang, "mode_kent")))
+        elif val in ("ассистент", "assistant"):
+            cfg["communication_mode"] = "assistant"
+            await message.reply(tr(lang, "ds_setting_mode", tr(lang, "mode_assistant")))
+        elif val in ("pro",):
+            await message.reply(tr(lang, "mode_need_dm"))
+        else:
+            await message.reply(tr(lang, "ds_unknown_param"))
     elif param in ("серия", "series"):
         cfg["series_reminder_enabled"] = bool_on
         await message.reply(tr(lang, "ds_setting_series", tr(lang, "on") if bool_on else tr(lang, "off")))
@@ -406,6 +442,7 @@ async def ds_handle_config_param(message: discord.Message, user_id: int, parts: 
     else:
         await message.reply(tr(lang, "ds_unknown_param"))
 
+
 def ds_slash_help(lang: str) -> str:
     return tr(lang, "help_body", MINI_APP_URL, GITHUB_URL)
 
@@ -416,36 +453,42 @@ def ds_slash_menu(lang: str) -> str:
             "# ✦ Кульш AI — меню ✦\n\n"
             "✦彡巛〢 ✦ 彡 巛 〢 ✦\n\n"
             "Открытая языковая модель с набором встроенных инструментов.\n\n"
-            "**Основные**\n"
-            "▸ `/start` — приветствие\n"
-            "▸ `/help` — полный список команд\n"
-            "▸ `/config` — настройки канала\n"
-            "▸ `/donate` — поддержка разработки\n"
-            "▸ `/credits` — баланс кредитов\n\n"
-            "**Инструменты**\n"
-            "▸ `/avatar` — описать аватарку\n"
-            "▸ `/recall` — вспомнить последние медиа\n"
-            "▸ `/psl` — оценка внешности\n"
-            "▸ `/battle` — баттл двух фото\n"
-            "▸ `/logs` — логи сервера (админам)\n\n"
+            "**Основные**\n\n"
+            "- `/start` — приветствие\n"
+            "- `/help` — полный список команд\n"
+            "- `/status` — состояние бота\n"
+            "- `/config` — настройки канала\n"
+            "- `/donate` — поддержка разработки\n"
+            "- `/credits` — баланс кредитов\n\n"
+            "**Инструменты**\n\n"
+            "- `/avatar` — описать аватарку\n"
+            "- `/recall` — вспомнить последние медиа\n"
+            "- `/psl` — оценка внешности\n"
+            "- `/battle` — баттл двух фото\n"
+            "- `/femboy` — Femboy Rate\n"
+            "- `/femboy-battle` — фембой-баттл двух фото\n"
+            "- `/logs` — логи сервера (админам)\n\n"
             f"🍷🗿 {MINI_APP_URL}"
         )
     return (
         "# ✦ Kulsh AI — menu ✦\n\n"
         "✦彡巛〢 ✦ 彡 巛 〢 ✦\n\n"
         "An open-source language model with built-in tools.\n\n"
-        "**Basics**\n"
-        "▸ `/start` — greeting\n"
-        "▸ `/help` — command list\n"
-        "▸ `/config` — channel settings\n"
-        "▸ `/donate` — support development\n"
-        "▸ `/credits` — credits balance\n\n"
-        "**Tools**\n"
-        "▸ `/avatar` — describe avatar\n"
-        "▸ `/recall` — recall recent media\n"
-        "▸ `/psl` — looksmaxxing\n"
-        "▸ `/battle` — two-photo battle\n"
-        "▸ `/logs` — server logs (admins)\n\n"
+        "**Basics**\n\n"
+        "- `/start` — greeting\n"
+        "- `/help` — command list\n"
+        "- `/status` — bot status\n"
+        "- `/config` — channel settings\n"
+        "- `/donate` — support development\n"
+        "- `/credits` — credits balance\n\n"
+        "**Tools**\n\n"
+        "- `/avatar` — describe avatar\n"
+        "- `/recall` — recall recent media\n"
+        "- `/psl` — looksmaxxing\n"
+        "- `/battle` — two-photo battle\n"
+        "- `/femboy` — Femboy Rate\n"
+        "- `/femboy-battle` — femboy two-photo battle\n"
+        "- `/logs` — server logs (admins)\n\n"
         f"🍷🗿 {MINI_APP_URL}"
     )
 
@@ -456,20 +499,22 @@ def ds_slash_start(lang: str) -> str:
             "# 🍷🗿 Кульш на связи\n\n"
             "✦彡巛〢 ✦ 彡 巛 〢 ✦\n\n"
             "Открытая языковая модель с анализом изображений и настройкой под себя.\n\n"
-            "**🚀 С чего начать**\n"
-            "▸ `/menu` — все разделы\n"
-            "▸ `/help` — список команд\n"
-            "▸ `/config` — настройки канала\n\n"
+            "**🚀 С чего начать**\n\n"
+            "- `/menu` — все разделы\n"
+            "- `/help` — список команд\n"
+            "- `/status` — состояние бота\n"
+            "- `/config` — настройки канала\n\n"
             f"🍷🗿 {MINI_APP_URL}"
         )
     return (
         "# 🍷🗿 Kulsh is online\n\n"
         "✦彡巛〢 ✦ 彡 巛 〢 ✦\n\n"
         "An open-source language model with image analysis and personal configuration.\n\n"
-        "**🚀 Get started**\n"
-        "▸ `/menu` — all sections\n"
-        "▸ `/help` — command list\n"
-        "▸ `/config` — channel settings\n\n"
+        "**🚀 Get started**\n\n"
+        "- `/menu` — all sections\n"
+        "- `/help` — command list\n"
+        "- `/status` — bot status\n"
+        "- `/config` — channel settings\n\n"
         f"🍷🗿 {MINI_APP_URL}"
     )
 
@@ -497,14 +542,41 @@ async def ds_slash_help(interaction: discord.Interaction) -> None:
     await interaction.response.send_message(ds_slash_help(lang))
 
 
+async def ds_slash_status(interaction: discord.Interaction) -> None:
+    lang = ds_lang_of(interaction)
+    cfg = get_user_config("ds", interaction.channel_id or 0, interaction.user.id)
+    mode_raw = str(cfg.get("communication_mode", "kent"))
+    if mode_raw == "assistant":
+        mode_label = tr(lang, "mode_assistant")
+    elif mode_raw == "pro":
+        mode_label = tr(lang, "mode_pro")
+    else:
+        mode_label = tr(lang, "mode_kent")
+    try:
+        latency_ms = round(interaction.client.latency * 1000)
+    except Exception:
+        latency_ms = 50
+    text = (
+        f"# 🟢 {tr(lang, 'status_title')}\n\n"
+        f"✦ 彡 巛 〢 ✦ 彡 巛 〢 ✦\n\n"
+        f"**{tr(lang, 'status_online')}**\n\n"
+        f"- {tr(lang, 'status_uptime')}: `{human_uptime()}`\n"
+        f"- {tr(lang, 'status_latency')}: `~{latency_ms} ms`\n"
+        f"- {tr(lang, 'status_mode')}: `{mode_label}`\n"
+        f"- {tr(lang, 'status_mood')}: `{tr(lang, 'status_mood_value')}`\n\n"
+        f"🍷🗿 · v{BOT_VERSION}"
+    )
+    await interaction.response.send_message(text)
+
+
 async def ds_slash_donate(interaction: discord.Interaction) -> None:
     lang = ds_lang_of(interaction)
     text = (
         f"# {tr(lang, 'donate_title')}\n\n"
         f"✦ 彡 巛 〢 ✦ 彡 巛 〢 ✦\n\n"
         f"{tr(lang, 'donate_intro')}\n\n"
-        f"▸ {tr(lang, 'donate_online')}: {DONATE_URL}\n"
-        f"🔗 GitHub: {GITHUB_URL}"
+        f"- {tr(lang, 'donate_online')}: {DONATE_URL}\n"
+        f"- 🔗 GitHub: {GITHUB_URL}"
     )
     await interaction.response.send_message(text)
 
@@ -764,3 +836,75 @@ async def ds_slash_battle(interaction: discord.Interaction, image1: discord.Atta
         logger.error(f"DS slash battle: {e}")
         await interaction.followup.send(f"Ошибка: {e}")
 
+
+@app_commands.describe(image="Photo / Фото", advice="Include advice / Показать рекомендации")
+async def ds_slash_femboy(interaction: discord.Interaction, image: discord.Attachment, advice: bool = False) -> None:
+    await interaction.response.defer()
+    chat_id = interaction.channel_id or 0
+    user_id = interaction.user.id
+    lang = ds_lang_of(interaction)
+    try:
+        img_bytes = await download_image_bytes(image.url)
+        cfg = get_user_config("ds", chat_id, user_id)
+        theme = cfg.get("theme", "dark")
+        ai_data = await get_femboy_data(img_bytes, advice, lang=lang)
+        if "error" in ai_data:
+            await interaction.followup.send(ai_data['error'])
+            return
+        infographic = await create_femboy_infographic(img_bytes, ai_data, theme=theme, lang=lang)
+        report = (
+            f"**{tr(lang, 'femboy_title')}**\n"
+            f"{tr(lang, 'femboy_gender')} {ai_data.get('gender', '?')}\n"
+            f"{tr(lang, 'femboy_score')} `{ai_data.get('fmb', '?')}/10.0`\n"
+            f"{tr(lang, 'femboy_tier')} `{ai_data.get('tier', '?')}`\n"
+        )
+        if ai_data.get("potential"):
+            report += f"{tr(lang, 'femboy_potential')} `{ai_data['potential']}`\n"
+        report += f"\n{ai_data.get('summary', '')}"
+        if advice and ai_data.get("advice"):
+            report += f"\n\n**{tr(lang, 'femboy_advice')}**\n{ai_data['advice']}"
+        await interaction.followup.send(
+            content=report[:1900],
+            file=discord.File(fp=infographic, filename="femboy.png"),
+        )
+        if len(report) > 1900:
+            await interaction.followup.send(report[1900:])
+    except Exception as e:
+        logger.error(f"DS slash femboy: {e}")
+        await interaction.followup.send(f"Ошибка: {e}")
+
+
+@app_commands.describe(image1="First photo / Первое фото", image2="Second photo / Второе фото")
+async def ds_slash_femboy_battle(interaction: discord.Interaction, image1: discord.Attachment, image2: discord.Attachment) -> None:
+    await interaction.response.defer()
+    chat_id = interaction.channel_id or 0
+    user_id = interaction.user.id
+    lang = ds_lang_of(interaction)
+    try:
+        p1 = await download_image_bytes(image1.url)
+        p2 = await download_image_bytes(image2.url)
+        cfg = get_user_config("ds", chat_id, user_id)
+        theme = cfg.get("theme", "dark")
+        ai_data = await get_femboy_battle_data(p1, p2, lang=lang)
+        if "error" in ai_data:
+            await interaction.followup.send(ai_data['error'])
+            return
+        img = await create_femboy_battle_infographic(p1, p2, ai_data, theme=theme, lang=lang)
+        winner_num = str(ai_data.get("winner", "1"))
+        winner_label = tr(lang, "femboy_battle_first") if winner_num == "1" else tr(lang, "femboy_battle_second")
+        report = (
+            f"**{tr(lang, 'femboy_battle_title')}**\n\n"
+            f"{tr(lang, 'femboy_battle_winner')} **{winner_label}**\n"
+            f"{tr(lang, 'femboy_battle_reason')} {ai_data.get('reason', '')}\n\n"
+            f"{tr(lang, 'femboy_battle_photo1')} FMB {ai_data.get('photo1', {}).get('fmb', '?')} | "
+            f"{ai_data.get('photo1', {}).get('tier', '?')}\n"
+            f"{tr(lang, 'femboy_battle_photo2')} FMB {ai_data.get('photo2', {}).get('fmb', '?')} | "
+            f"{ai_data.get('photo2', {}).get('tier', '?')}"
+        )
+        await interaction.followup.send(
+            content=report[:1900],
+            file=discord.File(fp=img, filename="femboy_battle.png"),
+        )
+    except Exception as e:
+        logger.error(f"DS slash femboy battle: {e}")
+        await interaction.followup.send(f"Ошибка: {e}")

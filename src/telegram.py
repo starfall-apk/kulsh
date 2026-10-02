@@ -1,11 +1,8 @@
-# Kulsh GPT | v2.39.0
+# Kulsh GPT | v2.40.0
 # by (main author): starfall-apk
 # coauthor & bot hosting: pomidorka1515
 
-"""Telegram keyboards, callbacks, and message handlers.
-
-Handlers stay plain coroutines. app.register_telegram() attaches them.
-"""
+"""Telegram keyboards, callbacks, and message handlers."""
 
 import asyncio
 from collections import deque
@@ -20,8 +17,20 @@ import telebot
 from telebot.types import ForceReply, InlineKeyboardMarkup, InputFile
 
 from src.loops import send_donation_alert
-from src.ai import extract_search_marker, format_search_results, ask_ai_async, web_search
+from src.ai import (
+    extract_search_marker,
+    format_search_results,
+    ask_ai_async,
+    web_search,
+    user_wants_chart,
+)
 from src.charts import extract_chart_marker, render_infographic
+from src.looks import (
+    create_femboy_battle_infographic,
+    create_femboy_infographic,
+    get_femboy_battle_data,
+    get_femboy_data,
+)
 from src.rich import (
     cleanup_config_children,
     edit_rich_message,
@@ -38,15 +47,19 @@ from src.ui import (
     build_start_text,
     config_text,
     model_picker_text,
+    mode_picker_text,
     build_lang_keyboard,
     build_main_config_keyboard,
     build_menu_keyboard,
+    build_mode_keyboard,
     build_model_keyboard,
     build_start_keyboard,
     build_temp_keyboard,
     build_theme_keyboard,
 )
 from src.util import (
+    BOT_VERSION,
+    COMMUNICATION_MODES,
     DAILY_CREDITS,
     DONATE_URL,
     GITHUB_URL,
@@ -56,6 +69,10 @@ from src.util import (
     PREMIUM_ADMIN_ID,
     STICKER_POOL,
     cb_id,
+    human_uptime,
+    is_femboy_battle_command,
+    is_femboy_rate_command,
+    mode_is_valid,
     tr,
     tg_msg,
     add_bot_memory,
@@ -79,11 +96,11 @@ from src.util import (
     process_ai_response,
     prompt_waiting,
     save_long_term_memory,
+    user_femboy_state,
 )
 import src.util as state
 
 tg_bot: Any = None
-
 
 
 def _media():
@@ -137,6 +154,31 @@ async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
     parts = data.split(":")
     action = parts[1] if len(parts) > 1 else ""
     toast = tr(lang, "cfg_updated")
+    is_private = (msg.chat.type == 'private')
+
+    if action == "mode":
+        await edit_or_send(call, mode_picker_text("tg", chat_id, user_id, is_private=is_private),
+                            build_mode_keyboard("tg", chat_id, user_id, is_private=is_private))
+        await tg_bot.answer_callback_query(cb_id(call))
+        return
+
+    if action == "mode_set":
+        value = parts[2] if len(parts) > 2 else "kent"
+        if value == "pro" and not is_private:
+            await tg_bot.answer_callback_query(cb_id(call), tr(lang, "mode_need_dm"), show_alert=True)
+            return
+        if value in COMMUNICATION_MODES:
+            cfg["communication_mode"] = value
+            if value == "assistant":
+                toast = tr(lang, "mode_set", tr(lang, "mode_assistant"))
+            elif value == "pro":
+                toast = tr(lang, "mode_set", tr(lang, "mode_pro"))
+            else:
+                toast = tr(lang, "mode_set", tr(lang, "mode_kent"))
+        await edit_or_send(call, config_text("tg", chat_id, user_id),
+                            build_main_config_keyboard("tg", chat_id, user_id))
+        await tg_bot.answer_callback_query(cb_id(call), toast)
+        return
 
     if action == "model_set":
         value = parts[2] if len(parts) > 2 else "auto"
@@ -350,7 +392,7 @@ async def handle_menu_callback(call: telebot.types.CallbackQuery) -> None:
         return
 
 # ============================================================
-# TELEGRAM: HELP / MENU / START / DONATE
+# TELEGRAM: HELP / MENU / START / DONATE / STATUS
 # ============================================================
 async def handle_start(message: telebot.types.Message) -> None:
     args = telebot.util.extract_arguments(message.text or "")
@@ -424,9 +466,9 @@ async def handle_donate(message: telebot.types.Message) -> None:
         f"# {tr(lang, 'donate_title')}\n\n"
         f"✦ 彡 巛 〢 ✦ 彡 巛 〢 ✦\n\n"
         f"{tr(lang, 'donate_intro')}\n\n"
-        f"**{tr(lang, 'donate_methods')}**\n"
-        f"▸ {tr(lang, 'donate_online')}: {DONATE_URL}\n"
-        f"▸ {tr(lang, 'donate_stars_hint')}\n\n"
+        f"**{tr(lang, 'donate_methods')}**\n\n"
+        f"- {tr(lang, 'donate_online')}: {DONATE_URL}\n"
+        f"- {tr(lang, 'donate_stars_hint')}\n\n"
         f"🔗 GitHub: {GITHUB_URL}"
     )
     try:
@@ -480,6 +522,49 @@ async def handle_credits(message: telebot.types.Message) -> None:
     await reply_tg_html(message, tr(lang, "credits_balance", creds, DAILY_CREDITS))
 
 
+async def handle_status(message: telebot.types.Message) -> None:
+    """Красивый статус бота для пользователей."""
+    if message.from_user is None:
+        return
+    chat_id = message.chat.id
+    cfg = get_user_config("tg", chat_id, message.from_user.id)
+    lang = cfg.get("language", "ru")
+    mode_txt = str(cfg.get("communication_mode", "kent"))
+    if mode_txt == "assistant":
+        mode_label = tr(lang, "mode_assistant")
+    elif mode_txt == "pro":
+        mode_label = tr(lang, "mode_pro")
+    else:
+        mode_label = tr(lang, "mode_kent")
+
+    # Настроение по нагрузке — просто дружелюбный статус
+    try:
+        proc_load = __import__("os").getloadavg()[0]
+    except Exception:
+        proc_load = 0.5
+    if proc_load < 1.0:
+        mood = "🍷🗿"
+    elif proc_load < 2.5:
+        mood = "😎"
+    else:
+        mood = "🔥"
+    status_emoji = "🟢"
+
+    text = (
+        f"# {status_emoji} {tr(lang, 'status_title')}\n\n"
+        f"✦ 彡 巛 〢 ✦ 彡 巛 〢 ✦\n\n"
+        f"**{tr(lang, 'status_online')}**\n\n"
+        f"- {tr(lang, 'status_uptime')}: `{human_uptime()}`\n"
+        f"- {tr(lang, 'status_latency')}: `~{max(1, int(proc_load * 40))} ms`\n"
+        f"- {tr(lang, 'status_mode')}: `{mode_label}`\n"
+        f"- {tr(lang, 'status_mood')}: `{tr(lang, 'status_mood_value')}`\n\n"
+        f"{mood} · v{BOT_VERSION}"
+    )
+    try:
+        await send_formatted(chat_id, text, reply_to=message.message_id)
+    except Exception as e:
+        logger.warning(f"status send fail: {e}")
+        await reply_tg_html(message, f"🟢 {tr(lang, 'status_online')} · {human_uptime()}")
 
 
 async def handle_toggle_premium(message: telebot.types.Message) -> None:
@@ -513,7 +598,7 @@ async def handle_successful_payment(message: telebot.types.Message) -> None:
     await reply_tg_html(message, tr(lang, "donate_thanks", stars))
 
 # ============================================================
-# TG CONFIG / AVATAR / RECALL / SEARCH / CHART
+# TG CONFIG / AVATAR / RECALL / SEARCH / CHART / FMB
 # ============================================================
 async def tg_handle_config(message: telebot.types.Message) -> None:
     if message.from_user is None:
@@ -600,7 +685,6 @@ async def tg_handle_search(message: telebot.types.Message, query: str, chat_id: 
         await reply_tg_html(message, tr(lang, "search_nothing"))
         return
     context = format_search_results(results)
-    # Пусть ИИ сам сформулирует ответ на основе результатов
     prompt = (
         f"Пользователь искал в интернете: {query}\n\n"
         f"Найденные результаты:\n{context}\n\n"
@@ -629,7 +713,6 @@ async def tg_handle_chart_request(message: telebot.types.Message, description: s
         await reply_tg_html(message, tr(lang, "chart_usage"))
         return
     status = await tg_bot.send_message(chat_id, tr(lang, "chart_building"))
-    # Просим AI сгенерировать JSON-спецификацию
     chart_prompt = (
         f"Сгенерируй JSON-спецификацию инфографики по описанию:\n\n{description}\n\n"
         f"Верни ТОЛЬКО JSON-объект без markdown и без текста вокруг. "
@@ -650,7 +733,6 @@ async def tg_handle_chart_request(message: telebot.types.Message, description: s
     try:
         spec = json.loads(clean_json_text(raw))
     except Exception:
-        # попробуем вытащить JSON из текста
         m = re.search(r'\{[\s\S]*\}', raw or "")
         if m:
             try:
@@ -686,6 +768,92 @@ async def tg_handle_chart_request(message: telebot.types.Message, description: s
         logger.error(f"chart send error: {e}")
         await reply_tg_html(message, tr(lang, "chart_error", str(e)))
 
+
+# ============================================================
+# FEMBOY RATE
+# ============================================================
+async def tg_handle_femboy_rate(message: telebot.types.Message, chat_id: int, user_id: int,
+                                photo_bytes: bytes, caption: str = "") -> None:
+    cfg = get_user_config("tg", chat_id, user_id)
+    lang = cfg.get("language", "ru")
+    status = await tg_bot.send_message(chat_id, tr(lang, "femboy_analyzing"))
+    try:
+        include_advice = bool("совет" in caption.lower() or "advice" in caption.lower())
+        theme = cfg.get("theme", "dark")
+        ai_data = await get_femboy_data(photo_bytes, include_advice, lang=lang)
+        if "error" in ai_data:
+            await tg_bot.edit_message_text(ai_data['error'], chat_id, status.message_id)
+            return
+        infographic = await create_femboy_infographic(photo_bytes, ai_data, theme=theme, lang=lang)
+        report = (
+            f"<b>{tr(lang, 'femboy_title')}</b>\n\n"
+            f"{tr(lang, 'femboy_gender')} {ai_data.get('gender', '?')}\n"
+            f"{tr(lang, 'femboy_score')} <code>{ai_data.get('fmb', '?')}/10.0</code>\n"
+            f"{tr(lang, 'femboy_tier')} <code>{ai_data.get('tier', '?')}</code>\n"
+        )
+        if ai_data.get("potential"):
+            report += f"{tr(lang, 'femboy_potential')} <code>{ai_data['potential']}</code>\n"
+        report += f"\n<b>{tr(lang, 'femboy_analysis')}</b>\n{html.escape(ai_data.get('summary', ''))}"
+        if include_advice and ai_data.get("advice"):
+            report += f"\n\n<b>{tr(lang, 'femboy_advice')}</b>\n{html.escape(ai_data['advice'])}"
+        try:
+            await tg_bot.send_photo(chat_id, InputFile(infographic),
+                                    caption=tr(lang, "femboy_report"))
+        except Exception as e:
+            logger.error(f"femboy infographic send: {e}")
+        for chunk in [report[i:i + 3900] for i in range(0, len(report), 3900)]:
+            try:
+                await tg_bot.send_message(chat_id, chunk, parse_mode='HTML')
+            except Exception:
+                await tg_bot.send_message(chat_id, re.sub(r'<[^>]+>', '', chunk))
+        await tg_bot.delete_message(chat_id, status.message_id)
+    except Exception as e:
+        logger.error(f"femboy rate: {e}")
+        await reply_tg_html(message, f"🌋 Ошибка: {e}")
+
+
+async def tg_process_femboy_album(media_group_id: str, chat_id: int, user_id: int) -> None:
+    from src.util import battle_photos as bp
+    for _ in range(10):
+        if media_group_id in bp and len(bp[media_group_id]) >= 2:
+            break
+        await asyncio.sleep(0.5)
+    cfg = get_user_config("tg", chat_id, user_id)
+    lang = cfg.get("language", "ru")
+    if media_group_id not in bp or len(bp[media_group_id]) < 2:
+        bp.pop(media_group_id, None)
+        await tg_bot.send_message(chat_id, tr(lang, "femboy_battle_need_photos"))
+        return
+    photos = bp.pop(media_group_id)
+    p1, p2 = photos[:2]
+    theme = cfg.get("theme", "dark")
+    status = await tg_bot.send_message(chat_id, tr(lang, "femboy_battle_waiting"))
+    ai_data = await get_femboy_battle_data(p1, p2, lang=lang)
+    if "error" in ai_data:
+        await tg_bot.edit_message_text(ai_data['error'], chat_id, status.message_id)
+        return
+    battle_img = await create_femboy_battle_infographic(p1, p2, ai_data, theme=theme, lang=lang)
+    winner_num = str(ai_data.get("winner", "1"))
+    winner_label = tr(lang, "femboy_battle_first") if winner_num == "1" else tr(lang, "femboy_battle_second")
+    report_text = (
+        f"<b>{tr(lang, 'femboy_battle_title')}</b>\n\n"
+        f"{tr(lang, 'femboy_battle_winner')} <b>{winner_label}</b>\n"
+        f"{tr(lang, 'femboy_battle_reason')} {html.escape(ai_data.get('reason', ''))}\n\n"
+        f"{tr(lang, 'femboy_battle_photo1')} FMB {ai_data.get('photo1', {}).get('fmb', '?')} | "
+        f"Tier {html.escape(str(ai_data.get('photo1', {}).get('tier', '?')))}\n"
+        f"{tr(lang, 'femboy_battle_photo2')} FMB {ai_data.get('photo2', {}).get('fmb', '?')} | "
+        f"Tier {html.escape(str(ai_data.get('photo2', {}).get('tier', '?')))}\n"
+    )
+    try:
+        await tg_bot.send_photo(chat_id, InputFile(battle_img), caption=tr(lang, "femboy_battle_caption"))
+    except Exception as e:
+        logger.error(f"femboy battle infra: {e}")
+    try:
+        await tg_bot.send_message(chat_id, report_text, parse_mode='HTML')
+    except Exception:
+        await tg_bot.send_message(chat_id, re.sub(r'<[^>]+>', '', report_text))
+    await tg_bot.delete_message(chat_id, status.message_id)
+
 # ============================================================
 # UTILITY EXECUTION
 # ============================================================
@@ -699,9 +867,8 @@ async def execute_utility_tg(message: telebot.types.Message, marker: str, chat_i
         except Exception as e:
             logger.error(f"sticker error: {e}")
 
-
 # ============================================================
-# STREAMING HELPERS
+# STREAMING
 # ============================================================
 async def stream_text_via_drafts(chat_id: int, text: str, is_private: bool = True) -> bool:
     if not state.premium_functions_enabled:
@@ -724,7 +891,7 @@ async def stream_text_via_drafts(chat_id: int, text: str, is_private: bool = Tru
     return True
 
 # ============================================================
-# SEND TG AI RESPONSE — с обработкой !search и !chart
+# SEND TG AI RESPONSE
 # ============================================================
 async def send_tg_ai_response(message: telebot.types.Message, chat_id: int, user_id: int,
                               answer_raw: str, user_text: str | None = None,
@@ -741,7 +908,6 @@ async def send_tg_ai_response(message: telebot.types.Message, chat_id: int, user
     if cfg.get("web_search_enabled", True):
         query, remaining = extract_search_marker(answer_raw or "")
         if query:
-            # AI хочет поискать. Делаем поиск, отдаём результаты обратно в AI.
             results = await web_search(query, max_results=6)
             if results:
                 context = format_search_results(results)
@@ -761,23 +927,29 @@ async def send_tg_ai_response(message: telebot.types.Message, chat_id: int, user
                 answer_raw = tr(lang, "search_nothing")
 
     # ----- !chart -----
+    # Рендерим ТОЛЬКО если пользователь явно попросил график/инфографику в текущем сообщении.
     if state.premium_functions_enabled:
         chart_spec, remaining = extract_chart_marker(answer_raw or "")
         if chart_spec:
-            try:
-                img = await render_infographic(chart_spec, user_images=user_images)
+            user_asked_chart = user_wants_chart(user_text or message.text or message.caption or "")
+            if user_asked_chart:
                 try:
-                    await tg_bot.send_photo(
-                        chat_id, InputFile(img, file_name="infographic.png"),
-                        caption=chart_spec.get("title") or tr(lang, "chart_built"),
-                        reply_to_message_id=message.message_id,
-                    )
+                    img = await render_infographic(chart_spec, user_images=user_images)
+                    try:
+                        await tg_bot.send_photo(
+                            chat_id, InputFile(img, file_name="infographic.png"),
+                            caption=chart_spec.get("title") or tr(lang, "chart_built"),
+                            reply_to_message_id=message.message_id,
+                        )
+                    except Exception as e:
+                        logger.error(f"chart send: {e}")
                 except Exception as e:
-                    logger.error(f"chart send: {e}")
+                    logger.error(f"chart render: {e}")
+                    answer_raw = remaining + "\n" + tr(lang, "chart_error", str(e))
+                    chart_spec = None
+            # Если не просил — просто вырезаем маркер, не рендерим
+            if chart_spec is not None or not user_asked_chart:
                 answer_raw = remaining
-            except Exception as e:
-                logger.error(f"chart render: {e}")
-                answer_raw = remaining + "\n" + tr(lang, "chart_error", str(e))
 
     clean_segments, markers = process_ai_response(answer_raw, separate_enabled=separate_enabled)
 
@@ -851,7 +1023,7 @@ async def send_tg_ai_response(message: telebot.types.Message, chat_id: int, user
                 logger.warning(f"utility {m}: {e}")
 
 # ============================================================
-# OLD MESSAGE REPLY (TG)
+# OLD MESSAGE REPLY (TG) — в стиле обычного чата
 # ============================================================
 async def maybe_reply_to_old_message_tg(message: telebot.types.Message, chat_id: int, user_id: int) -> None:
     chat_key = f"tg_{chat_id}"
@@ -867,10 +1039,18 @@ async def maybe_reply_to_old_message_tg(message: telebot.types.Message, chat_id:
     old = random.choice(candidates)
     try:
         comment = await ask_ai_async(
-            prompt=(f"Ты видишь старое сообщение от {old.get('display','?')}: \"{old.get('text','')}\". "
-                    f"Хочешь коротко прокомментировать? Если да — одно короткое сообщение в стиле Кульша. "
-                    f"Если нет — ответь ровно 'НЕТ'."),
-            system_instruction_override="Ты Кульш. Одним коротким сообщением или 'НЕТ'. Без markdown.",
+            prompt=(
+                f"Сейчас идёт живая переписка. Ты краем глаза заметил старое сообщение от "
+                f"{old.get('display','?')}: \"{old.get('text','')}\". Хочешь коротко и по-пацански "
+                f"прокомментировать его прямо сейчас, не прерывая текущий вайб? Если да — напиши одно "
+                f"короткое сообщение в том же стиле, в котором ты общаешься со всеми: маленькие буквы, "
+                f"без лишней пунктуации, естественно, эмодзи только если очень хочется. "
+                f"Если не хочешь — ответь ровно 'НЕТ'."
+            ),
+            system_instruction_override=(
+                "Ты Кульш. Если комментируешь — пиши как в обычном чате с кентами: "
+                "маленькими буквами, без вычурной пунктуации, живо. Или ответь 'НЕТ'."
+            ),
             chat_id=chat_id, user_id=user_id, platform="tg",
         )
         if comment and comment.strip() and comment.strip().upper() != "НЕТ":
@@ -909,4 +1089,3 @@ async def should_random_reply(platform: str, chat_id: int, user_id: int) -> bool
     if random.random() > 0.03:
         return False
     return True
-

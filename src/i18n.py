@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.39.0
+# Kulsh GPT | v2.40.0
 # by (main author): starfall-apk
 # coauthor & bot hosting: pomidorka1515
 
@@ -7,14 +7,12 @@
 import re
 from typing import Any
 
-# ============================================================
-# ЛОКАЛИЗАЦИЯ
-# ============================================================
 TEXTS: dict[str, tuple[str, str]] = {
     "cfg_title":               ("⚙️ Настройки", "⚙️ Settings"),
     "cfg_lang":                ("🌐 Язык", "🌐 Language"),
     "cfg_theme":               ("🌓 Тема", "🌓 Theme"),
     "cfg_model":               ("🧠 Модель", "🧠 Model"),
+    "cfg_mode":                ("🧩 Режим", "🧩 Mode"),
     "cfg_temp_short":          ("🎛 Темп.", "🎛 Temp"),
     "cfg_sep":                 ("💬 Разбивка", "💬 Split"),
     "cfg_stream":              ("📡 Стриминг", "📡 Streaming"),
@@ -30,6 +28,7 @@ TEXTS: dict[str, tuple[str, str]] = {
     "cfg_back_slash":          ("🔙 Назад / Back", "🔙 Back"),
     "cfg_auto":                ("🎲 Авто", "🎲 Auto"),
     "cfg_choose_model":        ("🧠 Выбор модели", "🧠 Model selection"),
+    "cfg_choose_mode":         ("🧩 Выбор режима общения", "🧩 Communication mode"),
     "cfg_current":             ("Текущая", "Current"),
     "cfg_auto_hint":           ("перебор всех моделей", "try all models"),
     "cfg_prompt_label":        ("📝 Кастомный промпт", "📝 Custom prompt"),
@@ -62,7 +61,17 @@ TEXTS: dict[str, tuple[str, str]] = {
     "prompt_saved":            ("Промпт сохранён ({0} символов)", "Prompt saved ({0} chars)"),
     "prompt_cancelled":        ("Изменение промпта отменено", "Prompt edit cancelled"),
 
-    # ---- МЕНЮ (без гif) ----
+    # ---- Режимы общения ----
+    "mode_kent":               ("kulsh.ai〢Кент", "kulsh.ai〢Kent"),
+    "mode_assistant":          ("kulsh.ai〢Ассистент", "kulsh.ai〢Assistant"),
+    "mode_pro":                ("kulsh.ai〢Pro", "kulsh.ai〢Pro"),
+    "mode_kent_hint":          ("По умолчанию", "Default"),
+    "mode_assistant_hint":     ("Помощь по делу, структура", "Helpful, structured"),
+    "mode_pro_hint":           ("Размышление и перепроверка (только в ЛС)", "Reasoning & self-check (DM only)"),
+    "mode_set":                ("Режим: {0}", "Mode: {0}"),
+    "mode_need_dm":            ("Режим Pro доступен только в личном чате с ботом.", "Pro mode is only available in DM."),
+
+    # ---- Меню ----
     "menu_title":              ("Кульш AI — главное меню", "Kulsh AI — Main Menu"),
     "menu_intro": (
         "Открытая языковая модель с набором встроенных инструментов, "
@@ -79,7 +88,7 @@ TEXTS: dict[str, tuple[str, str]] = {
     "menu_donate_item":        ("Донат — поддержка разработки", "Donate — support development"),
     "menu_github_item":        ("GitHub — исходный код проекта", "GitHub — project source code"),
 
-    # ---- START (с эмодзи как в оригинале) ----
+    # ---- START ----
     "start_title":             ("🍷🗿 Кульш на связи", "🍷🗿 Kulsh is online"),
     "start_intro": (
         "Открытая языковая модель с анализом изображений, веб-поиском, "
@@ -88,12 +97,12 @@ TEXTS: dict[str, tuple[str, str]] = {
         "infographic generation and personal config. Telegram and Discord.",
     ),
     "start_where":             ("🚀 С чего начать:", "🚀 Where to start:"),
-    "start_mini_app":          ("🚀 Mini App — расширенный чат с ИИ",
-                                "🚀 Mini App — extended AI chat"),
-    "start_menu":              ("📖 Меню — все разделы и настройки",
-                                "📖 Menu — all sections and settings"),
-    "start_config":            ("⚙️ <code>кульш конфиг</code> — тонкая настройка под тебя",
-                                "⚙️ <code>kulsh config</code> — tune the bot"),
+    "start_mini_app":          ("Mini App — расширенный чат с ИИ",
+                                "Mini App — extended AI chat"),
+    "start_menu":              ("Меню — все разделы и настройки",
+                                "Menu — all sections and settings"),
+    "start_config":            ("<code>кульш конфиг</code> — тонкая настройка под тебя",
+                                "<code>kulsh config</code> — tune the bot"),
 
     "btn_open_mini":           ("🚀 Открыть Mini App", "🚀 Open Mini App"),
     "btn_settings":            ("⚙️ Настройки", "⚙️ Settings"),
@@ -110,9 +119,9 @@ TEXTS: dict[str, tuple[str, str]] = {
         "💖 Donations go to servers, domains and further development.",
     ),
     "donate_methods":          ("💰 Способы:", "💰 Methods:"),
-    "donate_online":           ("💳 Онлайн-донат", "💳 Online donation"),
-    "donate_stars_hint":       ("⭐ Telegram Stars — <code>/donate_stars &lt;N&gt;</code>",
-                                "⭐ Telegram Stars — <code>/donate_stars &lt;N&gt;</code>"),
+    "donate_online":           ("Онлайн-донат", "Online donation"),
+    "donate_stars_hint":       ("Telegram Stars — <code>/donate_stars &lt;N&gt;</code>",
+                                "Telegram Stars — <code>/donate_stars &lt;N&gt;</code>"),
     "donate_stars_need":       ("Укажите количество звёзд: <code>/donate_stars 100</code>",
                                 "Specify star amount: <code>/donate_stars 100</code>"),
     "donate_stars_bad":        ("Неверное количество звёзд.", "Invalid star amount."),
@@ -129,6 +138,7 @@ TEXTS: dict[str, tuple[str, str]] = {
     "avatar_none":             ("у {0} аватарки нет, пусто", "{0} has no avatar"),
     "recall_fail":             ("не нашёл ничего в памяти", "nothing found in memory"),
 
+    # ---- PSL ----
     "psl_need_photo":          ("📸 Жду фото для анализа. Отправь его с пометкой 'looksmaxxing'.",
                                 "📸 Waiting for a photo. Send it marked 'looksmaxxing'."),
     "psl_analyzing":           ("⏳ Анализирую внешность...", "⏳ Analyzing your face..."),
@@ -152,6 +162,42 @@ TEXTS: dict[str, tuple[str, str]] = {
     "battle_reason":           ("🔍 Причина:", "🔍 Reason:"),
     "battle_photo1":           ("📊 Фото 1:", "📊 Photo 1:"),
     "battle_photo2":           ("📊 Фото 2:", "📊 Photo 2:"),
+
+    # ---- FEMBOY RATE ----
+    "femboy_need_photo":       ("📸 Жду фото для Femboy Rate. Отправь с командой 'femboy rate'.",
+                                "📸 Waiting for a photo. Send with 'femboy rate'."),
+    "femboy_analyzing":        ("🌸 Анализирую нежность...", "🌸 Analyzing softness..."),
+    "femboy_report":           ("🌸 Результаты Femboy Rate", "🌸 Femboy Rate results"),
+    "femboy_title":            ("🌸 РЕЗУЛЬТАТЫ FEMBOY RATE", "🌸 FEMBOY RATE RESULTS"),
+    "femboy_gender":           ("🧬 Пол:", "🧬 Gender:"),
+    "femboy_score":            ("💫 FMB:", "💫 FMB:"),
+    "femboy_tier":             ("👑 Tier:", "👑 Tier:"),
+    "femboy_potential":        ("🔮 Потенциал:", "🔮 Potential:"),
+    "femboy_analysis":         ("📝 Анализ:", "📝 Analysis:"),
+    "femboy_advice":           ("⚡ Рекомендации:", "⚡ Recommendations:"),
+
+    "femboy_battle_need_photos": (
+        "Для фембой-баттла пришлите два фото одним альбомом с командой 'фембой баттл'.",
+        "For a femboy battle, send two photos in a single album with 'femboy battle'.",
+    ),
+    "femboy_battle_waiting":   ("🌸 Сравниваю нежность...", "🌸 Comparing softness..."),
+    "femboy_battle_caption":   ("🌸 Результат фембой-баттла", "🌸 Femboy battle result"),
+    "femboy_battle_title":     ("🌸 РЕЗУЛЬТАТ ФЕМБОЙ-БАТТЛА", "🌸 FEMBOY BATTLE RESULT"),
+    "femboy_battle_winner":    ("💫 Победитель:", "💫 Winner:"),
+    "femboy_battle_first":     ("Первое фото", "First photo"),
+    "femboy_battle_second":    ("Второе фото", "Second photo"),
+    "femboy_battle_reason":    ("🔍 Причина:", "🔍 Reason:"),
+    "femboy_battle_photo1":    ("📊 Фото 1:", "📊 Photo 1:"),
+    "femboy_battle_photo2":    ("📊 Фото 2:", "📊 Photo 2:"),
+
+    # ---- STATUS ----
+    "status_title":            ("Статус Кульша", "Kulsh status"),
+    "status_online":           ("В сети и работает", "Online and working"),
+    "status_uptime":           ("Время работы", "Uptime"),
+    "status_latency":          ("Отклик", "Latency"),
+    "status_mode":             ("Режим", "Mode"),
+    "status_mood":             ("Настроение", "Mood"),
+    "status_mood_value":       ("отличное 🍷🗿", "excellent 🍷🗿"),
 
     "logs_no_access":          ("не для тебя писано", "not for you"),
     "logs_cant_check":         ("не могу проверить права", "cannot verify permissions"),
@@ -229,6 +275,7 @@ TEXTS: dict[str, tuple[str, str]] = {
     "ds_setting_model_bad":    ("Введите номер или 'авто'.", "Enter number or 'auto'."),
     "ds_setting_model_badnum": ("Неверный номер", "Invalid number"),
     "ds_setting_temp_bad":     ("Введите число 0.0-2.0", "Enter number 0.0-2.0"),
+    "ds_setting_mode":         ("Режим: {0}", "Mode: {0}"),
     "ds_unknown_param":        ("Неизвестный параметр. Используйте 'кульш конфиг'.",
                                 "Unknown parameter. Use 'kulsh config'."),
     "ds_update_no_access":     ("ты кто бля, обновлять меня будешь?", "who are you to update me?"),
@@ -259,6 +306,7 @@ TEXTS: dict[str, tuple[str, str]] = {
         "/start — приветствие\n"
         "/menu — интерактивное меню\n"
         "/help — эта справка\n"
+        "/status — состояние бота\n"
         "/donate — поддержать проект\n"
         "/donate_stars &lt;N&gt; — донат через Telegram Stars\n"
         "/credits — баланс кредитов\n\n"
@@ -274,6 +322,8 @@ TEXTS: dict[str, tuple[str, str]] = {
         "<code>кульш psl</code> — looksmaxxing\n"
         "<code>кульш psl совет</code> — + рекомендации\n"
         "<code>кульш battle</code> — баттл (альбом)\n"
+        "<code>фембой рейт</code> / <code>femboy rate</code> — Femboy Rate\n"
+        "<code>фембой баттл</code> / <code>femboy battle</code> — фембой-баттл (альбом)\n"
         "<code>кульш донаты</code> — топ донатеров\n\n"
         "<b>Инструменты (ЛС):</b>\n"
         "Отправь архив/текстовый файл — бот распакует, изменит, соберёт и вернёт.\n\n"
@@ -284,6 +334,7 @@ TEXTS: dict[str, tuple[str, str]] = {
         "/start — greeting\n"
         "/menu — interactive menu\n"
         "/help — this help\n"
+        "/status — bot status\n"
         "/donate — support the project\n"
         "/donate_stars &lt;N&gt; — donate via Telegram Stars\n"
         "/credits — credits balance\n\n"
@@ -299,6 +350,8 @@ TEXTS: dict[str, tuple[str, str]] = {
         "<code>kulsh psl</code> — looksmaxxing\n"
         "<code>kulsh psl advice</code> — + recommendations\n"
         "<code>kulsh battle</code> — battle (album)\n"
+        "<code>femboy rate</code> — Femboy Rate\n"
+        "<code>femboy battle</code> — femboy battle (album)\n"
         "<code>kulsh donations</code> — top donators\n\n"
         "<b>Tools (DM):</b>\n"
         "Send an archive/text file — bot unpacks, edits, repacks and returns it.\n\n"

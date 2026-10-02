@@ -1,8 +1,8 @@
-# Kulsh GPT | v2.39.0
+# Kulsh GPT | v2.40.0
 # by (main author): starfall-apk
 # coauthor & bot hosting: pomidorka1515
 
-"""Pillow infographic engine: bar, line, pie, table, text, images."""
+"""Pillow infographic engine (PSL-style dark/light card aesthetic)."""
 
 import json
 import math
@@ -26,44 +26,83 @@ from src.util import (
 )
 
 # ============================================================
-# CHART / INFOGRAPHIC ENGINE (Pillow)
+# PALETTE
 # ============================================================
 _PALETTE = [
-    "#4F46E5", "#06B6D4", "#10B981", "#F59E0B", "#EF4444",
-    "#8B5CF6", "#EC4899", "#14B8A6", "#F97316", "#6366F1",
+    "#10B981", "#4299E1", "#9F7AEA", "#F6AD55", "#FC8181",
+    "#38B2AC", "#ED64A6", "#68D391", "#F6E05E", "#4FD1C5",
 ]
 
-CHART_THEMES = {
+# ============================================================
+# THEMES — соответствуют палитре PSL
+# ============================================================
+CHART_THEMES: dict[str, ChartTheme] = {
     "dark_modern": {
-        "bg": "#0E0E12", "bg_grad": ("#171728", "#0E0E12"),
-        "text": "#F3F4F6", "text_dim": "#9CA3AF", "grid": "#2A2A3A",
-        "accent": "#10B981", "card": "#16161E", "border": "#2A2A3A",
+        "bg": "#0E0E12",
+        "bg_grad": ("#13131C", "#0E0E12"),
+        "text": "#F3F4F6",
+        "text_dim": "#9CA3AF",
+        "text_tertiary": "#6B6B80",
+        "grid": "#2A2A3A",
+        "accent": "#10B981",
+        "card": "#14141C",
+        "border": "#2A2A3A",
+        "divider": "#2A2A3A",
     },
     "light_minimal": {
-        "bg": "#FAFAFB", "bg_grad": ("#FFFFFF", "#F1F1F4"),
-        "text": "#111827", "text_dim": "#4B5563", "grid": "#E5E7EB",
-        "accent": "#2563EB", "card": "#FFFFFF", "border": "#E5E7EB",
+        "bg": "#F9F9FB",
+        "bg_grad": ("#FFFFFF", "#F1F1F4"),
+        "text": "#1A1A2E",
+        "text_dim": "#4A4A6A",
+        "text_tertiary": "#6B6B80",
+        "grid": "#D1D5DB",
+        "accent": "#2B6CB0",
+        "card": "#FFFFFF",
+        "border": "#E5E7EB",
+        "divider": "#E5E7EB",
     },
     "ocean": {
-        "bg": "#0A1929", "bg_grad": ("#103A5C", "#0A1929"),
-        "text": "#E5F2FF", "text_dim": "#7FB1D6", "grid": "#17334B",
-        "accent": "#3FB0FF", "card": "#0F2538", "border": "#17334B",
+        "bg": "#0A1929",
+        "bg_grad": ("#103A5C", "#0A1929"),
+        "text": "#E5F2FF",
+        "text_dim": "#7FB1D6",
+        "text_tertiary": "#5A8BB0",
+        "grid": "#17334B",
+        "accent": "#3FB0FF",
+        "card": "#0F2538",
+        "border": "#17334B",
+        "divider": "#17334B",
     },
     "retro": {
-        "bg": "#FBF6E9", "bg_grad": ("#FFF8E7", "#F0E2B6"),
-        "text": "#2D2B22", "text_dim": "#6B6350", "grid": "#D8CBA5",
-        "accent": "#D97706", "card": "#FFFAEB", "border": "#D8CBA5",
+        "bg": "#FBF6E9",
+        "bg_grad": ("#FFF8E7", "#F0E2B6"),
+        "text": "#2D2B22",
+        "text_dim": "#6B6350",
+        "text_tertiary": "#8B8470",
+        "grid": "#D8CBA5",
+        "accent": "#D97706",
+        "card": "#FFFAEB",
+        "border": "#D8CBA5",
+        "divider": "#D8CBA5",
     },
 }
 
+DEFAULT_WIDTH = 900  # вертикальнее — как PSL
 
+
+# ============================================================
+# COLOR HELPERS
+# ============================================================
 def hex_to_rgb(h: str) -> tuple[int, int, int]:
     h = (h or "#000000").lstrip("#")
     if len(h) == 3:
         h = "".join(c * 2 for c in h)
     if len(h) != 6:
         return (0, 0, 0)
-    return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+    try:
+        return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+    except ValueError:
+        return (0, 0, 0)
 
 
 def as_rgb(c: Color) -> tuple[int, int, int]:
@@ -171,58 +210,77 @@ def wrap_lines(draw: ImageDraw.ImageDraw, text: str, font: Font, max_width: int)
     return lines or [""]
 
 
+def is_number(x: object) -> bool:
+    try:
+        float(cast(Any, x))
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
+# ============================================================
+# CARD HELPER
+# ============================================================
+def draw_card(canvas: Image.Image, box: tuple[int, int, int, int], theme: ChartTheme) -> None:
+    draw = ImageDraw.Draw(canvas)
+    draw.rounded_rectangle(box, radius=18, fill=theme.get("card", "#14141C"),
+                           outline=theme.get("border", "#2A2A3A"), width=1)
+
+
+# ============================================================
+# BAR
+# ============================================================
 def render_bar_chart(canvas: Image.Image, box: tuple[int, int, int, int],
-                      spec: JsonDict, theme: ChartTheme) -> None:
+                     spec: JsonDict, theme: ChartTheme) -> None:
     x0, y0, x1, y1 = box
     draw = ImageDraw.Draw(canvas)
-    title = spec.get("title") or ""
+    title = str(spec.get("title") or "")
     labels = [str(v) for v in spec.get("labels", [])]
     values = [float(v) for v in spec.get("values", []) if is_number(v)]
     if not values:
         return
     colors = spec.get("colors") or _PALETTE
-    # card
-    draw.rounded_rectangle(box, radius=16, fill=theme["card"], outline=theme["border"], width=2)
-    inner_pad = 24
-    cx0, cy0, cx1, cy1 = x0 + inner_pad, y0 + inner_pad, x1 - inner_pad, y1 - inner_pad
-    font_title = load_font(22, bold=True)
-    font_lab = load_font(13)
+
+    draw_card(canvas, box, theme)
+    pad = 24
+    cx0, cy0, cx1, cy1 = x0 + pad, y0 + pad, x1 - pad, y1 - pad
+    font_title = load_font(20, bold=True)
+    font_lab = load_font(12)
     font_val = load_font(13, bold=True)
+    font_grid = load_font(10)
 
     if title:
         draw.text((cx0, cy0), title, font=font_title, fill=theme["text"])
-        cy0 += 34
+        cy0 += 32
 
-    # Chart area
-    chart_top = cy0 + 4
-    chart_bottom = cy1 - 36
-    chart_left = cx0 + 8
+    chart_top = cy0 + 6
+    chart_bottom = cy1 - 34
+    chart_left = cx0 + 30
     chart_right = cx1 - 8
     if chart_bottom <= chart_top:
         return
 
     vmax = max(values) if values else 1.0
     vmax = vmax if vmax > 0 else 1.0
-    # nice ceiling
-    magnitude = 10 ** int(math.floor(math.log10(vmax))) if vmax > 0 else 1
-    nice_vmax = float(math.ceil(vmax / magnitude) * magnitude)
+    mag = 10 ** int(math.floor(math.log10(vmax))) if vmax > 0 else 1
+    nice_vmax = float(math.ceil(vmax / mag) * mag)
     if nice_vmax <= 0:
         nice_vmax = 1.0
 
-    n = len(values)
-    gap = 12
-    total_w = chart_right - chart_left
-    bar_w = max(6, int((total_w - gap * (n + 1)) / max(1, n)))
-
-    # grid + axis labels
-    steps = 5
-    font_grid = load_font(11)
+    # grid + y labels
+    steps = 4
     for i in range(steps + 1):
         yy = chart_bottom - int((chart_bottom - chart_top) * i / steps)
         val = nice_vmax * i / steps
         draw.line([(chart_left, yy), (chart_right, yy)], fill=theme["grid"], width=1)
         vs = f"{val:.2f}".rstrip("0").rstrip(".")
-        draw.text((cx0 - 4 - text_size(draw, vs, font_grid)[0], yy - 6), vs, font=font_grid, fill=theme["text_dim"])
+        draw.text((chart_left - 6 - text_size(draw, vs, font_grid)[0], yy - 5),
+                  vs, font=font_grid, fill=theme["text_tertiary"])
+
+    n = len(values)
+    gap = 10
+    total_w = chart_right - chart_left
+    bar_w = max(6, int((total_w - gap * (n + 1)) / max(1, n)))
 
     for idx, val in enumerate(values):
         bx = chart_left + gap + idx * (bar_w + gap)
@@ -230,108 +288,108 @@ def render_bar_chart(canvas: Image.Image, box: tuple[int, int, int, int],
         by = chart_bottom - bh
         color = colors[idx % len(colors)]
         try:
-            rgb = hex_to_rgb(color)
+            rgb = hex_to_rgb(str(color))
         except Exception:
-            rgb = (79, 70, 229)
-        # gradient bar
-        bar_img = Image.new("RGB", (bar_w, max(1, bh)))
-        for yy in range(max(1, bh)):
-            t = yy / max(1, bh - 1)
-            bar_img.putpixel((0, yy), lerp_color(lighten(rgb, 1.25), rgb, t))
-        bar_img = bar_img.resize((bar_w, max(1, bh)), Image.Resampling.BILINEAR)
+            rgb = (16, 185, 129)
         if bh > 0:
+            bar_img = Image.new("RGB", (bar_w, bh))
+            for yy in range(bh):
+                t = yy / max(1, bh - 1)
+                bar_img.putpixel((0, yy), lerp_color(lighten(rgb, 1.2), rgb, t))
+            bar_img = bar_img.resize((bar_w, bh), Image.Resampling.BILINEAR)
             canvas.paste(bar_img, (bx, by))
-        # value on top
         vs = f"{val:g}"
         vw, _ = text_size(draw, vs, font_val)
-        draw.text((bx + (bar_w - vw) // 2, by - 20), vs, font=font_val, fill=theme["text"])
-        # label
+        draw.text((bx + (bar_w - vw) // 2, by - 18), vs, font=font_val, fill=theme["text"])
         lab = labels[idx] if idx < len(labels) else ""
-        lab = lab[:14]
+        lab = lab[:12]
         lw, _ = text_size(draw, lab, font_lab)
-        draw.text((bx + (bar_w - lw) // 2, chart_bottom + 8), lab, font=font_lab, fill=theme["text_dim"])
+        draw.text((bx + (bar_w - lw) // 2, chart_bottom + 8), lab,
+                  font=font_lab, fill=theme["text_dim"])
 
 
+# ============================================================
+# LINE
+# ============================================================
 def render_line_chart(canvas: Image.Image, box: tuple[int, int, int, int],
-                       spec: JsonDict, theme: ChartTheme) -> None:
+                      spec: JsonDict, theme: ChartTheme) -> None:
     x0, y0, x1, y1 = box
     draw = ImageDraw.Draw(canvas)
-    title = spec.get("title") or ""
+    title = str(spec.get("title") or "")
     xs = [str(v) for v in spec.get("x", [])]
     series = spec.get("series", []) or []
     if not series:
         return
-    # normalize series
-    norm_series: list[SeriesSpec] = []
+
+    norm: list[SeriesSpec] = []
     for s in series:
         if not isinstance(s, dict):
             continue
-        series_item = cast(JsonDict, s)
-        ys = [float(v) for v in s.get("y", []) if is_number(v)]
+        sd = cast(JsonDict, s)
+        ys = [float(v) for v in sd.get("y", []) if is_number(v)]
         if not ys:
             continue
-        raw_color = series_item.get("color")
-        color = raw_color if isinstance(raw_color, str) else _PALETTE[len(norm_series) % len(_PALETTE)]
-        raw_name = series_item.get("name")
-        norm_series.append({
-            "name": raw_name if isinstance(raw_name, str) and raw_name else f"Series {len(norm_series) + 1}",
+        raw_color = sd.get("color")
+        color = raw_color if isinstance(raw_color, str) else _PALETTE[len(norm) % len(_PALETTE)]
+        raw_name = sd.get("name")
+        norm.append({
+            "name": raw_name if isinstance(raw_name, str) and raw_name else f"S{len(norm) + 1}",
             "y": ys,
             "color": color,
         })
-    if not norm_series:
+    if not norm:
         return
 
-    draw.rounded_rectangle(box, radius=16, fill=theme["card"], outline=theme["border"], width=2)
-    inner_pad = 24
-    cx0, cy0, cx1, cy1 = x0 + inner_pad, y0 + inner_pad, x1 - inner_pad, y1 - inner_pad
-    font_title = load_font(22, bold=True)
-    font_lab = load_font(12)
-    font_grid = load_font(11)
-    font_legend = load_font(12)
+    draw_card(canvas, box, theme)
+    pad = 24
+    cx0, cy0, cx1, cy1 = x0 + pad, y0 + pad, x1 - pad, y1 - pad
+    font_title = load_font(20, bold=True)
+    font_lab = load_font(11)
+    font_grid = load_font(10)
+    font_legend = load_font(11)
 
     if title:
         draw.text((cx0, cy0), title, font=font_title, fill=theme["text"])
-        cy0 += 34
+        cy0 += 32
 
-    # legend at top-right
+    # legend top-right
     legend_x = cx1
-    legend_y = cy0 - 4
-    for s in reversed(norm_series):
-        name = str(s["name"])[:18]
+    legend_y = cy0 - 2
+    for s in reversed(norm):
+        name = str(s["name"])[:16]
         color = str(s["color"])
-        tw, th = text_size(draw, name, font_legend)
-        legend_x -= tw + 24
-        draw.line([(legend_x, legend_y + 8), (legend_x + 14, legend_y + 8)],
+        tw, _ = text_size(draw, name, font_legend)
+        legend_x -= tw + 20
+        draw.line([(legend_x, legend_y + 8), (legend_x + 12, legend_y + 8)],
                   fill=hex_to_rgb(color), width=3)
-        draw.text((legend_x + 18, legend_y), name, font=font_legend, fill=theme["text_dim"])
+        draw.text((legend_x + 16, legend_y), name, font=font_legend, fill=theme["text_dim"])
 
-    chart_top = cy0 + 8
-    chart_bottom = cy1 - 30
-    chart_left = cx0 + 6
+    chart_top = cy0 + 10
+    chart_bottom = cy1 - 28
+    chart_left = cx0 + 30
     chart_right = cx1 - 6
     if chart_bottom <= chart_top:
         return
 
-    all_ys = [v for s in norm_series for v in cast(list[float], s["y"])]
+    all_ys = [v for s in norm for v in cast(list[float], s["y"])]
     vmin = min(all_ys)
     vmax = max(all_ys)
     if vmax == vmin:
         vmax = vmin + 1
-    pad = (vmax - vmin) * 0.1
-    vmin -= pad
-    vmax += pad
+    pad_v = (vmax - vmin) * 0.1
+    vmin -= pad_v
+    vmax += pad_v
 
-    steps = 5
+    steps = 4
     for i in range(steps + 1):
         yy = chart_bottom - int((chart_bottom - chart_top) * i / steps)
         val = vmin + (vmax - vmin) * i / steps
         draw.line([(chart_left, yy), (chart_right, yy)], fill=theme["grid"], width=1)
         vs = f"{val:.2f}".rstrip("0").rstrip(".")
-        draw.text((cx0 - 4 - text_size(draw, vs, font_grid)[0], yy - 6),
-                  vs, font=font_grid, fill=theme["text_dim"])
+        draw.text((chart_left - 6 - text_size(draw, vs, font_grid)[0], yy - 5),
+                  vs, font=font_grid, fill=theme["text_tertiary"])
 
-    # X positions
-    max_len = max(len(cast(list[float], s["y"])) for s in norm_series)
+    max_len = max(len(cast(list[float], s["y"])) for s in norm)
     if max_len < 2:
         max_len = 2
     x_step = (chart_right - chart_left) / (max_len - 1)
@@ -339,7 +397,7 @@ def render_line_chart(canvas: Image.Image, box: tuple[int, int, int, int],
     def _y_to_px(v: float) -> int:
         return chart_bottom - int((v - vmin) / (vmax - vmin) * (chart_bottom - chart_top))
 
-    for s in norm_series:
+    for s in norm:
         color = str(s["color"])
         pts = [(chart_left + i * x_step, _y_to_px(v)) for i, v in enumerate(cast(list[float], s["y"]))]
         if len(pts) >= 2:
@@ -349,20 +407,22 @@ def render_line_chart(canvas: Image.Image, box: tuple[int, int, int, int],
             draw.ellipse([p[0] - r, p[1] - r, p[0] + r, p[1] + r],
                          fill=hex_to_rgb(color), outline=theme["bg"], width=2)
 
-    # X labels
     for i in range(max_len):
         lab = xs[i] if i < len(xs) else str(i + 1)
-        lab = lab[:10]
+        lab = lab[:8]
         lx = chart_left + i * x_step
         lw, _ = text_size(draw, lab, font_lab)
         draw.text((lx - lw // 2, chart_bottom + 6), lab, font=font_lab, fill=theme["text_dim"])
 
 
+# ============================================================
+# PIE
+# ============================================================
 def render_pie_chart(canvas: Image.Image, box: tuple[int, int, int, int],
-                      spec: JsonDict, theme: ChartTheme, depth: int = 0) -> None:
+                     spec: JsonDict, theme: ChartTheme, depth: int = 0) -> None:
     x0, y0, x1, y1 = box
     draw = ImageDraw.Draw(canvas)
-    title = spec.get("title") or ""
+    title = str(spec.get("title") or "")
     labels = [str(v) for v in spec.get("labels", [])]
     values = [float(v) for v in spec.get("values", []) if is_number(v)]
     if not values:
@@ -372,32 +432,25 @@ def render_pie_chart(canvas: Image.Image, box: tuple[int, int, int, int],
     if total <= 0:
         return
 
-    draw.rounded_rectangle(box, radius=16, fill=theme["card"], outline=theme["border"], width=2)
-    inner_pad = 24
-    cx0, cy0, cx1, cy1 = x0 + inner_pad, y0 + inner_pad, x1 - inner_pad, y1 - inner_pad
-
-    font_title = load_font(22, bold=True)
-    font_legend = load_font(13)
-    font_pct = load_font(13, bold=True)
+    draw_card(canvas, box, theme)
+    pad = 24
+    cx0, cy0, cx1, cy1 = x0 + pad, y0 + pad, x1 - pad, y1 - pad
+    font_title = load_font(20, bold=True)
+    font_legend = load_font(12)
+    font_pct = load_font(12, bold=True)
 
     if title:
         draw.text((cx0, cy0), title, font=font_title, fill=theme["text"])
-        cy0 += 34
+        cy0 += 32
 
-    # Pie on left half, legend on right half
-    chart_w = (cx1 - cx0)
-    pie_box = (
-        cx0 + 10,
-        cy0 + 10,
-        cx0 + min(chart_w // 2 + 40, (cy1 - cy0) + 10),
-        cy1 - 10,
-    )
-    # make it square
-    pw = pie_box[2] - pie_box[0]
-    ph = pie_box[3] - pie_box[1]
-    side = min(pw, ph)
-    pcx = pie_box[0] + pw // 2
-    pcy = pie_box[1] + ph // 2
+    # pie on left, legend on right
+    inner_w = cx1 - cx0
+    inner_h = cy1 - cy0
+    side = min(int(inner_w * 0.55), inner_h)
+    if side < 60:
+        side = max(60, min(inner_w, inner_h))
+    pcx = cx0 + side // 2 + 6
+    pcy = cy0 + inner_h // 2
     px0 = pcx - side // 2
     py0 = pcy - side // 2
     px1 = px0 + side
@@ -405,7 +458,7 @@ def render_pie_chart(canvas: Image.Image, box: tuple[int, int, int, int],
 
     start = -90.0
     legend_x = px1 + 30
-    legend_y = cy0 + 20
+    legend_y = cy0 + 12
 
     for idx, val in enumerate(values):
         extent = 360 * (val / total)
@@ -414,9 +467,7 @@ def render_pie_chart(canvas: Image.Image, box: tuple[int, int, int, int],
             rgb = hex_to_rgb(str(color))
         except Exception:
             rgb = hex_to_rgb(_PALETTE[idx % len(_PALETTE)])
-
         if depth > 0:
-            # Draw "side wall"
             for d in range(depth, 0, -1):
                 draw.pieslice([px0, py0 + d, px1, py1 + d],
                               start, start + extent,
@@ -425,7 +476,6 @@ def render_pie_chart(canvas: Image.Image, box: tuple[int, int, int, int],
                       fill=rgb, outline=theme["bg"], width=2)
         start += extent
 
-    # Legend
     for idx, val in enumerate(values):
         color = colors[idx % len(colors)]
         try:
@@ -434,58 +484,55 @@ def render_pie_chart(canvas: Image.Image, box: tuple[int, int, int, int],
             rgb = hex_to_rgb(_PALETTE[idx % len(_PALETTE)])
         pct = val / total * 100
         lab = labels[idx] if idx < len(labels) else f"Item {idx + 1}"
-        lab_line = f"{lab}"
         pct_line = f"{pct:.1f}%"
-        # swatch
-        draw.rectangle([legend_x, legend_y + 4, legend_x + 16, legend_y + 20], fill=rgb)
-        draw.text((legend_x + 24, legend_y), lab_line[:28], font=font_legend, fill=theme["text"])
+        if legend_y + 22 > cy1:
+            break
+        draw.rectangle([legend_x, legend_y + 3, legend_x + 14, legend_y + 17], fill=rgb)
+        draw.text((legend_x + 22, legend_y), lab[:22], font=font_legend, fill=theme["text"])
         pw_, _ = text_size(draw, pct_line, font_pct)
         draw.text((cx1 - pw_ - 4, legend_y), pct_line, font=font_pct, fill=theme["text_dim"])
-        legend_y += 28
-        if legend_y > cy1 - 20:
-            break
+        legend_y += 24
 
 
+# ============================================================
+# TABLE
+# ============================================================
 def render_table(canvas: Image.Image, box: tuple[int, int, int, int],
-                  spec: JsonDict, theme: ChartTheme) -> None:
+                 spec: JsonDict, theme: ChartTheme) -> None:
     x0, y0, x1, y1 = box
     draw = ImageDraw.Draw(canvas)
-    title = spec.get("title") or ""
+    title = str(spec.get("title") or "")
     headers = [str(h) for h in spec.get("headers", [])]
     rows = [[str(c) for c in row] for row in spec.get("rows", [])]
     if not headers and not rows:
         return
 
-    draw.rounded_rectangle(box, radius=16, fill=theme["card"], outline=theme["border"], width=2)
-    inner_pad = 20
-    cx0, cy0, cx1, cy1 = x0 + inner_pad, y0 + inner_pad, x1 - inner_pad, y1 - inner_pad
-
-    font_title = load_font(22, bold=True)
-    font_head = load_font(14, bold=True)
-    font_row = load_font(14)
+    draw_card(canvas, box, theme)
+    pad = 22
+    cx0, cy0, cx1, cy1 = x0 + pad, y0 + pad, x1 - pad, y1 - pad
+    font_title = load_font(20, bold=True)
+    font_head = load_font(13, bold=True)
+    font_row = load_font(13)
 
     if title:
         draw.text((cx0, cy0), title, font=font_title, fill=theme["text"])
-        cy0 += 34
+        cy0 += 32
 
     n_cols = max([len(headers)] + [len(r) for r in rows] + [1])
     col_w = (cx1 - cx0) // n_cols
-    row_h = 30
-
+    row_h = 28
     y_cur = cy0 + 4
-    # header
+
     if headers:
         for i in range(n_cols):
             label = headers[i] if i < len(headers) else ""
             cell_x0 = cx0 + i * col_w
             cell_x1 = cell_x0 + col_w
-            draw.rectangle([cell_x0, y_cur, cell_x1, y_cur + row_h],
-                           fill=theme["accent"])
+            draw.rectangle([cell_x0, y_cur, cell_x1, y_cur + row_h], fill=theme["accent"])
             draw_centered_text(draw, (cell_x0 + 6, y_cur, cell_x1 - 6, y_cur + row_h),
-                                label, font_head, "#FFFFFF")
+                               label, font_head, "#FFFFFF")
         y_cur += row_h
 
-    # rows
     for r_i, r in enumerate(rows):
         if y_cur + row_h > cy1:
             break
@@ -496,11 +543,14 @@ def render_table(canvas: Image.Image, box: tuple[int, int, int, int],
             cell_x0 = cx0 + i * col_w
             cell_x1 = cell_x0 + col_w
             draw_centered_text(draw, (cell_x0 + 6, y_cur, cell_x1 - 6, y_cur + row_h),
-                                cell[:40], font_row, theme["text"])
+                               cell[:36], font_row, theme["text"])
         draw.line([(cx0, y_cur + row_h), (cx1, y_cur + row_h)], fill=theme["grid"], width=1)
         y_cur += row_h
 
 
+# ============================================================
+# IMAGE
+# ============================================================
 async def load_remote_image(url: str) -> Image.Image | None:
     try:
         data = await download_image_bytes(url)
@@ -511,12 +561,12 @@ async def load_remote_image(url: str) -> Image.Image | None:
 
 
 def render_image_block(canvas: Image.Image, box: tuple[int, int, int, int],
-                        img: Image.Image, theme: ChartTheme) -> None:
+                       img: Image.Image, theme: ChartTheme) -> None:
     x0, y0, x1, y1 = box
     draw = ImageDraw.Draw(canvas)
-    draw.rounded_rectangle(box, radius=16, fill=theme["card"], outline=theme["border"], width=2)
-    inner_pad = 12
-    ix0, iy0, ix1, iy1 = x0 + inner_pad, y0 + inner_pad, x1 - inner_pad, y1 - inner_pad
+    draw_card(canvas, box, theme)
+    inner = 12
+    ix0, iy0, ix1, iy1 = x0 + inner, y0 + inner, x1 - inner, y1 - inner
     box_w = ix1 - ix0
     box_h = iy1 - iy0
     if box_w <= 0 or box_h <= 0:
@@ -531,35 +581,21 @@ def render_image_block(canvas: Image.Image, box: tuple[int, int, int, int],
         canvas.paste(im, (ox, oy))
 
 
-def is_number(x: object) -> bool:
-    try:
-        float(cast(Any, x))
-        return True
-    except (TypeError, ValueError):
-        return False
-
-
+# ============================================================
+# RENDER INFOGRAPHIC
+# ============================================================
 async def render_infographic(spec: JsonDict, user_images: list[bytes] | None = None) -> BytesIO:
-    """
-    Строит инфографику по спецификации.
-    spec = {
-        "theme": "dark_modern",
-        "title": "...",
-        "subtitle": "...",
-        "width": 1400,
-        "blocks": [ {...}, ... ]
-    }
-    Возвращает BytesIO с PNG.
-    """
-    theme_name = spec.get("theme", "dark_modern")
+    """Строит инфографику в PSL-стиле: вертикальный аспект, аккуратные карточки."""
+    theme_name = str(spec.get("theme", "dark_modern"))
     theme = CHART_THEMES.get(theme_name, CHART_THEMES["dark_modern"])
 
-    width = int(spec.get("width", 1400))
-    title = spec.get("title") or ""
-    subtitle = spec.get("subtitle") or ""
+    width = int(spec.get("width", DEFAULT_WIDTH))
+    width = max(600, min(1600, width))
+    title = str(spec.get("title") or "")
+    subtitle = str(spec.get("subtitle") or "")
     blocks = spec.get("blocks", []) or []
 
-    # Preload images (URL or user references)
+    # Preload images
     preloaded: dict[int, Image.Image] = {}
     for idx, block in enumerate(blocks):
         if not isinstance(block, dict):
@@ -574,23 +610,21 @@ async def render_infographic(spec: JsonDict, user_images: list[bytes] | None = N
                     except Exception:
                         pass
             elif src == "url" and block.get("url"):
-                img = await load_remote_image(block["url"])
+                img = await load_remote_image(str(block["url"]))
                 if img is not None:
                     preloaded[idx] = img
 
-    # Precompute heights
-    # Approximate: heading 60, text computed by width, divider 32, chart uses "height" or default 340,
-    # table uses headers/rows, image uses "height" or 400.
-    padding = 40
+    padding = 36
     inner_w = width - padding * 2
 
-    # measure text heights
+    # fonts
+    font_title = load_font(34, bold=True)
+    font_sub = load_font(16)
+    font_h = load_font(22, bold=True)
+    font_text = load_font(16)
+
     tmp_img = Image.new("RGB", (10, 10))
     tmp_draw = ImageDraw.Draw(tmp_img)
-    font_title = load_font(44, bold=True)
-    font_sub = load_font(20)
-    font_h = load_font(28, bold=True)
-    font_text = load_font(18)
 
     heights: list[int] = []
     for idx, block in enumerate(blocks):
@@ -599,62 +633,61 @@ async def render_infographic(spec: JsonDict, user_images: list[bytes] | None = N
             continue
         t = block.get("type", "text")
         if t == "heading":
-            heights.append(52)
+            heights.append(40)
         elif t == "text":
-            lines = wrap_lines(tmp_draw, block.get("text", ""), font_text, inner_w)
-            heights.append(max(30, len(lines) * 26 + 8))
+            lines = wrap_lines(tmp_draw, str(block.get("text", "")), font_text, inner_w)
+            heights.append(max(28, len(lines) * 22 + 8))
         elif t == "divider":
-            heights.append(36)
+            heights.append(28)
         elif t == "bar":
             heights.append(int(block.get("height", 340)))
         elif t == "line":
             heights.append(int(block.get("height", 340)))
         elif t == "pie":
-            heights.append(int(block.get("height", 360)))
+            heights.append(int(block.get("height", 320)))
         elif t == "pie3d":
-            heights.append(int(block.get("height", 380)))
+            heights.append(int(block.get("height", 340)))
         elif t == "table":
             n_rows = len(block.get("rows", []))
             n_head = 1 if block.get("headers") else 0
-            heights.append(70 + (n_rows + n_head) * 30)
+            heights.append(60 + (n_rows + n_head) * 28 + 20)
         elif t == "image":
-            heights.append(int(block.get("height", 400)))
+            heights.append(int(block.get("height", 360)))
         else:
             heights.append(0)
 
     header_h = 0
     if title:
-        header_h += 66
+        header_h += 56
     if subtitle:
-        header_h += 34
+        header_h += 26
 
-    total_h = padding * 2 + header_h + sum(heights) + max(0, len(blocks) - 1) * 20
-    total_h = max(600, total_h)
+    total_h = padding * 2 + header_h + sum(heights) + max(0, len(blocks) - 1) * 16
+    total_h = max(400, total_h)
 
-    # Draw background
+    # background
     bg_grad = theme.get("bg_grad")
     if isinstance(bg_grad, (tuple, list)) and len(bg_grad) >= 2:
         bg_c1, bg_c2 = str(bg_grad[0]), str(bg_grad[1])
     else:
         bg_c1 = bg_c2 = theme_str(theme, "bg")
     canvas = make_gradient_bg(width, total_h, bg_c1, bg_c2).convert("RGBA")
-
     draw = ImageDraw.Draw(canvas)
 
-    # Title
+    # header
     y = padding
     if title:
-        draw.text((padding, y), title, font=font_title, fill=theme_str(theme, "text"))
-        y += 58
+        draw.text((padding, y), title, font=font_title, fill=theme_str(theme, "text_tertiary"))
+        y += 48
     if subtitle:
         draw.text((padding, y), subtitle, font=font_sub, fill=theme_str(theme, "text_dim"))
-        y += 34
+        y += 24
     if title or subtitle:
-        # subtle divider
-        draw.line([(padding, y), (width - padding, y)], fill=theme_str(theme, "border"), width=2)
-        y += 8
+        draw.line([(padding, y + 4), (width - padding, y + 4)],
+                  fill=theme_str(theme, "divider"), width=1)
+        y += 20
 
-    # Blocks
+    # blocks
     for idx, block in enumerate(blocks):
         h = heights[idx]
         if h <= 0 or not isinstance(block, dict):
@@ -663,18 +696,19 @@ async def render_infographic(spec: JsonDict, user_images: list[bytes] | None = N
         t = block.get("type", "text")
 
         if t == "heading":
-            draw_centered_text(draw, (box[0], box[1], box[2], box[1] + h),
-                                str(block.get("text", "")), font_h, theme_str(theme, "text"))
+            draw.text((padding, y + 6), str(block.get("text", "")), font=font_h,
+                      fill=theme_str(theme, "text"))
         elif t == "text":
-            lines = wrap_lines(draw, block.get("text", ""), font_text, inner_w)
-            ty = y
+            lines = wrap_lines(draw, str(block.get("text", "")), font_text, inner_w)
+            ty = y + 4
             for line in lines:
-                draw.text((padding, ty), line, font=font_text, fill=theme_str(theme, "text"))
-                ty += 26
+                draw.text((padding, ty), line, font=font_text,
+                          fill=theme_str(theme, "text"))
+                ty += 22
         elif t == "divider":
             mid_y = y + h // 2
-            draw.line([(padding + 20, mid_y), (width - padding - 20, mid_y)],
-                      fill=theme_str(theme, "border"), width=2)
+            draw.line([(padding + 10, mid_y), (width - padding - 10, mid_y)],
+                      fill=theme_str(theme, "divider"), width=1)
         elif t == "bar":
             render_bar_chart(canvas, box, block, theme)
         elif t == "line":
@@ -682,7 +716,7 @@ async def render_infographic(spec: JsonDict, user_images: list[bytes] | None = N
         elif t == "pie":
             render_pie_chart(canvas, box, block, theme, depth=0)
         elif t == "pie3d":
-            render_pie_chart(canvas, box, block, theme, depth=max(12, h // 20))
+            render_pie_chart(canvas, box, block, theme, depth=max(10, h // 24))
         elif t == "table":
             render_table(canvas, box, block, theme)
         elif t == "image":
@@ -690,7 +724,7 @@ async def render_infographic(spec: JsonDict, user_images: list[bytes] | None = N
             if img is not None:
                 render_image_block(canvas, box, img, theme)
 
-        y += h + 20
+        y += h + 16
 
     out = BytesIO()
     canvas.convert("RGB").save(out, format="PNG", optimize=True)
@@ -701,10 +735,8 @@ async def render_infographic(spec: JsonDict, user_images: list[bytes] | None = N
 def extract_chart_marker(text: str) -> tuple[JsonDict | None, str]:
     if not text or "!chart" not in text:
         return None, text
-    # try fenced first
     m = re.search(r'!chart\s*\n?```(?:json)?\s*(\{[\s\S]*?\})\s*```', text)
     if not m:
-        # bare json (greedy balanced)
         idx = text.find("!chart")
         if idx >= 0:
             start = text.find("{", idx)

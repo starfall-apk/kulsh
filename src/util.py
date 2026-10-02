@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.39.0
+# Kulsh GPT | v2.40.0
 # by (main author): starfall-apk
 # coauthor & bot hosting: pomidorka1515
 
@@ -16,6 +16,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 from collections import defaultdict, deque
 from datetime import timedelta, timezone
 from logging.handlers import RotatingFileHandler
@@ -29,17 +30,24 @@ from PIL import ImageFont
 from telebot.async_telebot import AsyncTeleBot
 
 # ============================================================
-# ЛОГГЕР
+# ЛОГГЕР (более структурный вывод)
 # ============================================================
 logger = logging.getLogger('KulshBot')
 logger.setLevel(logging.DEBUG)
-log_formatter = logging.Formatter('%(asctime)s | %(levelname)s | %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+log_formatter = logging.Formatter(
+    '%(asctime)s | %(levelname)-7s | %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S',
+)
 file_handler = RotatingFileHandler('bot.log', maxBytes=5 * 1024 * 1024, backupCount=1, encoding='utf-8')
 file_handler.setFormatter(log_formatter)
 console_handler = logging.StreamHandler()
 console_handler.setFormatter(log_formatter)
 logger.addHandler(file_handler)
 logger.addHandler(console_handler)
+
+# Время старта процесса — для /status
+BOT_START_TS: float = time.time()
+BOT_VERSION: str = "2.40.0"
 
 # ============================================================
 # ВРЕМЯ
@@ -57,6 +65,20 @@ def msk_time_str() -> str:
 
 def msk_datetime_str() -> str:
     return msk_now().strftime('%d.%m.%Y %H:%M:%S МСК')
+
+
+def human_uptime() -> str:
+    secs = int(time.time() - BOT_START_TS)
+    d, secs = divmod(secs, 86400)
+    h, secs = divmod(secs, 3600)
+    m, secs = divmod(secs, 60)
+    parts = []
+    if d:
+        parts.append(f"{d}д")
+    if h or d:
+        parts.append(f"{h}ч")
+    parts.append(f"{m}м")
+    return " ".join(parts)
 
 # ============================================================
 # КОНФИГ .env
@@ -120,7 +142,20 @@ PREMIUM_ADMIN_ID = 1420898868
 premium_functions_enabled: bool = True
 AUTHORIZED_UPDATERS = [735217033867821098, 1193627300797878362]
 
-# Декоративные символы для красивого оформления
+# ============================================================
+# РЕЖИМЫ ОБЩЕНИЯ
+# ============================================================
+COMMUNICATION_MODES = ("kent", "assistant", "pro")
+DEFAULT_COMMUNICATION_MODE = "kent"
+
+
+def mode_is_valid(mode: str) -> bool:
+    return mode in COMMUNICATION_MODES
+
+
+# ============================================================
+# ДЕКОР
+# ============================================================
 DECO = {
     "sparkle": "✦",
     "wave": "彡",
@@ -147,8 +182,6 @@ def deco_divider(length: int = 20, char: str = "─") -> str:
 def deco_title(text: str, lang: str = "ru") -> str:
     return f"✦彡巛〢 {text} 〢巛彡✦"
 
-
-premium_functions_enabled: bool = True
 
 # ============================================================
 # VOICE / TTS
@@ -208,12 +241,10 @@ class _TypedHandler(Protocol):
 
 
 def typed_decorator(decorator: Callable[..., Any]) -> Callable[..., _TypedHandler]:
-    """pyTelegramBotAPI decorators are untyped; preserve the wrapped callable."""
     return cast(Callable[..., _TypedHandler], decorator)
 
 
 def cb_id(call: telebot.types.CallbackQuery) -> int:
-    """Library stubs type callback query ids as int; the API sends strings."""
     return cast(int, call.id)
 
 
@@ -283,6 +314,7 @@ battle_media_groups: dict[str, asyncio.Task[None]] = {}
 battle_photos: dict[str, list[bytes]] = {}
 pending_donations: dict[int, int] = {}
 user_looksmaxxing_state: defaultdict[int, bool] = defaultdict(lambda: False)
+user_femboy_state: defaultdict[int, bool] = defaultdict(lambda: False)
 
 DONATIONS_FILE = 'donations.json'
 MEMORY_FILE = 'long_term_memory.json'
@@ -401,6 +433,7 @@ DEFAULT_USER_CONFIG = {
     "streaming_enabled": False,
     "tools_enabled": False,
     "web_search_enabled": True,
+    "communication_mode": DEFAULT_COMMUNICATION_MODE,
 }
 
 
@@ -416,6 +449,8 @@ def get_user_config(platform: str, chat_id: int, user_id: int) -> JsonDict:
                 cfg[k] = v
     if cfg.get("separate_enabled", True) and cfg.get("streaming_enabled", False):
         cfg["streaming_enabled"] = False
+    if not mode_is_valid(str(cfg.get("communication_mode", DEFAULT_COMMUNICATION_MODE))):
+        cfg["communication_mode"] = DEFAULT_COMMUNICATION_MODE
     return cfg
 
 
@@ -541,6 +576,7 @@ def markdown_like_to_telegram_html(text: str) -> str:
     text = text.replace('&lt;a href=', '<a href=').replace('&lt;/a&gt;', '</a>')
     return text
 
+
 async def download_image_bytes(url: str) -> bytes:
     async with aiohttp.ClientSession() as session:
         async with session.get(url) as resp:
@@ -627,13 +663,15 @@ def clean_json_text(text: str) -> str:
 # ============================================================
 # УТИЛИТЫ-МАРКЕРЫ
 # ============================================================
+# ВАЖНО: матчим ТОЛЬКО варианты с ведущим "!" — иначе обычные английские
+# слова "avatar"/"separate"/"gif"/"sticker" в тексте ломают пробелы.
 UTILITY_PATTERNS = {
-    "avatar": re.compile(r'!\s*avatar|(?<![A-Za-z])avatar(?![A-Za-z])', re.IGNORECASE),
-    "recall_media": re.compile(r'!\s*recall[\s_]*media|(?<![A-Za-z])recall[\s_]*media(?![A-Za-z])', re.IGNORECASE),
-    "sticker": re.compile(r'!\s*sticker|(?<![A-Za-z])sticker(?![A-Za-z])', re.IGNORECASE),
-    "gif": re.compile(r'!\s*gif|(?<![A-Za-z])gif(?![A-Za-z])', re.IGNORECASE),
+    "avatar": re.compile(r'!\s*avatar\b', re.IGNORECASE),
+    "recall_media": re.compile(r'!\s*recall[\s_]*media\b', re.IGNORECASE),
+    "sticker": re.compile(r'!\s*sticker\b', re.IGNORECASE),
+    "gif": re.compile(r'!\s*gif\b', re.IGNORECASE),
 }
-SEPARATOR_PATTERN = re.compile(r'!\s*sep[ae]rate|(?<![A-Za-z])sep[ae]rate(?![A-Za-z])', re.IGNORECASE)
+SEPARATOR_PATTERN = re.compile(r'!\s*sep[ae]rate\b', re.IGNORECASE)
 
 
 def split_by_separator(text: str) -> list[str]:
@@ -650,6 +688,7 @@ def extract_utility_markers(text: str) -> tuple[str, list[str]]:
         if pat.search(text):
             markers.append(name)
         text = pat.sub(' ', text)
+    # мягкая нормализация пробелов — но НЕ режем одиночные пробелы внутри слов
     text = re.sub(r'[ \t]{2,}', ' ', text)
     text = re.sub(r'[ \t]+([,.!?;:])', r'\1', text)
     text = re.sub(r'[ \t]+\n', '\n', text)
@@ -707,7 +746,7 @@ GIF_POOL = [
 ]
 
 # ============================================================
-# LOOKSMAXXING TIERS
+# LOOKSMAXXING TIERS (PSL)
 # ============================================================
 TIER_DISTRIBUTION: list[dict[str, str | float]] = [
     {"key": "sub3",     "short": "S3",  "full_m": "SUB 3",     "full_f": "SUB 3",     "psl_low": 1.0, "psl_high": 2.4},
@@ -726,10 +765,11 @@ def find_tier_key(tier_name: str) -> str | None:
     if not tier_name:
         return None
     tn = tier_name.strip().upper().replace("_", " ").replace("-", " ")
-    for tr in TIER_DISTRIBUTION:
-        candidates = [str(tr["key"]).upper(), str(tr["short"]).upper(), str(tr["full_m"]).upper(), str(tr["full_f"]).upper()]
+    for tr_ in TIER_DISTRIBUTION:
+        candidates = [str(tr_["key"]).upper(), str(tr_["short"]).upper(),
+                      str(tr_["full_m"]).upper(), str(tr_["full_f"]).upper()]
         if tn in candidates or tn.replace(" ", "") in [c.replace(" ", "") for c in candidates]:
-            return str(tr["key"])
+            return str(tr_["key"])
     return None
 
 
@@ -755,8 +795,61 @@ def is_battle_command(text: str) -> bool:
     t = (text or "").strip().lower()
     return bool(re.match(r'^(кульш\s+)?(battle|баттл|батл)$', t))
 
+
 # ============================================================
-# LOOKSMAXXING AI DATA
+# FEMBOY SCALE (FMB 1.0 – 10.0)
+# ============================================================
+FEMBOY_TIER_DISTRIBUTION: list[dict[str, Any]] = [
+    {"key": "chad",     "short": "CHD", "full_m": "CHAD",     "full_f": "CHAD",     "fmb_low": 1.0,  "fmb_high": 2.4,  "color": "#E53E3E"},
+    {"key": "sigma",    "short": "SGM", "full_m": "SIGMA",    "full_f": "SIGMA",    "fmb_low": 2.5,  "fmb_high": 3.9,  "color": "#ED8936"},
+    {"key": "normie",   "short": "NRM", "full_m": "NORMIE",   "full_f": "NORMIE",   "fmb_low": 4.0,  "fmb_high": 5.4,  "color": "#ECC94B"},
+    {"key": "softboy",  "short": "SFB", "full_m": "SOFTBOY",  "full_f": "SOFTGIRL", "fmb_low": 5.5,  "fmb_high": 6.4,  "color": "#48BB78"},
+    {"key": "cutie",    "short": "CUT", "full_m": "CUTIE",    "full_f": "CUTIE",    "fmb_low": 6.5,  "fmb_high": 7.4,  "color": "#38B2AC"},
+    {"key": "femboy",   "short": "FMB", "full_m": "FEMBOY",   "full_f": "FEMGIRL",  "fmb_low": 7.5,  "fmb_high": 8.4,  "color": "#4299E1"},
+    {"key": "twink",    "short": "TWK", "full_m": "TWINK",    "full_f": "TWINK",    "fmb_low": 8.5,  "fmb_high": 9.2,  "color": "#9F7AEA"},
+    {"key": "ultrafem", "short": "UFM", "full_m": "ULTRAFEM", "full_f": "ULTRAFEM", "fmb_low": 9.3,  "fmb_high": 9.7,  "color": "#ED64A6"},
+    {"key": "goddess",  "short": "GDS", "full_m": "GODDESS",  "full_f": "GODDESS",  "fmb_low": 9.8,  "fmb_high": 10.0, "color": "#F687B3"},
+]
+
+
+def find_femboy_tier_key(name: str) -> str | None:
+    if not name:
+        return None
+    tn = name.strip().upper().replace("_", " ").replace("-", " ")
+    for tr_ in FEMBOY_TIER_DISTRIBUTION:
+        candidates = [str(tr_["key"]).upper(), str(tr_["short"]).upper(),
+                      str(tr_["full_m"]).upper(), str(tr_["full_f"]).upper()]
+        if tn in candidates or tn.replace(" ", "") in [c.replace(" ", "") for c in candidates]:
+            return str(tr_["key"])
+    return None
+
+
+def get_femboy_tier_color(key_or_name: str) -> str:
+    key = find_femboy_tier_key(key_or_name) or (key_or_name or "").strip().lower()
+    for tr_ in FEMBOY_TIER_DISTRIBUTION:
+        if tr_["key"] == key:
+            return str(tr_.get("color") or "#9F7AEA")
+    return "#9F7AEA"
+
+
+def is_femboy_rate_command(text: str) -> bool:
+    t = (text or "").strip().lower()
+    return bool(re.match(
+        r'^(кульш\s+|kulsh\s+)?(femboy\s*rate|фембой\s*рейт|фембой\s*рейтинг|femboy-rate)$',
+        t,
+    ))
+
+
+def is_femboy_battle_command(text: str) -> bool:
+    t = (text or "").strip().lower()
+    return bool(re.match(
+        r'^(кульш\s+|kulsh\s+)?(femboy\s*battle|фембой\s*баттл|фембой\s*батл|femboy-battle)$',
+        t,
+    ))
+
+
+# ============================================================
+# LOOKSMAXXING AI RULES
 # ============================================================
 TIER_RULES_M = "SUB 3, SUB 5, LTN, MTN, HTN, CHADLITE, CHAD, ADAMLITE, TRUE ADAM"
 TIER_RULES_F = "SUB 3, SUB 5, LTB, MTB, HTB, STACYLITE, STACY, EVELITE, TRUE EVE"
@@ -768,10 +861,18 @@ TIER_RULES_STRICT = (
     "Если на фото не человек — верни tier 'N/A' и gender 'N/A'."
 )
 
+FEMBOY_TIER_RULES_M = "CHAD, SIGMA, NORMIE, SOFTBOY, CUTIE, FEMBOY, TWINK, ULTRAFEM, GODDESS"
+FEMBOY_TIER_RULES_F = "CHAD, SIGMA, NORMIE, SOFTGIRL, CUTIE, FEMGIRL, TWINK, ULTRAFEM, GODDESS"
+FEMBOY_TIER_RULES_STRICT = (
+    f"Мужские тиры FMB (СТРОГО): {FEMBOY_TIER_RULES_M}.\n"
+    f"Женские тиры FMB (СТРОГО): {FEMBOY_TIER_RULES_F}.\n"
+    "ИСПОЛЬЗУЙ ТОЛЬКО ЭТИ НАЗВАНИЯ. Не выдумывай новые. "
+    "Если на фото не человек — tier 'N/A', gender 'N/A'."
+)
+
 # ============================================================
 # SAFE GIT UPDATE
 # ============================================================
-
 TEXT_EXTS = {
     "txt", "py", "json", "html", "htm", "js", "css", "cs", "cpp", "c", "h", "hpp",
     "java", "php", "rb", "go", "rs", "ts", "tsx", "jsx", "xml", "yml", "yaml",
@@ -781,6 +882,7 @@ TEXT_EXTS = {
 }
 
 SAFE_COMMANDS = {"ls", "cat", "head", "tail", "wc", "grep", "find", "file", "stat", "du", "tree", "pwd"}
+
 
 def run_git(args: list[str], cwd: str, timeout: int = 60) -> tuple[int, str, str]:
     try:
@@ -809,9 +911,7 @@ def check_python_syntax(fpath: str) -> str | None:
     return None
 
 
-
 def repo_root(fpath: str) -> str:
-    """Directory that should be on sys.path when importing the bot."""
     directory = os.path.dirname(os.path.abspath(fpath)) or os.getcwd()
     if os.path.basename(directory) == "src":
         return os.path.dirname(directory) or directory

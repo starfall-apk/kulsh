@@ -1,8 +1,8 @@
-# Kulsh GPT | v2.39.0
+# Kulsh GPT | v2.40.0
 # by (main author): starfall-apk
 # coauthor & bot hosting: pomidorka1515
 
-"""Telegram photo/video/document handler and looksmaxxing battle albums."""
+"""Telegram media handler: photos, videos, looksmaxxing, femboy, battle albums, tools."""
 
 import asyncio
 import html
@@ -16,13 +16,20 @@ from telebot.types import InputFile
 from src.ai import ask_ai_async, extract_memory
 from src.looks import (
     create_battle_infographic,
+    create_femboy_battle_infographic,
+    create_femboy_infographic,
     create_infographic,
     get_battle_data,
+    get_femboy_battle_data,
+    get_femboy_data,
     get_looksmaxxing_data,
 )
+
+
 def _tg() -> Any:
     from src import telegram as tg
     return tg
+
 
 # ============================================================
 # AVATAR / RECALL
@@ -84,6 +91,7 @@ async def get_avatar_description_tg(
         logger.warning(f"avatar desc: {e}")
         return None
 
+
 async def get_recall_media_description_tg(
     message: telebot.types.Message, chat_id: int, user_id: int, n: int = 3, lang: str = "ru",
 ) -> str | None:
@@ -140,7 +148,6 @@ async def get_recall_media_description_tg(
         return None
 
 
-
 from src.tools import tool_edit_archive, tool_review_file
 from src.util import (
     json_str,
@@ -155,10 +162,13 @@ from src.util import (
     get_tg_file_bytes,
     get_user_config,
     is_battle_command,
+    is_femboy_battle_command,
+    is_femboy_rate_command,
     is_looksmaxxing_command,
     last_random_reply,
     logger,
     memory_to_messages,
+    user_femboy_state,
     user_looksmaxxing_state,
 
     COST_ARCHIVE_EDIT,
@@ -173,8 +183,12 @@ from src.util import (
     prompt_waiting,
     read_log_tail,
     spend_credits,
-    chunk_text,)
+    chunk_text,
+)
 
+# ============================================================
+# MEDIA HANDLER
+# ============================================================
 async def handle_tg_media(message: telebot.types.Message) -> None:
     if message.from_user is None:
         return
@@ -219,6 +233,27 @@ async def handle_tg_media(message: telebot.types.Message) -> None:
     if file_id and media_tag:
         add_media_history(chat_key, None, media_type or "media", display_name, file_id=file_id, caption=caption)
 
+    # ----- FEMBOY BATTLE ALBUM -----
+    if is_femboy_battle_command(caption) and message.photo:
+        if message.media_group_id:
+            mgid = message.media_group_id
+            if mgid not in battle_photos:
+                battle_photos[mgid] = []
+                battle_media_groups[mgid] = asyncio.create_task(
+                    _tg().tg_process_femboy_album(mgid, chat_id, user_id)
+                )
+            img_bytes = await get_tg_file_bytes(_tg().tg_bot, message.photo[-1].file_id)
+            battle_photos[mgid].append(img_bytes)
+        else:
+            await _tg().reply_tg_html(message, tr(lang, "femboy_battle_need_photos"))
+        return
+
+    if message.media_group_id and message.media_group_id in battle_photos and message.photo:
+        img_bytes = await get_tg_file_bytes(_tg().tg_bot, message.photo[-1].file_id)
+        battle_photos[message.media_group_id].append(img_bytes)
+        return
+
+    # ----- PSL BATTLE ALBUM -----
     if is_battle_command(caption) and message.photo:
         if message.media_group_id:
             mgid = message.media_group_id
@@ -233,12 +268,7 @@ async def handle_tg_media(message: telebot.types.Message) -> None:
             await _tg().reply_tg_html(message, tr(lang, "battle_need_photos"))
         return
 
-    if message.media_group_id and message.media_group_id in battle_photos and message.photo:
-        img_bytes = await get_tg_file_bytes(_tg().tg_bot, message.photo[-1].file_id)
-        battle_photos[message.media_group_id].append(img_bytes)
-        return
-
-    # chart по описанию + фото пользователя
+    # ----- CHART (по описанию + фото) -----
     if is_dm or re.search(r'(?i)\bкульш\s+(график|chart|инфографика)', caption or ""):
         m = re.match(r'(?i)кульш\s+(график|chart|инфографика)\s*(.*)', caption or "", re.DOTALL)
         if m and message.photo:
@@ -250,6 +280,29 @@ async def handle_tg_media(message: telebot.types.Message) -> None:
                 logger.error(f"chart with user image err: {e}")
             return
 
+    # ----- FEMBOY RATE (фото) -----
+    is_femboy = (
+        is_femboy_rate_command(caption) or
+        (message.reply_to_message and message.reply_to_message.from_user
+         and message.reply_to_message.from_user.id == (_tg().tg_bot.user.id if _tg().tg_bot.user else 0)
+         and message.reply_to_message.text
+         and is_femboy_rate_command(message.reply_to_message.text)) or
+        user_femboy_state.get(chat_id, False)
+    )
+    if is_femboy and message.photo:
+        user_femboy_state[chat_id] = False
+        try:
+            img_bytes = await get_tg_file_bytes(_tg().tg_bot, message.photo[-1].file_id)
+            await _tg().tg_handle_femboy_rate(message, chat_id, user_id, img_bytes, caption)
+            add_user_memory(chat_key, "TG", display_name, username, user_id,
+                            f"[femboy] {caption}", ["photo"], message_id=message.message_id)
+            add_bot_memory(chat_key, "[femboy отчёт]")
+        except Exception as e:
+            logger.error(f"femboy rate: {e}")
+            await _tg().reply_tg_html(message, f"🌋 Ошибка: {e}")
+        return
+
+    # ----- PSL (фото) -----
     is_looksmaxxing = (
         is_looksmaxxing_command(caption) or
         (message.reply_to_message and message.reply_to_message.from_user
@@ -391,6 +444,7 @@ async def handle_tg_media(message: telebot.types.Message) -> None:
     await _tg().send_tg_ai_response(message, chat_id, user_id, answer, user_text=prompt, user_images=user_imgs)
     asyncio.create_task(extract_memory(chat_key, f"{display_name}: [медиа] {caption}", answer))
 
+
 # ============================================================
 # TG TEXT HANDLER
 # ============================================================
@@ -437,6 +491,11 @@ async def handle_tg_text(message: telebot.types.Message) -> None:
 
     if tl.startswith("кульш конфиг") or tl.startswith("кульш настройки") or tl.startswith("kulsh config"):
         await _tg().tg_handle_config(message)
+        return
+
+    # статус
+    if tl.strip() in ("кульш статус", "kulsh status", "кульш состояние"):
+        await _tg().handle_status(message)
         return
 
     # ---- поиск ----
@@ -507,6 +566,17 @@ async def handle_tg_text(message: telebot.types.Message) -> None:
             await _tg().reply_tg_html(message, tr(lang, "logs_read_error", str(e)))
         return
 
+    if is_femboy_rate_command(text):
+        user_femboy_state[chat_id] = True
+        add_user_memory(chat_key, "TG", display_name, username, user_id, text, message_id=message.message_id)
+        await _tg().reply_tg_html(message, tr(lang, "femboy_need_photo"))
+        return
+
+    if is_femboy_battle_command(text):
+        add_user_memory(chat_key, "TG", display_name, username, user_id, text, message_id=message.message_id)
+        await _tg().reply_tg_html(message, tr(lang, "femboy_battle_need_photos"))
+        return
+
     if is_looksmaxxing_command(text):
         user_looksmaxxing_state[chat_id] = True
         add_user_memory(chat_key, "TG", display_name, username, user_id, text, message_id=message.message_id)
@@ -550,8 +620,9 @@ async def handle_tg_text(message: telebot.types.Message) -> None:
         except Exception as e:
             logger.warning(f"Random reply: {e}")
 
+
 # ============================================================
-# BATTLE MEDIA GROUP
+# PSL BATTLE MEDIA GROUP
 # ============================================================
 async def process_battle_media_group(media_group_id: str, tg_chat_id: int, user_id: int) -> None:
     for _ in range(10):
@@ -587,9 +658,9 @@ async def process_battle_media_group(media_group_id: str, tg_chat_id: int, user_
         f"{tr(lang, 'battle_winner')} <b>{winner_label}</b>\n"
         f"{tr(lang, 'battle_reason')} {html.escape(ai_data.get('reason', ''))}\n\n"
         f"{tr(lang, 'battle_photo1')} PSL {ai_data.get('photo1', {}).get('psl', '?')} | "
-        f"Tier {html.escape(ai_data.get('photo1', {}).get('tier', '?'))}\n"
+        f"Tier {html.escape(str(ai_data.get('photo1', {}).get('tier', '?')))}\n"
         f"{tr(lang, 'battle_photo2')} PSL {ai_data.get('photo2', {}).get('psl', '?')} | "
-        f"Tier {html.escape(ai_data.get('photo2', {}).get('tier', '?'))}\n"
+        f"Tier {html.escape(str(ai_data.get('photo2', {}).get('tier', '?')))}\n"
     )
     try:
         await _tg().tg_bot.send_photo(tg_chat_id, InputFile(battle_img), caption=tr(lang, "battle_caption"))

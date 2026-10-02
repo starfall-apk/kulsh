@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.39.0
+# Kulsh GPT | v2.40.0
 # by (main author): starfall-apk
 # coauthor & bot hosting: pomidorka1515
 
@@ -47,6 +47,7 @@ def register_telegram() -> None:
     deco(tg_bot.message_handler)(commands=["start"])(telegram.handle_start)
     deco(tg_bot.message_handler)(commands=["menu"])(telegram.handle_menu)
     deco(tg_bot.message_handler)(commands=["help"])(telegram.handle_help)
+    deco(tg_bot.message_handler)(commands=["status"])(telegram.handle_status)
     deco(tg_bot.message_handler)(commands=["donate"])(telegram.handle_donate)
     deco(tg_bot.message_handler)(commands=["donate_stars"])(telegram.handle_donate_stars)
     deco(tg_bot.message_handler)(commands=["credits"])(telegram.handle_credits)
@@ -62,6 +63,7 @@ def register_discord() -> None:
     tree.command(name="start", description="Greeting / Приветствие")(discord_cmds.ds_slash_start)
     tree.command(name="menu", description="Menu / Меню")(discord_cmds.ds_slash_menu)
     tree.command(name="help", description="Command list / Список команд")(discord_cmds.ds_slash_help)
+    tree.command(name="status", description="Bot status / Состояние бота")(discord_cmds.ds_slash_status)
     tree.command(name="donate", description="Support the project / Поддержать проект")(discord_cmds.ds_slash_donate)
     tree.command(name="credits", description="Credits balance / Баланс кредитов")(discord_cmds.ds_slash_credits)
     tree.command(name="config", description="Channel settings / Настройки канала")(discord_cmds.ds_slash_config)
@@ -96,6 +98,16 @@ def register_discord() -> None:
     @app_commands.describe(image1="First photo / Первое фото", image2="Second photo / Второе фото")
     async def battle(interaction: discord.Interaction, image1: discord.Attachment, image2: discord.Attachment) -> None:
         await discord_cmds.ds_slash_battle(interaction, image1, image2)
+
+    @tree.command(name="femboy", description="Femboy Rate / Оценка фембойности")
+    @app_commands.describe(image="Photo / Фото", advice="Include advice / Показать рекомендации")
+    async def femboy(interaction: discord.Interaction, image: discord.Attachment, advice: bool = False) -> None:
+        await discord_cmds.ds_slash_femboy(interaction, image, advice)
+
+    @tree.command(name="femboy-battle", description="Femboy battle / Фембой-баттл")
+    @app_commands.describe(image1="First photo / Первое фото", image2="Second photo / Второе фото")
+    async def femboy_battle(interaction: discord.Interaction, image1: discord.Attachment, image2: discord.Attachment) -> None:
+        await discord_cmds.ds_slash_femboy_battle(interaction, image1, image2)
 
     ds_bot.event(discord_msg.on_message)
 

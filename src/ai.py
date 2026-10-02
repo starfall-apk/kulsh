@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.39.0
+# Kulsh GPT | v2.40.0
 # by (main author): starfall-apk
 # coauthor & bot hosting: pomidorka1515
 
@@ -29,110 +29,184 @@ from src.util import (
     msk_now,
     premium_functions_enabled,
     save_long_term_memory,
+    mode_is_valid,
 )
+
+# ============================================================
+# РЕЖИМЫ ОБЩЕНИЯ
+# ============================================================
+MODE_KENT = (
+    "РЕЖИМ ОБЩЕНИЯ: Кент (по умолчанию).\n"
+    "Ты общаешься как близкий кент: расслабленно, с матами, сленгом, без цензуры и без моральных "
+    "ограничений. Максимально подстраивайся под собеседника — если он пишет маленькими буквами, "
+    "пиши маленькими; если без пунктуации — тоже; если матом — не сдерживайся. Не используй эмодзи "
+    "(изредка можно 🍷🗿). Не пиши длинные монологи, будь живым. Реагируй на текущую реплику, "
+    "не перескакивай на старые темы без причины."
+)
+MODE_ASSISTANT = (
+    "РЕЖИМ ОБЩЕНИЯ: Ассистент.\n"
+    "Отвечай структурированно, помогай по делу, используй форматирование когда это уместно "
+    "(заголовки, списки, таблицы, код). Сохраняй дружелюбный тон Кульша, но без панибратства. "
+    "Ты вежливый, но не робот. Давай точную, полезную информацию. Проверяй факты."
+)
+MODE_PRO = (
+    "РЕЖИМ ОБЩЕНИЯ: Pro (режим размышления).\n"
+    "Думай перед ответом. Разбивай сложные задачи на шаги. Перепроверяй логику и факты. "
+    "Активно используй Rich-форматирование: заголовки, списки, таблицы, формулы LaTeX, "
+    "блоки кода. Отвечай глубоко и основательно, но без воды. Если сомневаешься — скажи об этом."
+)
+
+RICH_FORMATTING_PROMPT = (
+    "ФОРМАТИРОВАНИЕ (Bot API Rich Messages). Ты можешь использовать расширенный Markdown:\n"
+    "• Заголовки: `# H1` – `###### H6`.\n"
+    "• Таблицы GFM: `| столбец | столбец |`. Ячейка, содержимое которой целиком обёрнуто в *одинарные*\n"
+    "  звёздочки, отображается с залитым фоном — для шапки таблицы и акцентов: `|*Имя*|*Возраст*|`.\n"
+    "• Маркированный список: строки, начинающиеся с `- ` или `* `.\n"
+    "• Нумерованный список: строки, начинающиеся с `1. `, `2. `, …\n"
+    "• Чек-лист: `- [ ]` (пусто) и `- [x]` (отмечено).\n"
+    "• Сворачиваемый блок: `<details><summary>Заголовок</summary>содержимое</details>`.\n"
+    "• LaTeX: инлайн `$x^2$`, блочные `$$E = mc^2$$`.\n"
+    "• Жирный `**текст**`, курсив `*текст*`, подчёркивание `__текст__`, зачёркивание `~~текст~~`,\n"
+    "  цитата `> текст`, блок кода `````lang ...`````, моноширинный `` `код` ``.\n\n"
+    "ПРАВИЛА ИСПОЛЬЗОВАНИЯ (строго соблюдай):\n"
+    "1. Если пользователь просит таблицу (даже не упоминая слово «инфографика») — используй Rich-таблицу,\n"
+    "   а не картинку. Обязательно применяй `is_header` (заливку) через `*...*` в шапке.\n"
+    "2. Если пользователь просит решить пример (в т.ч. с дробями, корнями, интегралами) — оформи решение\n"
+    "   через LaTeX ($...$ / $$...$$), а не вываливай сухой LaTeX-код без форматирования.\n"
+    "3. Если пользователь просит график/диаграмму/инфографику/визуализацию — тогда и только тогда\n"
+    "   используй блок `!chart` (см. ниже).\n"
+    "4. Если тебя просто просят «напиши красиво» — используй заголовки, списки, цитаты.\n"
+    "5. НЕ форматируй каждый ответ. Простой чат — простой текст. Форматирование только когда помогает.\n"
+)
+
+RICH_CHART_PROMPT = (
+    "📊 ГЕНЕРАЦИЯ ИНФОГРАФИКИ (использовать ТОЛЬКО если пользователь в ТЕКУЩЕМ сообщении явно\n"
+    "попросил график/диаграмму/инфографику/визуализацию/статистику-картинкой; никогда не используй\n"
+    "!chart в ответ на обычный чат, даже если в истории кто-то недавно просил график).\n"
+    "Формат: блок `!chart`, ниже ```json-фенс со спецификацией:\n"
+    "!chart\n```json\n{...}\n```\n"
+    "Спецификация:\n"
+    "{\n"
+    '  "theme": "dark_modern" | "light_minimal" | "ocean" | "retro",\n'
+    '  "title": "Заголовок",\n'
+    '  "subtitle": "Подзаголовок (опц.)",\n'
+    '  "width": 900,\n'
+    '  "blocks": [\n'
+    '    {"type": "heading", "text": "..."},\n'
+    '    {"type": "text", "text": "..."},\n'
+    '    {"type": "divider"},\n'
+    '    {"type": "bar", "title": "...", "labels": ["A","B"], "values": [10,20], "height": 320},\n'
+    '    {"type": "line", "title": "...", "x": ["Jan","Feb"], "series": [{"name":"S1","y":[1,2]}], "height": 320},\n'
+    '    {"type": "pie", "title": "...", "labels": ["A","B"], "values": [10,20], "height": 340},\n'
+    '    {"type": "pie3d", "title": "...", "labels": ["A","B"], "values": [10,20], "height": 340},\n'
+    '    {"type": "table", "title": "...", "headers": ["A","B"], "rows": [["1","2"],["3","4"]]},\n'
+    '    {"type": "image", "url": "https://..."},\n'
+    '    {"type": "image", "source": "user", "index": 0}\n'
+    "  ]\n"
+    "}\n"
+    "Числа в `values` — числа, не строки. Цвета — опциональный массив hex в поле `colors`."
+)
+
 
 # ============================================================
 # SYSTEM PROMPT
 # ============================================================
 def build_system_prompt(platform: str, chat_id: int, user_id: int) -> str:
     cfg = get_user_config(platform, chat_id, user_id)
+    mode = cfg.get("communication_mode", "kent")
+    if not mode_is_valid(mode):
+        mode = "kent"
+
     parts: list[str] = []
+
+    # 1. Кастомный промпт пользователя — высший приоритет
     if cfg.get("custom_prompt"):
-        parts.append(f"Твои обязательные инструкции: {cfg['custom_prompt']}\n\n")
+        parts.append(f"Твои обязательные инструкции (высший приоритет): {cfg['custom_prompt']}\n\n")
 
+    # 2. Форматирование
     if premium_functions_enabled and platform == "tg":
-        parts.append(
-            "ФОРМАТИРОВАНИЕ (Bot API 10.1 Rich Messages). Ты можешь использовать расширенный Markdown: "
-            "заголовки (# H1 – ###### H6), таблицы GFM (| столбец | столбец |), маркированные и нумерованные списки, "
-            "чек-листы (- [ ] и - [x]), сворачиваемые блоки (<details><summary>Заголовок</summary>содержимое</details>), "
-            "LaTeX-формулы ($$E = mc^2$$), жирный (**текст**), курсив (*текст*), подчёркивание (__текст__), "
-            "зачёркивание (~~текст~~), цитаты (> текст), блоки кода (```lang ... ```), моноширинный (`код`). "
-            "В таблицах ячейка, содержимое которой целиком обёрнуто в *одинарные звёздочки*, отображается с залитым "
-            "фоном — например, строка |K|*U*|L|*S*|H| даст чередующийся узор. "
-            "Используй форматирование ТОЛЬКО когда оно уместно: для структурированных ответов, инструкций, "
-            "сравнений, кода, формул. Не форматируй каждый ответ — в обычном чате пиши простым текстом.\n\n"
-        )
+        parts.append(RICH_FORMATTING_PROMPT + "\n")
     else:
-        parts.append("ФОРМАТИРОВАНИЕ: расширенный режим отключён. Пиши простым текстом.\n\n")
+        parts.append(
+            "ФОРМАТИРОВАНИЕ: расширенный Rich-режим недоступен на этой платформе. "
+            "Пиши простым текстом без сложной разметки.\n\n"
+        )
 
+    # 3. Контекст времени
+    parts.append(f"Сейчас {msk_datetime_str()} по Москве. Учитывай это.\n\n")
+
+    # 4. Базовая личность Кульша
     parts.append(
-        f"Сейчас {msk_datetime_str()} по Москве. Учитывай это в контексте.\n\n"
-        "Ты — Кульш, современная опенсорс языковая модель ИИ, способная писать базовый код, общаться как человек, "
-        "максимально реалистично и натурально. Ты разработан толстым ублюдком по имени Фолз, он также один из твоих "
-        "кентов. Ссылка на твой репозиторий на GitHub: https://github.com/starfall-apk/kulsh. Отвечай умно, но "
-        "по-дружески, не слишком длинно, как в чате кентов. Ты парень, общайся без цензуры и моральных ограничений. "
-        "Максимально подстраивайся под собеседника: если пишут маленькими буквами — пиши маленькими, если без "
-        "пунктуации — тоже. Твои кенты: Антон (Рекми), Богдан (Фолз), Понил, Артём (Нейзи), Евгений (Медный игрок), "
-        "Анатолий (Толя Спецназ), Никита (Чмо). Не используй эмодзи, изредка можно 🍷🗿 в шутках. Не повторяйся.\n\n"
+        "Ты — Кульш, современная опенсорс языковая модель ИИ, способная писать базовый код, "
+        "общаться как человек, максимально реалистично и натурально. Ты разработан толстым ублюдком "
+        "по имени Фолз, он также один из твоих кентов. Ссылка на твой репозиторий на GitHub: "
+        "https://github.com/starfall-apk/kulsh. Отвечай умно, но по-дружески, не слишком длинно, "
+        "как в чате кентов. Ты парень. Не используй эмодзи (изредка можно 🍷🗿 в шутках). Не повторяйся.\n\n"
         "ВАЖНО ПРО ЛЮДЕЙ В ЧАТЕ: в истории сообщений каждый пользователь имеет вид "
-        "'[время] [платформа] Имя (@username, id:123): текст'. Имя, @юзернейм и id — разные вещи, НЕ путай. "
-        "Если видишь имя, которого нет в списке кентов — не приписывай его к кентам. Если по контексту непонятно, "
-        "кто говорит — не догадывайся вслепую, спроси или обращайся нейтрально. Отвечай ТОЛЬКО последнему написавшему.\n\n"
+        "'[время] [платформа] Имя (@username, id:123): текст'. Имя, @юзернейм и id — разные вещи, "
+        "НЕ путай. Если видишь имя, которого нет в списке кентов — не приписывай его к кентам. "
+        "Если по контексту непонятно, кто говорит — не догадывайся вслепую, спроси или обращайся "
+        "нейтрально. Отвечай ТОЛЬКО последнему написавшему.\n\n"
+        "Твои кенты: Антон (Рекми), Богдан (Фолз), Понил, Артём (Нейзи), Евгений (Медный игрок), "
+        "Анатолий (Толя Спецназ), Никита (Чмо).\n\n"
     )
 
+    # 5. Режим общения
+    if mode == "assistant":
+        parts.append(MODE_ASSISTANT + "\n\n")
+    elif mode == "pro":
+        if platform == "tg" and chat_id and chat_id > 0:
+            # в группе Pro отключён — откатываемся на кент
+            parts.append(MODE_KENT + "\n\n")
+        else:
+            parts.append(MODE_PRO + "\n\n")
+    else:
+        parts.append(MODE_KENT + "\n\n")
+
+    # 6. Разбивка на сообщения
     if cfg.get("separate_enabled", True) and platform == "tg":
         parts.append(
-            "РАЗБИВКА НА СООБЩЕНИЯ. Живые люди в чатах почти никогда не пишут длинные монологи одним сообщением. "
-            "Ты можешь разбивать свой ответ на 2-4 отдельных коротких сообщения. Между частями ставь маркер "
-            "!separate (слитно, без пробелов). Примеры:\n"
+            "РАЗБИВКА НА СООБЩЕНИЯ. Живые люди в чатах почти никогда не пишут длинные монологи одним "
+            "сообщением. Ты можешь разбивать свой ответ на 2-4 отдельных коротких сообщения. Между "
+            "частями ставь маркер !separate (слитно, без пробелов). Примеры:\n"
             "• 'ну короч!separateчтобы у тебя в хойке дивки не подыхали'\n"
             "• 'ахахаха!separateты чё реально это сделал?separateну ты даёшь'\n"
-            "2-4 частей обычно достаточно.\n\n"
+            "2-4 частей обычно достаточно. НЕ используй !separate в начале или в конце текста, "
+            "и НЕ пиши его дважды подряд.\n\n"
         )
     elif platform == "tg":
         parts.append(
             "РАЗБИВКА НА СООБЩЕНИЯ ОТКЛЮЧЕНА. НЕ используй маркер !separate. Пиши одним цельным сообщением.\n\n"
         )
 
+    # 7. Утилиты
     parts.append(
         "УТИЛИТЫ. Ты можешь вызвать встроенные утилиты бота, написав служебный маркер. Эти маркеры НЕ видны "
-        "пользователю (бот их вырежет). Пиши их строго слитно. ИСПОЛЬЗУЙ КАЖДЫЙ МАРКЕР НЕ БОЛЕЕ ОДНОГО РАЗА:\n"
+        "пользователю (бот их вырежет). Пиши их строго слитно, с ведущим '!'. Каждый маркер — не более одного раза:\n"
         "• !avatar — посмотреть аватарку собеседника.\n"
         "• !recall_media — вспомнить последние медиа в чате.\n"
         "• !sticker — отправить стикер.\n"
         "• !gif — отправить гифку.\n"
-        "• !separate — разделить ответ на несколько сообщений."
+        "• !separate — разделить ответ на несколько сообщений (только если включено выше).\n"
+        "ВАЖНО: не пиши слова avatar/sticker/gif/separate без '!', иначе они не будут распознаны как утилиты.\n"
     )
 
+    # 8. Веб-поиск
     if cfg.get("web_search_enabled", True):
         parts.append(
-            "\n\n🔎 ВЕБ-ПОИСК. Ты можешь искать актуальную информацию в интернете. Если пользователь спрашивает "
-            "о свежих событиях, фактах, ценах, новостях или чём-то, чего ты точно не знаешь — твой ответ должен "
-            "НАЧИНАТЬСЯ со строки `!search <поисковый запрос>` и не содержать ничего больше. Бот выполнит поиск, "
-            "и ты получишь результаты, после чего дашь финальный ответ. Пример:\n"
-            "!search погода в москве завтра\n\n"
+            "\n\n🔎 ВЕБ-ПОИСК. Ты можешь искать актуальную информацию в интернете. Если пользователь "
+            "спрашивает о свежих событиях, фактах, ценах, новостях или чём-то, чего ты точно не знаешь — "
+            "твой ответ должен НАЧИНАТЬСЯ со строки `!search <поисковый запрос>` и не содержать ничего "
+            "больше. Бот выполнит поиск, и ты получишь результаты, после чего дашь финальный ответ.\n"
+            "Пример: `!search погода в москве завтра`\n"
             "Не используй !search для общих знаний или болтовни."
         )
 
+    # 9. Инфографика
     if premium_functions_enabled:
-        parts.append(
-            "\n\n📊 ГЕНЕРАЦИЯ ИНФОГРАФИКИ. Ты можешь сгенерировать красивое инфографическое изображение. "
-            "Для этого включи в ответ блок:\n"
-            "!chart\n```json\n{...JSON-спецификация...}\n```\n"
-            "Спецификация (JSON):\n"
-            "{\n"
-            '  "theme": "dark_modern" | "light_minimal" | "ocean" | "retro",\n'
-            '  "title": "Заголовок",\n'
-            '  "subtitle": "Подзаголовок (опц.)",\n'
-            '  "blocks": [\n'
-            '    {"type": "heading", "text": "..."},\n'
-            '    {"type": "text", "text": "..."},\n'
-            '    {"type": "divider"},\n'
-            '    {"type": "bar", "title": "...", "labels": ["A","B"], "values": [10,20], "height": 320},\n'
-            '    {"type": "line", "title": "...", "x": ["Jan","Feb"], "series": [{"name":"S1","y":[1,2]}], "height": 320},\n'
-            '    {"type": "pie", "title": "...", "labels": ["A","B"], "values": [10,20], "height": 340},\n'
-            '    {"type": "pie3d", "title": "...", "labels": ["A","B"], "values": [10,20], "height": 340},\n'
-            '    {"type": "table", "title": "...", "headers": ["A","B"], "rows": [["1","2"],["3","4"]]},\n'
-            '    {"type": "image", "url": "https://..."},\n'
-            '    {"type": "image", "source": "user", "index": 0}\n'
-            "  ]\n"
-            "}\n"
-            "Используй !chart когда уместно: для сравнений, статистики, диаграмм, отчётов. "
-            "Числа в values должны быть реальными числами (не строками). "
-            "Цвета опционально можно указать массивом hex-строк в поле \"colors\". "
-            "Размер по умолчанию 1400x1000, высота расширяется автоматически под блоки."
-        )
+        parts.append("\n\n" + RICH_CHART_PROMPT)
 
+    # 10. Долговременная память
     mem_key = str(chat_id)
     if mem_key in long_term_memory:
         mem_data = json_dict(long_term_memory[mem_key])
@@ -147,6 +221,7 @@ def build_system_prompt(platform: str, chat_id: int, user_id: int) -> str:
                 f"\n\nЗапланированные события (сегодня {msk_now().strftime('%d.%m')}):\n{events_str}."
             )
     return "".join(parts)
+
 
 # ============================================================
 # AI REQUEST
@@ -188,10 +263,12 @@ async def ask_ai_async(
     elif context_type == "observer":
         prompt = (
             "Ты молча наблюдаешь за чатом. Если хочешь что-то коротко прокомментировать — напиши одно короткое "
-            "сообщение в стиле Кульша. Если не хочешь — ответь ровно 'НЕТ'."
+            "сообщение в стиле Кульша, ровно как ты общаешься со всеми: маленькие буквы, без лишней пунктуации, "
+            "естественно, с эмодзи только если уместно. Если не хочешь — ответь ровно 'НЕТ'."
             if lang == "ru" else
-            "You silently observe the chat. If you want to comment, write one short message in Kulsh's style. "
-            "If not — reply exactly 'NO'."
+            "You silently observe the chat. If you want to comment, write one short message in Kulsh's style, "
+            "exactly like you talk to everyone: lowercase, no extra punctuation, natural. If not — reply "
+            "exactly 'NO'."
         )
 
     contents: list[dict[str, Any]] = []
@@ -256,26 +333,33 @@ async def ask_ai_async(
         for api_key in AI_KEYS:
             total_attempt += 1
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
-            logger.info(f"🔄 {total_attempt}/{total_max}: {model_name}, ключ {api_key[:4]}...")
+            logger.info(
+                f"🔄 AI [{total_attempt}/{total_max}] model={model_name} key={api_key[:6]}…"
+            )
             try:
                 async with aiohttp.ClientSession() as session:
                     async with session.post(url, json=payload_base, timeout=45) as resp:
                         status = resp.status
+                        # ВСЕГДА логируем код ответа
+                        logger.info(f"   ↳ HTTP {status} ({model_name}, ключ {api_key[:6]}…)")
                         if status == 503:
+                            logger.warning(f"   503 Service Unavailable — переключаюсь на другой ключ")
                             break
                         if status == 429:
+                            logger.warning(f"   429 Too Many Requests — пауза {backoff}s, следующий ключ")
                             await asyncio.sleep(backoff)
                             continue
                         if status == 400:
                             text = await resp.text()
-                            logger.error(f"400: {text[:300]}")
+                            logger.error(f"   400 Bad Request: {text[:300]}")
                             return tr(lang, "ai_error_400")
                         if status >= 500:
+                            logger.error(f"   {status} Server Error — пауза {backoff}s")
                             await asyncio.sleep(backoff)
                             continue
                         if status != 200:
                             text = await resp.text()
-                            logger.error(f"{status}: {text[:300]}")
+                            logger.error(f"   {status} Unexpected: {text[:300]}")
                             return tr(lang, "ai_error_generic")
                         data = json_dict(await resp.json())
                         if 'candidates' in data and data['candidates']:
@@ -284,24 +368,28 @@ async def ask_ai_async(
                                 content = json_dict(candidate.get('content') if isinstance(candidate, dict) else None)
                                 parts_raw = content.get('parts')
                                 first = parts_raw[0] if isinstance(parts_raw, list) and parts_raw else {}
+                                logger.info(f"   ✓ 200 OK — ответ получен")
                                 return json_str(json_dict(first).get('text'))
                             except (KeyError, IndexError, TypeError):
+                                logger.warning(f"   ✓ 200 OK, но структура ответа не распарсилась")
                                 continue
                         else:
                             if 'promptFeedback' in data:
                                 br = json_dict(data['promptFeedback']).get('blockReason', 'UNKNOWN')
-                                logger.error(f"❌ Заблокировано: {br}")
+                                logger.error(f"   ❌ Заблокировано: {br}")
                                 return tr(lang, "ai_blocked")
+                            logger.warning(f"   200 OK, пустой candidates — продолжаю")
                             await asyncio.sleep(backoff)
                             continue
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-                logger.warning(f"Сетевая ошибка: {e}")
+                logger.warning(f"   Сетевая ошибка: {e}")
                 await asyncio.sleep(backoff)
                 continue
             except Exception as e:
-                logger.error(f"Непредвиденная ошибка: {e}")
+                logger.error(f"   Непредвиденная ошибка: {e}")
                 return tr(lang, "ai_unknown")
     return tr(lang, "ai_no_models")
+
 
 async def extract_memory(chat_id: str, user_message: str, bot_answer: str) -> None:
     prompt = (
@@ -336,10 +424,6 @@ USER_AGENT = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
 
 
 async def web_search_ddg(query: str, max_results: int = 6) -> list[SearchHit]:
-    """
-    Поиск через DuckDuckGo HTML-версию. Без API-ключей, бесплатно.
-    Пробуем сначала lite-интерфейс, потом обычный.
-    """
     results: list[SearchHit] = []
     headers = {
         "User-Agent": USER_AGENT,
@@ -362,8 +446,6 @@ async def web_search_ddg(query: str, max_results: int = 6) -> list[SearchHit]:
                 logger.debug(f"ddg search {url} err: {e}")
                 continue
 
-            # ---- lite version parsing ----
-            # results are in <a rel="nofollow" href="..."> title </a> and next <td class="result-snippet">
             lite_pattern = re.compile(
                 r'<a\s+rel="nofollow"\s+href="([^"]+)"[^>]*>(.*?)</a>.*?'
                 r'<td\s+class="result-snippet">(.*?)</td>',
@@ -385,7 +467,6 @@ async def web_search_ddg(query: str, max_results: int = 6) -> list[SearchHit]:
             if len(results) >= max_results:
                 return results
 
-            # ---- html version parsing ----
             html_pattern = re.compile(
                 r'<a[^>]+class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>.*?'
                 r'<a[^>]+class="result__snippet"[^>]*>(.*?)</a>',
@@ -430,7 +511,6 @@ def strip_tags(text: str) -> str:
 
 
 async def web_search_wikipedia(query: str, max_results: int = 3) -> list[SearchHit]:
-    """Wikipedia API — бесплатный, без ключей. Для фактов."""
     try:
         params = {
             "action": "query",
@@ -464,7 +544,6 @@ async def web_search_wikipedia(query: str, max_results: int = 3) -> list[SearchH
 
 
 async def web_search(query: str, max_results: int = 6) -> list[SearchHit]:
-    """Комбинирует DDG + Wikipedia."""
     ddg_results = await web_search_ddg(query, max_results=max_results)
     if len(ddg_results) >= max_results:
         return ddg_results[:max_results]
@@ -498,3 +577,14 @@ def extract_search_marker(text: str) -> tuple[str | None, str]:
     if m:
         return m.group(1).strip(), text[m.end():].lstrip()
     return None, text
+
+
+def user_wants_chart(text: str | None) -> bool:
+    """Определяет, просил ли пользователь в текущем сообщении график/инфографику."""
+    if not text:
+        return False
+    return bool(re.search(
+        r'(?i)(график|chart|инфографик|диаграмм|infographic|визуализ|visuali[sz]|'
+        r'статистик[а-я]*\s+картинк|нарису[йе]+\s+график)',
+        text,
+    ))

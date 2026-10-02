@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.39.0
+# Kulsh GPT | v2.40.0
 # by (main author): starfall-apk
 # coauthor & bot hosting: pomidorka1515
 
@@ -15,7 +15,7 @@ from typing import Any, cast
 
 import discord
 
-from src.ai import format_search_results, ask_ai_async, extract_memory, web_search
+from src.ai import format_search_results, ask_ai_async, extract_memory, web_search, user_wants_chart
 from src.charts import render_infographic
 from src.discord_cmds import (
     ds_handle_config,
@@ -25,8 +25,12 @@ from src.discord_cmds import (
 )
 from src.looks import (
     create_battle_infographic,
+    create_femboy_battle_infographic,
+    create_femboy_infographic,
     create_infographic,
     get_battle_data,
+    get_femboy_battle_data,
+    get_femboy_data,
     get_looksmaxxing_data,
 )
 from src.telegram import should_random_reply
@@ -44,6 +48,8 @@ from src.util import (
     get_chat_memory,
     get_top_donators,
     get_user_config,
+    is_femboy_battle_command,
+    is_femboy_rate_command,
     last_random_reply,
     logger,
     memory_to_messages,
@@ -59,8 +65,10 @@ from src.util import (
     clean_json_text,
     extract_video_frame,
     is_battle_command,
-    is_looksmaxxing_command,)
+    is_looksmaxxing_command,
+)
 from src import discord_cmds as dcmd
+
 
 async def on_message(message: discord.Message) -> None:
     if message.author == dcmd.ds_bot.user or message.author.bot:
@@ -107,6 +115,32 @@ async def on_message(message: discord.Message) -> None:
             await ds_handle_config(message, user_id)
         else:
             await ds_handle_config_param(message, user_id, parts)
+        return
+
+    # статус
+    if content_lower.strip() in ("кульш статус", "kulsh status", "кульш состояние"):
+        mode_raw = str(cfg.get("communication_mode", "kent"))
+        if mode_raw == "assistant":
+            mode_label = tr(lang, "mode_assistant")
+        elif mode_raw == "pro":
+            mode_label = tr(lang, "mode_pro")
+        else:
+            mode_label = tr(lang, "mode_kent")
+        try:
+            latency_ms = round(dcmd.ds_bot.latency * 1000)
+        except Exception:
+            latency_ms = 50
+        from src.util import human_uptime, BOT_VERSION
+        text = (
+            f"# 🟢 {tr(lang, 'status_title')}\n\n"
+            f"**{tr(lang, 'status_online')}**\n\n"
+            f"- {tr(lang, 'status_uptime')}: `{human_uptime()}`\n"
+            f"- {tr(lang, 'status_latency')}: `~{latency_ms} ms`\n"
+            f"- {tr(lang, 'status_mode')}: `{mode_label}`\n"
+            f"- {tr(lang, 'status_mood')}: `{tr(lang, 'status_mood_value')}`\n\n"
+            f"🍷🗿 · v{BOT_VERSION}"
+        )
+        await message.reply(text)
         return
 
     # ---- поиск ----
@@ -267,15 +301,28 @@ async def on_message(message: discord.Message) -> None:
         await message.reply(tr(lang, "psl_need_photo"))
         return
 
+    if is_femboy_rate_command(message.content) and len(message.attachments) == 0:
+        add_user_memory(f"ds_{chat_id}", "DS", display_name, username, user_id,
+                        message.content, message_id=message.id)
+        await message.reply(tr(lang, "femboy_need_photo"))
+        return
+
     if is_battle_command(message.content) and len(message.attachments) == 0:
         add_user_memory(f"ds_{chat_id}", "DS", display_name, username, user_id,
                         message.content, message_id=message.id)
         await message.reply(tr(lang, "battle_need_photos"))
         return
 
+    if is_femboy_battle_command(message.content) and len(message.attachments) == 0:
+        add_user_memory(f"ds_{chat_id}", "DS", display_name, username, user_id,
+                        message.content, message_id=message.id)
+        await message.reply(tr(lang, "femboy_battle_need_photos"))
+        return
+
     image_attachments = [a for a in message.attachments if a.content_type and a.content_type.startswith('image/')]
     video_attachments = [a for a in message.attachments if a.content_type and a.content_type.startswith('video/')]
     has_battle_cmd = is_battle_command(message.content)
+    has_femboy_battle = is_femboy_battle_command(message.content)
 
     if has_battle_cmd and len(image_attachments) >= 2:
         async with message.channel.typing():
@@ -311,7 +358,43 @@ async def on_message(message: discord.Message) -> None:
                 await status_msg.edit(content=f"Ошибка: {e}")
         return
 
+    if has_femboy_battle and len(image_attachments) >= 2:
+        async with message.channel.typing():
+            status_msg = await message.reply(tr(lang, "femboy_battle_waiting"))
+            try:
+                p1 = await download_image_bytes(image_attachments[0].url)
+                p2 = await download_image_bytes(image_attachments[1].url)
+                theme = cfg.get("theme", "dark")
+                ai_data = await get_femboy_battle_data(p1, p2, lang=lang)
+                if "error" in ai_data:
+                    await status_msg.edit(content=str(ai_data['error']))
+                    return
+                img = await create_femboy_battle_infographic(p1, p2, ai_data, theme=theme, lang=lang)
+                winner_num = str(ai_data.get("winner", "1"))
+                winner_label = tr(lang, "femboy_battle_first") if winner_num == "1" else tr(lang, "femboy_battle_second")
+                report = (
+                    f"**{tr(lang, 'femboy_battle_title')}**\n\n"
+                    f"{tr(lang, 'femboy_battle_winner')} **{winner_label}**\n"
+                    f"{tr(lang, 'femboy_battle_reason')} {ai_data.get('reason', '')}\n\n"
+                    f"{tr(lang, 'femboy_battle_photo1')} FMB {ai_data.get('photo1', {}).get('fmb', '?')} | "
+                    f"{ai_data.get('photo1', {}).get('tier', '?')}\n"
+                    f"{tr(lang, 'femboy_battle_photo2')} FMB {ai_data.get('photo2', {}).get('fmb', '?')} | "
+                    f"{ai_data.get('photo2', {}).get('tier', '?')}"
+                )
+                await message.reply(file=discord.File(fp=img, filename="femboy_battle.png"),
+                                    content=report[:1900])
+                await status_msg.delete()
+                add_user_memory(f"ds_{chat_id}", "DS", display_name, username, user_id,
+                                "[femboy battle]", message_id=message.id)
+                add_bot_memory(f"ds_{chat_id}", "[femboy battle результат]")
+            except Exception as e:
+                logger.error(f"DS femboy battle: {e}")
+                await status_msg.edit(content=f"Ошибка: {e}")
+        return
+
     has_looksmaxxing_cmd = is_looksmaxxing_command(message.content)
+    has_femboy_cmd = is_femboy_rate_command(message.content)
+
     if has_looksmaxxing_cmd and len(image_attachments) > 0:
         async with message.channel.typing():
             try:
@@ -340,6 +423,37 @@ async def on_message(message: discord.Message) -> None:
                     await message.channel.send(report[1900:])
             except Exception as e:
                 logger.error(f"DS looksmaxxing: {e}")
+                await message.reply(f"Ошибка: {e}")
+        return
+
+    if has_femboy_cmd and len(image_attachments) > 0:
+        async with message.channel.typing():
+            try:
+                img_bytes = await download_image_bytes(image_attachments[0].url)
+                include_advice = "совет" in content_lower or "advice" in content_lower
+                theme = cfg.get("theme", "dark")
+                ai_data = await get_femboy_data(img_bytes, include_advice, lang=lang)
+                if "error" in ai_data:
+                    await message.reply(ai_data['error'])
+                    return
+                infographic = await create_femboy_infographic(img_bytes, ai_data, theme=theme, lang=lang)
+                report = (
+                    f"**{tr(lang, 'femboy_title')}**\n"
+                    f"{tr(lang, 'femboy_gender')} {ai_data.get('gender', '?')}\n"
+                    f"{tr(lang, 'femboy_score')} `{ai_data.get('fmb', '?')}/10.0`\n"
+                    f"{tr(lang, 'femboy_tier')} `{ai_data.get('tier', '?')}`\n"
+                )
+                if ai_data.get("potential"):
+                    report += f"{tr(lang, 'femboy_potential')} `{ai_data['potential']}`\n"
+                report += f"\n{ai_data.get('summary', '')}"
+                if include_advice and ai_data.get("advice"):
+                    report += f"\n\n**{tr(lang, 'femboy_advice')}**\n{ai_data['advice']}"
+                await message.reply(file=discord.File(fp=infographic, filename="femboy.png"),
+                                    content=report[:1900])
+                if len(report) > 1900:
+                    await message.channel.send(report[1900:])
+            except Exception as e:
+                logger.error(f"DS femboy: {e}")
                 await message.reply(f"Ошибка: {e}")
         return
 
