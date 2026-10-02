@@ -1,10 +1,11 @@
-# Kulsh GPT | v2.41.0
+# Kulsh GPT | v2.41.1
 # by (main author): starfall-apk
 # coauthor & bot hosting: pomidorka1515
 
 """Process entry: build the bots, register handlers, run both platforms."""
 
 import asyncio
+from typing import Any
 
 import discord
 from discord import app_commands
@@ -124,10 +125,67 @@ def register() -> None:
     register_discord()
 
 
+def _smoke_check() -> None:
+    """
+    Runtime smoke-проверка. Вызывается safe_check_import() в subprocess после git pull.
+    Падает с RuntimeError, если какой-то символ, к которому обращается register()/main(),
+    отсутствует или не callable. Это ловит случай 'app.py закоммитили, а другой модуль — нет'.
+    """
+    def _need(mod: Any, name: str) -> None:
+        obj = getattr(mod, name, None)
+        if obj is None:
+            raise RuntimeError(f"{getattr(mod, '__name__', '?')}.{name} отсутствует")
+        if not callable(obj):
+            raise RuntimeError(f"{getattr(mod, '__name__', '?')}.{name} — не callable")
+
+    # telegram
+    for name in ("bind", "handle_start", "handle_menu", "handle_help", "handle_status",
+                 "handle_donate", "handle_donate_stars", "handle_credits",
+                 "handle_toggle_premium", "handle_pre_checkout", "handle_successful_payment",
+                 "handle_cfg_callback", "handle_menu_callback"):
+        _need(telegram, name)
+
+    # rich
+    for name in ("bind", "send_tg_html", "reply_tg_html", "send_formatted", "send_rich_message"):
+        _need(rich, name)
+
+    # media
+    for name in ("handle_tg_media", "handle_tg_text"):
+        _need(media, name)
+
+    # discord_msg
+    _need(discord_msg, "on_message")
+
+    # discord_cmds
+    for name in ("bind", "ds_slash_start", "ds_slash_menu", "ds_slash_help", "ds_slash_status",
+                 "ds_slash_donate", "ds_slash_credits", "ds_slash_config", "ds_slash_logs",
+                 "ds_slash_groupinfo", "ds_slash_userinfo", "ds_slash_avatar", "ds_slash_recall",
+                 "ds_slash_search", "ds_slash_chart", "ds_slash_psl", "ds_slash_battle",
+                 "ds_slash_femboy", "ds_slash_femboy_battle"):
+        _need(discord_cmds, name)
+
+    # loops
+    for name in ("bind", "random_post_loop", "series_reminder_loop",
+                 "donation_alerts_listener", "periodic_config_save_loop", "send_donation_alert"):
+        _need(loops, name)
+
+
 async def main() -> None:
     register()
-    asyncio.create_task(loops.random_post_loop())
-    asyncio.create_task(loops.periodic_config_save_loop())
+
+    # Запускаем фоновые циклы — защищаемся через getattr, чтобы не упасть,
+    # если по какой-то причине конкретный loop отсутствует в текущей версии loops.py.
+    _random_loop = getattr(loops, "random_post_loop", None)
+    if callable(_random_loop):
+        asyncio.create_task(_random_loop())
+    else:
+        logger.warning("random_post_loop отсутствует — пропускаю")
+
+    _save_loop = getattr(loops, "periodic_config_save_loop", None)
+    if callable(_save_loop):
+        asyncio.create_task(_save_loop())
+    else:
+        logger.warning("periodic_config_save_loop отсутствует — пропускаю")
 
     @ds_bot.event
     async def on_ready() -> None:
@@ -141,9 +199,13 @@ async def main() -> None:
             logger.info(f"Синхронизировано slash-команд: {len(synced)}")
         except Exception as e:
             logger.error(f"Не удалось синхронизировать slash-команды: {e}")
-        asyncio.create_task(loops.series_reminder_loop())
+        _series_loop = getattr(loops, "series_reminder_loop", None)
+        if callable(_series_loop):
+            asyncio.create_task(_series_loop())
         if DONATIONALERTS_TOKEN:
-            asyncio.create_task(loops.donation_alerts_listener())
+            _don_loop = getattr(loops, "donation_alerts_listener", None)
+            if callable(_don_loop):
+                asyncio.create_task(_don_loop())
 
     async def start_discord() -> None:
         await ds_bot.start(DISCORD_TOKEN)
