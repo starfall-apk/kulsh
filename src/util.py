@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.41.0
+# Kulsh GPT | v2.41.1
 # by (main author): starfall-apk
 # coauthor & bot hosting: pomidorka1515
 
@@ -46,7 +46,7 @@ logger.addHandler(file_handler)
 logger.addHandler(console_handler)
 
 BOT_START_TS: float = time.time()
-BOT_VERSION: str = "2.41.0"
+BOT_VERSION: str = "2.41.1"
 
 # ============================================================
 # ВРЕМЯ
@@ -283,6 +283,7 @@ def theme_str(theme: ChartTheme, key: str, default: str = "#000000") -> str:
     value = theme.get(key, default)
     return value if isinstance(value, str) else default
 
+
 # ============================================================
 # ГЛОБАЛЬНЫЕ СТРУКТУРЫ
 # ============================================================
@@ -299,7 +300,7 @@ tools_sessions: dict[int, dict[str, Any]] = {}
 chat_media_history: dict[str, deque[dict[str, Any]]] = defaultdict(lambda: deque(maxlen=50))
 last_random_reply: dict[str, float] = {}
 last_old_reply: dict[str, float] = {}
-last_bot_reply: dict[str, float] = {}   # cooldown для общения с ботами
+last_bot_reply: dict[str, float] = {}
 battle_media_groups: dict[str, asyncio.Task[None]] = {}
 battle_photos: dict[str, list[bytes]] = {}
 pending_donations: dict[int, int] = {}
@@ -316,7 +317,8 @@ COST_CONSOLE_CMD = 25
 MAX_FILE_SIZE = 500 * 1024
 MAX_TOTAL_UNPACKED = 5 * 1024 * 1024
 MAX_FILES = 100
-MAX_SEPARATE_PARTS = 8   # лимит !separate
+MAX_SEPARATE_PARTS = 8
+
 
 # ============================================================
 # ФАЙЛЫ СОСТОЯНИЯ
@@ -357,7 +359,6 @@ def save_credits() -> None:
 
 
 def save_user_configs() -> None:
-    """Сохраняет per-user настройки на диск — чтобы не слетали при рестарте."""
     try:
         data = {k: dict(v) for k, v in user_configs.items()}
         with open(USER_CONFIGS_FILE, 'w', encoding='utf-8') as f:
@@ -402,6 +403,7 @@ def get_top_donators(top_n: int = 10) -> list[tuple[str, int]]:
         totals[name] = totals.get(name, 0) + total
     return sorted(totals.items(), key=lambda x: x[1], reverse=True)[:top_n]
 
+
 # ============================================================
 # КРЕДИТЫ
 # ============================================================
@@ -434,6 +436,7 @@ def spend_credits(platform: str, user_id: int, amount: int) -> bool:
     credits_data[key] = entry
     save_credits()
     return True
+
 
 # ============================================================
 # PER-USER CONFIG
@@ -477,6 +480,7 @@ def get_user_config(platform: str, chat_id: int, user_id: int) -> JsonDict:
 def get_chat_key(platform: str, chat_id: int) -> str:
     return f"{platform}_{chat_id}"
 
+
 # ============================================================
 # LOG TAIL / CHUNK
 # ============================================================
@@ -513,6 +517,7 @@ def chunk_text(text: str, size: int) -> list[str]:
     if current:
         chunks.append(current)
     return chunks
+
 
 # ============================================================
 # ПАМЯТЬ ЧАТА
@@ -576,6 +581,7 @@ def add_media_history(
         "file_id": file_id, "caption": caption,
         "time": msk_now().strftime('%d.%m %H:%M'),
     })
+
 
 # ============================================================
 # HTML / MARKDOWN (fallback)
@@ -647,6 +653,7 @@ async def extract_video_frame(video_bytes: bytes, ext_hint: str = ".mp4") -> byt
                 except Exception:
                     pass
 
+
 # ============================================================
 # TYPING
 # ============================================================
@@ -656,8 +663,6 @@ TYPING_MIN_DELAY = 0.35
 TYPING_MAX_DELAY = 5.0
 TYPING_JITTER_MIN = 0.85
 TYPING_JITTER_MAX = 1.25
-
-# Множитель задержки для сегментов после !separate (чтобы выглядело живее)
 SEPARATED_TYPING_MULTIPLIER = 2.4
 
 
@@ -668,10 +673,10 @@ def calc_typing_delay(text: str, segment_index: int = 0) -> float:
     per_char = random.uniform(TYPING_MS_PER_CHAR_MIN, TYPING_MS_PER_CHAR_MAX)
     delay = n * per_char
     delay *= random.uniform(TYPING_JITTER_MIN, TYPING_JITTER_MAX)
-    # Дополнительные сегменты (после !separate) печатаются медленнее — пауза между сообщениями.
     if segment_index > 0:
         delay *= SEPARATED_TYPING_MULTIPLIER
     return max(TYPING_MIN_DELAY, min(TYPING_MAX_DELAY * (1 + segment_index * 0.5), delay))
+
 
 # ============================================================
 # MEMORY EXTRACTION
@@ -686,10 +691,10 @@ def clean_json_text(text: str) -> str:
         text = text[:-3]
     return text.strip()
 
+
 # ============================================================
-# ОПЕЧАТКИ — соседние клавиши
+# ОПЕЧАТКИ
 # ============================================================
-# Физически соседние клавиши на QWERTY (и соответствующие им в ЙЦУКЕН).
 _EN_ADJ = {
     'q': 'wa', 'w': 'qeas', 'e': 'wrsd', 'r': 'etdf', 't': 'ryfg',
     'y': 'tugh', 'u': 'yihj', 'i': 'uojk', 'o': 'ipkl', 'p': 'ol',
@@ -712,14 +717,11 @@ _TYPO_SKIP_PREFIXES = ("http://", "https://", "www.", "t.me/", "@", "#", "/", "`
 
 
 def _apply_typo_word(word: str) -> str:
-    """Заменяет одну букву в слове на соседнюю по клавиатуре."""
     if len(word) < 3:
         return word
-    # Индексы букв, кроме первой (чтобы не ломать начало слова)
     letter_positions = [i for i, c in enumerate(word) if c.isalpha()]
     if len(letter_positions) < 3:
         return word
-    # Выбираем из всех кроме первой
     pos = random.choice(letter_positions[1:])
     c = word[pos]
     adj = _EN_ADJ.get(c.lower()) or _RU_ADJ.get(c.lower())
@@ -732,13 +734,8 @@ def _apply_typo_word(word: str) -> str:
 
 
 def add_typos(text: str, probability: float = 0.04) -> str:
-    """
-    Редкие реалистичные опечатки: буква заменяется на соседнюю по клавиатуре.
-    Не трогает URL, упоминания, хэштеги, маркеры (!), inline-код и markdown-разметку.
-    """
     if not text or probability <= 0:
         return text
-    # Разбиваем с сохранением пробелов
     parts = re.split(r'(\s+)', text)
     out: list[str] = []
     for part in parts:
@@ -749,7 +746,6 @@ def add_typos(text: str, probability: float = 0.04) -> str:
         if any(low.startswith(p) for p in _TYPO_SKIP_PREFIXES):
             out.append(part)
             continue
-        # Пропускаем токены с кодом/разметкой
         if any(ch in part for ch in ('`', '\\', '_', '*', '[', ']', '(', ')')):
             out.append(part)
             continue
@@ -759,11 +755,10 @@ def add_typos(text: str, probability: float = 0.04) -> str:
         out.append(_apply_typo_word(part))
     return ''.join(out)
 
+
 # ============================================================
 # УТИЛИТЫ-МАРКЕРЫ
 # ============================================================
-# Матчим ТОЛЬКО варианты с ведущим "!".
-# НЕ используем \b — \b в Python юникод-осведомлён, и кириллица тоже "слово".
 UTILITY_PATTERNS = {
     "avatar": re.compile(r'!\s*avatar(?![A-Za-z])', re.IGNORECASE),
     "recall_media": re.compile(r'!\s*recall[\s_]*media(?![A-Za-z])', re.IGNORECASE),
@@ -774,9 +769,7 @@ UTILITY_PATTERNS = {
 }
 SEPARATOR_PATTERN = re.compile(r'!\s*sep[ae]rate(?![A-Za-z])', re.IGNORECASE)
 
-# Реакции. Формат: !react:👍 или !react:👍🔥 (несколько подряд).
 REACT_PATTERN = re.compile(r'!\s*react\s*:\s*([^\s\n]+)', re.IGNORECASE)
-# Причина/мысль (для внутренней памяти, не отправляется):
 WHY_PATTERN = re.compile(r'!\s*why\s*:\s*([^\n]+)', re.IGNORECASE)
 
 
@@ -786,7 +779,6 @@ def split_by_separator(text: str, max_parts: int = MAX_SEPARATE_PARTS) -> list[s
     parts = SEPARATOR_PATTERN.split(text)
     parts = [p.strip() for p in parts if p and p.strip()]
     if len(parts) > max_parts:
-        # Слишком много — склеиваем хвост в последний сегмент.
         head = parts[:max_parts - 1]
         tail = " ".join(parts[max_parts - 1:])
         head.append(tail)
@@ -802,11 +794,9 @@ def extract_utility_markers(text: str) -> tuple[str, list[str], dict[str, str]]:
         m = pat.search(text)
         if m:
             markers.append(name)
-            # Для user_info берём id, если был
             if name == "user_info" and m.group(1):
                 extras["user_info_id"] = m.group(1)
         text = pat.sub(' ', text)
-    # Нормализация
     text = re.sub(r'[ \t]{2,}', ' ', text)
     text = re.sub(r'[ \t]+([,.!?;:])', r'\1', text)
     text = re.sub(r'[ \t]+\n', '\n', text)
@@ -825,7 +815,6 @@ def dedupe_markers(markers: list[str]) -> list[str]:
 
 
 def process_ai_response(raw: str, separate_enabled: bool = True) -> tuple[list[str], list[str]]:
-    """Возвращает (сегменты_текста, маркеры_утилит). Реакции/why обрабатываются отдельно."""
     raw_clean, markers, _ = extract_utility_markers(raw or "")
     markers = dedupe_markers(markers)
     if separate_enabled:
@@ -839,10 +828,6 @@ def process_ai_response(raw: str, separate_enabled: bool = True) -> tuple[list[s
 
 
 def extract_reaction_and_why(text: str) -> tuple[list[str], str | None, str | None]:
-    """
-    Возвращает (очищенный_текст_по_абзацам, emoji_строка, why_строка).
-    Эмодзи могут быть перечислены в одном токене: !react:👍🔥
-    """
     if not text:
         return [], None, None
     react_match = REACT_PATTERN.search(text)
@@ -860,22 +845,18 @@ def extract_reaction_and_why(text: str) -> tuple[list[str], str | None, str | No
 
 
 def split_emojis(emojis: str) -> list[str]:
-    """Разбивает строку эмодзи на отдельные символы (грубая, но рабочая)."""
     if not emojis:
         return []
     out: list[str] = []
     i = 0
     while i < len(emojis):
         cp = ord(emojis[i])
-        # Пропускаем комбинирующие модификаторы
         if 0xFE00 <= cp <= 0xFE0F or cp in (0x200D,):
             i += 1
             continue
-        # Emoji ranges
         if 0x1F000 <= cp <= 0x1FAFF or 0x2600 <= cp <= 0x27BF or 0x2B00 <= cp <= 0x2BFF \
                 or 0x1F1E6 <= cp <= 0x1F1FF:
             j = i + 1
-            # Соберём следующие ZWJ / variation selectors
             while j < len(emojis) and (
                 ord(emojis[j]) == 0x200D
                 or 0xFE00 <= ord(emojis[j]) <= 0xFE0F
@@ -899,6 +880,7 @@ def clean_extra_text(raw: str) -> list[str]:
     cleaned = re.sub(r'[ \t]{2,}', ' ', cleaned).strip()
     return [s.strip() for s in cleaned.split('\n\n') if s and s.strip()]
 
+
 # ============================================================
 # STICKERS/GIFS
 # ============================================================
@@ -918,7 +900,7 @@ GIF_POOL = [
 ]
 
 # ============================================================
-# LOOKSMAXXING TIERS (PSL)
+# LOOKSMAXXING TIERS
 # ============================================================
 TIER_DISTRIBUTION: list[dict[str, str | float]] = [
     {"key": "sub3",     "short": "S3",  "full_m": "SUB 3",     "full_f": "SUB 3",     "psl_low": 1.0, "psl_high": 2.4},
@@ -969,7 +951,7 @@ def is_battle_command(text: str) -> bool:
 
 
 # ============================================================
-# FEMBOY SCALE (FMB 1.0 – 10.0)
+# FEMBOY SCALE
 # ============================================================
 FEMBOY_TIER_DISTRIBUTION: list[dict[str, Any]] = [
     {"key": "chad",     "short": "CHD", "full_m": "CHAD",     "full_f": "CHAD",     "fmb_low": 1.0,  "fmb_high": 2.4,  "color": "#E53E3E"},
@@ -1042,6 +1024,7 @@ FEMBOY_TIER_RULES_STRICT = (
     "Если на фото не человек — tier 'N/A', gender 'N/A'."
 )
 
+
 # ============================================================
 # SAFE GIT UPDATE
 # ============================================================
@@ -1083,6 +1066,26 @@ def check_python_syntax(fpath: str) -> str | None:
     return None
 
 
+def check_all_syntax(repo_path: str) -> list[str]:
+    """Возвращает список ошибок синтаксиса во всех .py файлах репозитория."""
+    errors: list[str] = []
+    try:
+        for root, dirs, files in os.walk(repo_path):
+            if '.git' in root.split(os.sep):
+                continue
+            for fname in files:
+                if not fname.endswith('.py'):
+                    continue
+                fpath = os.path.join(root, fname)
+                err = check_python_syntax(fpath)
+                if err:
+                    rel = os.path.relpath(fpath, repo_path)
+                    errors.append(f"{rel}: {err}")
+    except Exception as e:
+        errors.append(f"walk error: {type(e).__name__}: {e}")
+    return errors
+
+
 def repo_root(fpath: str) -> str:
     directory = os.path.dirname(os.path.abspath(fpath)) or os.getcwd()
     if os.path.basename(directory) == "src":
@@ -1090,33 +1093,51 @@ def repo_root(fpath: str) -> str:
     return directory
 
 
-def safe_check_import(fpath: str, timeout: int = 45) -> str | None:
+def safe_check_import(fpath: str, timeout: int = 60) -> str | None:
+    """
+    Импортирует entry-модуль в subprocess и вызывает _smoke_check() если он есть.
+    Это ловит не только syntax/import-ошибки, но и отсутствующие функции,
+    к которым app.py обращается из main()/register().
+    """
     if not os.path.isfile(fpath):
         return None
+    root = repo_root(fpath)
+    try:
+        rel = os.path.relpath(os.path.abspath(fpath), os.path.abspath(root)).replace(os.sep, "/")
+    except Exception:
+        rel = "src/app.py"
+    if rel.endswith(".py"):
+        rel = rel[:-3]
+    module_name = rel.replace("/", ".")
+
     script = (
-        "import importlib.util, sys, os\n"
-        f"p = {fpath!r}\n"
-        "spec = importlib.util.spec_from_file_location('_kulsh_check_mod', p)\n"
-        "mod = importlib.util.module_from_spec(spec)\n"
+        "import sys\n"
+        f"sys.path.insert(0, {root!r})\n"
         "try:\n"
-        "    spec.loader.exec_module(mod)\n"
+        f"    mod = __import__({module_name!r}, fromlist=['*'])\n"
+        "    smoke = getattr(mod, '_smoke_check', None)\n"
+        "    if smoke is not None:\n"
+        "        smoke()\n"
+        "    print('SMOKE_OK')\n"
         "except SystemExit:\n"
-        "    pass\n"
-        "except BaseException as e:\n"
-        "    sys.stderr.write(f'{type(e).__name__}: {e}')\n"
+        "    # graceful exit (например, нет AI ключей) — считаем как pass\n"
+        "    print('SMOKE_OK_SYSEXIT')\n"
+        "except BaseException:\n"
+        "    import traceback\n"
+        "    sys.stderr.write(traceback.format_exc())\n"
         "    sys.exit(2)\n"
     )
     try:
         r = subprocess.run(
             [sys.executable, "-c", script],
             capture_output=True, text=True, timeout=timeout,
-            cwd=repo_root(fpath),
+            cwd=root,
         )
         if r.returncode != 0:
             err = (r.stderr or r.stdout or "unknown").strip()
-            return err[:800]
+            return err[:1500]
     except subprocess.TimeoutExpired:
-        return "timeout при проверке импорта"
+        return "timeout при smoke-проверке"
     except Exception as e:
         return f"{type(e).__name__}: {e}"
     return None
@@ -1137,6 +1158,13 @@ def find_entry_file(repo_path: str) -> str | None:
 
 
 async def perform_safe_git_update(repo_path: str) -> tuple[str, str]:
+    """
+    Обновление с многошаговым откатом.
+    Пробуем HEAD, HEAD~1, ..., HEAD~MAX_BACK_STEPS. На каждом шаге:
+      - проверяем синтаксис всех .py
+      - запускаем smoke-тест (импорт src.app + _smoke_check)
+    Останавливаемся на первом рабочем коммите.
+    """
     rc, out, err = run_git(["rev-parse", "HEAD"], cwd=repo_path, timeout=10)
     if rc != 0 or not out.strip():
         return "error", f"git rev-parse: {err or out or 'unknown error'}"
@@ -1157,48 +1185,69 @@ async def perform_safe_git_update(repo_path: str) -> tuple[str, str]:
     if "Already up to date" in pull_out or "Already up-to-date" in pull_out:
         return "up_to_date", pull_out
 
-    syntax_errors: list[str] = []
-    try:
-        for root, dirs, files in os.walk(repo_path):
-            if '.git' in root.split(os.sep):
-                continue
-            for fname in files:
-                if not fname.endswith('.py'):
-                    continue
-                fpath = os.path.join(root, fname)
-                err_s = check_python_syntax(fpath)
-                if err_s:
-                    rel = os.path.relpath(fpath, repo_path)
-                    syntax_errors.append(f"{rel}: {err_s}")
-    except Exception as e:
-        syntax_errors.append(f"walk error: {type(e).__name__}: {e}")
+    MAX_BACK_STEPS = 8
+    tried_errors: list[str] = []
 
-    if syntax_errors:
-        rc_reset, out_r, err_r = run_git(["reset", "--hard", prev_hash], cwd=repo_path, timeout=30)
-        if rc_reset != 0:
-            return "error", (
-                "ошибки в новом коде, но git reset --hard не удался:\n"
-                + (err_r or out_r or "unknown")
-                + "\n\nОшибки:\n" + "\n".join(syntax_errors[:10])
-            )
-        return "rolled_back", "\n".join(syntax_errors[:10])
+    for step in range(0, MAX_BACK_STEPS + 1):
+        # Узнаём хеш коммита на шаге step
+        if step == 0:
+            rc_h, out_h, err_h = run_git(["rev-parse", "HEAD"], cwd=repo_path, timeout=10)
+        else:
+            rc_h, out_h, err_h = run_git(["rev-parse", f"HEAD~{step}"], cwd=repo_path, timeout=10)
+        if rc_h != 0 or not out_h.strip():
+            # Больше некуда откатываться
+            break
+        current_hash = out_h.strip()
 
-    entry = find_entry_file(repo_path)
-    if entry:
-        import_err = await asyncio.to_thread(safe_check_import, entry)
-        if import_err:
-            rc_reset, out_r, err_r = run_git(["reset", "--hard", prev_hash], cwd=repo_path, timeout=30)
+        # Откатываем рабочее дерево, если это не HEAD
+        if step > 0:
+            rc_reset, out_r, err_r = run_git(["reset", "--hard", current_hash], cwd=repo_path, timeout=30)
             if rc_reset != 0:
-                return "error", (
-                    f"ошибка импорта: {import_err}\n"
-                    f"git reset --hard не удался: {err_r or out_r or 'unknown'}"
+                tried_errors.append(f"шаг {step}: git reset --hard fail: {err_r or out_r or 'unknown'}")
+                continue
+
+        # 1) syntax check
+        syntax_errors = check_all_syntax(repo_path)
+        if syntax_errors:
+            tried_errors.append(
+                f"шаг {step} ({current_hash[:7]}): syntax errors:\n" + "\n".join(syntax_errors[:5])
+            )
+            continue
+
+        # 2) smoke check (импорт + _smoke_check)
+        entry = find_entry_file(repo_path)
+        if entry:
+            import_err = await asyncio.to_thread(safe_check_import, entry)
+            if import_err:
+                tried_errors.append(
+                    f"шаг {step} ({current_hash[:7]}): smoke fail:\n{import_err[:800]}"
                 )
-            return "rolled_back", f"import error:\n{import_err[:800]}"
+                continue
 
-    return "ok", pull_out
+        # Успех
+        if step == 0:
+            logger.info(f"✅ Обновление прошло проверку на {current_hash[:7]}")
+            return "ok", pull_out
+        else:
+            logger.warning(f"⚠️ Откат на {step} коммит(ов) назад → {current_hash[:7]}")
+            summary = tried_errors[0] if tried_errors else ""
+            return "rolled_back", (
+                f"последние {step} коммит(ов) не прошли smoke-проверку. "
+                f"Откатился на {current_hash[:7]}.\n\n"
+                f"Причина последнего отказа:\n{summary[:1200]}"
+            )
+
+    # Ничего рабочего не нашли — откатываемся к prev_hash как последняя надежда
+    if prev_hash:
+        run_git(["reset", "--hard", prev_hash], cwd=repo_path, timeout=30)
+    return "error", (
+        "ни один из последних коммитов (включая откат на "
+        f"{MAX_BACK_STEPS}) не прошёл smoke-проверку. Вернул рабочее дерево на {prev_hash[:7]}.\n\n"
+        + "\n\n".join(tried_errors[:5])[:1500]
+    )
 
 
-# Загружаем сохранённые настройки (после определения DEFAULT_USER_CONFIG)
+# Загружаем сохранённые настройки
 try:
     load_user_configs()
     logger.info(f"✅ Загружено настроек пользователей: {len(user_configs)}")
