@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.40.0
+# Kulsh GPT | v2.40.1
 # by (main author): starfall-apk
 # coauthor & bot hosting: pomidorka1515
 
@@ -68,6 +68,7 @@ from src.util import (
     MODEL_LIST,
     PREMIUM_ADMIN_ID,
     STICKER_POOL,
+    UTILITY_PATTERNS,
     cb_id,
     human_uptime,
     is_femboy_battle_command,
@@ -123,6 +124,21 @@ def bind(bot: Any) -> None:
     tg_bot = bot
     from src import rich
     rich.bind(bot)
+
+
+def _strip_recall_marker(text: str) -> str:
+    """Удаляет !recall_media из текста без побочных эффектов."""
+    if not text:
+        return text
+    pat = UTILITY_PATTERNS.get("recall_media")
+    if pat is None:
+        return text
+    out = pat.sub(' ', text)
+    out = re.sub(r'[ \t]{2,}', ' ', out)
+    out = re.sub(r'[ \t]+([,.!?;:])', r'\1', out)
+    out = re.sub(r'[ \t]+\n', '\n', out)
+    return out.strip()
+
 
 # ============================================================
 # CALLBACK HANDLER (cfg:)
@@ -330,6 +346,7 @@ async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
                         build_main_config_keyboard("tg", chat_id, user_id))
     await tg_bot.answer_callback_query(cb_id(call), toast)
 
+
 # ============================================================
 # CALLBACK HANDLER (menu:)
 # ============================================================
@@ -390,6 +407,7 @@ async def handle_menu_callback(call: telebot.types.CallbackQuery) -> None:
                 pass
             await send_formatted(chat_id, menu_text, reply_markup=kb)
         return
+
 
 # ============================================================
 # TELEGRAM: HELP / MENU / START / DONATE / STATUS
@@ -523,7 +541,6 @@ async def handle_credits(message: telebot.types.Message) -> None:
 
 
 async def handle_status(message: telebot.types.Message) -> None:
-    """Красивый статус бота для пользователей."""
     if message.from_user is None:
         return
     chat_id = message.chat.id
@@ -537,7 +554,6 @@ async def handle_status(message: telebot.types.Message) -> None:
     else:
         mode_label = tr(lang, "mode_kent")
 
-    # Настроение по нагрузке — просто дружелюбный статус
     try:
         proc_load = __import__("os").getloadavg()[0]
     except Exception:
@@ -596,6 +612,7 @@ async def handle_successful_payment(message: telebot.types.Message) -> None:
     cfg = get_user_config("tg", message.chat.id, user_id)
     lang = cfg.get("language", "ru")
     await reply_tg_html(message, tr(lang, "donate_thanks", stars))
+
 
 # ============================================================
 # TG CONFIG / AVATAR / RECALL / SEARCH / CHART / FMB
@@ -854,6 +871,7 @@ async def tg_process_femboy_album(media_group_id: str, chat_id: int, user_id: in
         await tg_bot.send_message(chat_id, re.sub(r'<[^>]+>', '', report_text))
     await tg_bot.delete_message(chat_id, status.message_id)
 
+
 # ============================================================
 # UTILITY EXECUTION
 # ============================================================
@@ -866,6 +884,7 @@ async def execute_utility_tg(message: telebot.types.Message, marker: str, chat_i
             await tg_bot.send_sticker(message.chat.id, random.choice(STICKER_POOL))
         except Exception as e:
             logger.error(f"sticker error: {e}")
+
 
 # ============================================================
 # STREAMING
@@ -890,6 +909,7 @@ async def stream_text_via_drafts(chat_id: int, text: str, is_private: bool = Tru
             await asyncio.sleep(0.06)
     return True
 
+
 # ============================================================
 # SEND TG AI RESPONSE
 # ============================================================
@@ -904,9 +924,9 @@ async def send_tg_ai_response(message: telebot.types.Message, chat_id: int, user
     if streaming and separate_enabled:
         streaming = False
 
-    # ----- !search -----
+    # ---- !search ----
     if cfg.get("web_search_enabled", True):
-        query, remaining = extract_search_marker(answer_raw or "")
+        query, _ = extract_search_marker(answer_raw or "")
         if query:
             results = await web_search(query, max_results=6)
             if results:
@@ -926,8 +946,42 @@ async def send_tg_ai_response(message: telebot.types.Message, chat_id: int, user
             else:
                 answer_raw = tr(lang, "search_nothing")
 
-    # ----- !chart -----
-    # Рендерим ТОЛЬКО если пользователь явно попросил график/инфографику в текущем сообщении.
+    # ---- !recall_media: подтягиваем последнее медиа и перезапускаем AI с ним ----
+    if UTILITY_PATTERNS["recall_media"].search(answer_raw or ""):
+        orig = (user_text or (message.text or message.caption or "")).strip()
+        media_bytes: bytes | None = None
+        media_kind: str = ""
+        try:
+            media_bytes, media_kind = await _media().fetch_last_media_tg(chat_id)
+        except Exception as e:
+            logger.warning(f"recall fetch: {e}")
+            media_bytes, media_kind = None, ""
+
+        if media_bytes:
+            kind_label = {"photo": "фото", "video": "видео", "animation": "гифку"}.get(media_kind, "медиа")
+            follow_prompt = (
+                f"Пользователь написал: {orig or 'покажи последнее медиа'}\n\n"
+                f"Вот последнее медиа в чате — это {kind_label}. Опиши, что на нём, и ответь на запрос "
+                f"пользователя естественно, как ты обычно общаешься (маленькие буквы, без вычурной "
+                f"пунктуации). Можешь разбить на 1-2 сообщения через !separate, если хочется. "
+                f"НЕ используй маркеры !search, !chart, !recall_media, !avatar, !sticker, !gif."
+            )
+            new_answer = await ask_ai_async(
+                prompt=follow_prompt,
+                image_bytes=media_bytes, image_mime="image/jpeg",
+                chat_id=chat_id, user_id=user_id, platform="tg",
+            )
+            if new_answer and new_answer.strip():
+                logger.info(f"✅ recall_media: kind={media_kind}, bytes={len(media_bytes)}")
+                answer_raw = new_answer
+            else:
+                logger.warning("recall_media: AI вернул пусто на медиа")
+                answer_raw = _strip_recall_marker(answer_raw) + "\n" + tr(lang, "recall_fail")
+        else:
+            logger.info("recall_media: медиа в истории не найдено")
+            answer_raw = _strip_recall_marker(answer_raw) + "\n" + tr(lang, "recall_fail")
+
+    # ---- !chart ----
     if state.premium_functions_enabled:
         chart_spec, remaining = extract_chart_marker(answer_raw or "")
         if chart_spec:
@@ -947,7 +1001,6 @@ async def send_tg_ai_response(message: telebot.types.Message, chat_id: int, user
                     logger.error(f"chart render: {e}")
                     answer_raw = remaining + "\n" + tr(lang, "chart_error", str(e))
                     chart_spec = None
-            # Если не просил — просто вырезаем маркер, не рендерим
             if chart_spec is not None or not user_asked_chart:
                 answer_raw = remaining
 
@@ -963,13 +1016,8 @@ async def send_tg_ai_response(message: telebot.types.Message, chat_id: int, user
         except Exception as e:
             logger.warning(f"avatar desc failed: {e}")
     if "recall_media" in markers:
+        # Этот маркер уже обработан выше — просто вырезаем его из списка.
         markers.remove("recall_media")
-        try:
-            rr = await get_recall_media_description_tg(message, chat_id, user_id, 3, lang=lang)
-            if rr:
-                extra_segments.extend(clean_extra_text(rr))
-        except Exception as e:
-            logger.warning(f"recall desc failed: {e}")
 
     all_segments = clean_segments + extra_segments
 
@@ -1022,10 +1070,16 @@ async def send_tg_ai_response(message: telebot.types.Message, chat_id: int, user
             except Exception as e:
                 logger.warning(f"utility {m}: {e}")
 
+
 # ============================================================
 # OLD MESSAGE REPLY (TG) — в стиле обычного чата
 # ============================================================
 async def maybe_reply_to_old_message_tg(message: telebot.types.Message, chat_id: int, user_id: int) -> None:
+    # Небольшая пауза, чтобы «внезапный» ответ не прилетал мгновенно после основного.
+    try:
+        await asyncio.sleep(3)
+    except asyncio.CancelledError:
+        return
     chat_key = f"tg_{chat_id}"
     now = time.time()
     if now - last_old_reply.get(chat_key, 0) < 600:
@@ -1033,7 +1087,14 @@ async def maybe_reply_to_old_message_tg(message: telebot.types.Message, chat_id:
     if random.random() > 0.12:
         return
     mem = list(get_chat_memory(chat_key))
-    candidates = [e for e in mem[:-2] if e.get("type") == "user" and e.get("text")]
+    current_msg_id = message.message_id
+    # Исключаем ТЕКУЩЕЕ сообщение из кандидатов — иначе бот отвечает на ту же просьбу повторно.
+    candidates = [
+        e for e in mem[:-2]
+        if e.get("type") == "user"
+        and e.get("text")
+        and e.get("message_id") != current_msg_id
+    ]
     if not candidates:
         return
     old = random.choice(candidates)

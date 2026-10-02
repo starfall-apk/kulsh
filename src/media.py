@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.40.0
+# Kulsh GPT | v2.40.1
 # by (main author): starfall-apk
 # coauthor & bot hosting: pomidorka1515
 
@@ -92,6 +92,38 @@ async def get_avatar_description_tg(
         return None
 
 
+async def fetch_last_media_tg(chat_id: int) -> tuple[bytes | None, str]:
+    """
+    Возвращает (байты_изображения, тип) для последнего медиа в истории чата.
+    Поддерживает фото, видео, анимации. Пропускает стикеры/документы (для них байты бесполезны).
+    """
+    history = list(chat_media_history.get(f"tg_{chat_id}", []))
+    if not history:
+        return None, ""
+    # Идём по истории с конца — берём первое, что реально можем скачать.
+    for item in reversed(history):
+        fid = item.get("file_id")
+        mtype = str(item.get("type") or "")
+        if not fid:
+            continue
+        try:
+            if mtype == "photo":
+                b = await get_tg_file_bytes(_tg().tg_bot, fid)
+                if b:
+                    return b, "photo"
+            elif mtype in ("video", "animation"):
+                raw = await get_tg_file_bytes(_tg().tg_bot, fid)
+                # Для анимаций Telegram обычно отдаёт mp4 — ffmpeg справится.
+                frame = await extract_video_frame(raw, ".mp4")
+                if frame:
+                    return frame, mtype
+            # sticker/document — пропускаем
+        except Exception as e:
+            logger.warning(f"fetch_last_media ({mtype}): {e}")
+            continue
+    return None, ""
+
+
 async def get_recall_media_description_tg(
     message: telebot.types.Message, chat_id: int, user_id: int, n: int = 3, lang: str = "ru",
 ) -> str | None:
@@ -99,14 +131,33 @@ async def get_recall_media_description_tg(
     if not history:
         return None
     last = history[-n:]
-    img_bytes = None
-    last_item = last[-1]
-    if last_item.get("type") == "photo" and last_item.get("file_id"):
+
+    # Пытаемся достать байты последнего «настоящего» медиа (фото/видео/анимация).
+    img_bytes: bytes | None = None
+    img_kind: str = ""
+    for item in reversed(last):
+        fid = item.get("file_id")
+        mtype = str(item.get("type") or "")
+        if not fid:
+            continue
         try:
-            img_bytes = await get_tg_file_bytes(_tg().tg_bot, last_item["file_id"])
+            if mtype == "photo":
+                img_bytes = await get_tg_file_bytes(_tg().tg_bot, fid)
+                img_kind = "photo"
+                break
+            elif mtype in ("video", "animation"):
+                raw = await get_tg_file_bytes(_tg().tg_bot, fid)
+                frame = await extract_video_frame(raw, ".mp4")
+                if frame:
+                    img_bytes = frame
+                    img_kind = mtype
+                    break
         except Exception as e:
-            logger.warning(f"recall media fetch: {e}")
+            logger.warning(f"recall media fetch ({mtype}): {e}")
+            continue
+
     if img_bytes is None:
+        # Fallback: просто текстовый список медиа.
         lines = []
         for item in last:
             mtype = item.get("type", "media")
@@ -131,13 +182,17 @@ async def get_recall_media_description_tg(
         except Exception as e:
             logger.warning(f"recall meta: {e}")
             return None
+
     try:
+        kind_label = {"photo": "фото", "video": "видео", "animation": "гифку"}.get(img_kind, "медиа")
         prompt = (
-            "Ты вспоминаешь последнее медиа. Опиши коротко в стиле Кульша. Без markdown. "
-            "НЕ используй маркеры !separate, !avatar, !recall_media, !sticker, !gif, !search, !chart."
+            f"Ты вспоминаешь последнее медиа в чате — это {kind_label}. Опиши коротко, что на нём, "
+            f"в стиле Кульша. Без markdown. "
+            f"НЕ используй маркеры !separate, !avatar, !recall_media, !sticker, !gif, !search, !chart."
             if lang == "ru" else
-            "You recall the last media. Describe briefly in Kulsh's style. No markdown. "
-            "Do NOT use markers !separate, !avatar, !recall_media, !sticker, !gif, !search, !chart."
+            f"You recall the last media in chat — it's a {img_kind}. Describe briefly what's on it, "
+            f"in Kulsh's style. No markdown. "
+            f"Do NOT use markers !separate, !avatar, !recall_media, !sticker, !gif, !search, !chart."
         )
         return json_str(await ask_ai_async(
             prompt=prompt, image_bytes=img_bytes, image_mime="image/jpeg",
@@ -493,7 +548,6 @@ async def handle_tg_text(message: telebot.types.Message) -> None:
         await _tg().tg_handle_config(message)
         return
 
-    # статус
     if tl.strip() in ("кульш статус", "kulsh status", "кульш состояние"):
         await _tg().handle_status(message)
         return
