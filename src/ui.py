@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.39.0
+# Kulsh GPT | v2.40.0
 # by (main author): starfall-apk
 # coauthor & bot hosting: pomidorka1515
 
@@ -25,6 +25,7 @@ from src.util import (
 )
 import src.util as state
 
+
 class StyledButton(InlineKeyboardButton):
     def __init__(self, text: str, style: str | None = None, **kwargs: Any) -> None:
         super().__init__(text, **kwargs)
@@ -47,6 +48,16 @@ def mini_app_button(lang: str, is_private: bool) -> StyledButton:
         return btn(text, style="primary", web_app=WebAppInfo(url=MINI_APP_URL))
     return btn(text, style="primary", url=MINI_APP_URL)
 
+
+def _mode_display(cfg: JsonDict, lang: str) -> str:
+    mode = str(cfg.get("communication_mode", "kent"))
+    if mode == "assistant":
+        return tr(lang, "mode_assistant")
+    if mode == "pro":
+        return tr(lang, "mode_pro")
+    return tr(lang, "mode_kent")
+
+
 # ============================================================
 # CONFIG TEXT / KEYBOARDS
 # ============================================================
@@ -54,17 +65,19 @@ def config_text(platform: str, chat_id: int, user_id: int) -> str:
     cfg = get_user_config(platform, chat_id, user_id)
     lang = cfg.get("language", "ru")
     prompt_safe = html.escape(cfg.get("custom_prompt") or tr(lang, "cfg_prompt_default"))
-    line = "═" * 22
+    line = "─" * 22
     on = "✅"
     off = "❌"
     theme_disp = tr(lang, "dark") if cfg.get("theme", "dark") == "dark" else tr(lang, "light")
     credits = get_user_credits(platform, user_id)
     stream_txt = f"{on if cfg.get('streaming_enabled') else off} · {'premium' if state.premium_functions_enabled else 'off'}"
     search_txt = on if cfg.get("web_search_enabled", True) else off
+    mode_txt = _mode_display(cfg, lang)
     return (
         f"✦ {tr(lang, 'cfg_title')} ✦\n{line}\n"
         f"{tr(lang, 'cfg_lang')}: {tr(lang, 'russian') if lang == 'ru' else tr(lang, 'english')}\n"
         f"{tr(lang, 'cfg_theme')}: {theme_disp}\n"
+        f"{tr(lang, 'cfg_mode')}: {mode_txt}\n"
         f"{tr(lang, 'cfg_model')}: {model_display_name(cfg.get('model'), lang)}\n"
         f"{tr(lang, 'cfg_temp_short')}: <code>{cfg.get('temperature', 0.9)}</code>\n"
         f"{tr(lang, 'cfg_sep')}: {on if cfg.get('separate_enabled', True) else off}\n"
@@ -88,10 +101,16 @@ def build_main_config_keyboard(platform: str, chat_id: int, user_id: int) -> Inl
         btn(tr(lang, "cfg_theme"), style=None, callback_data="cfg:theme"),
     )
     kb.row(
+        btn(f"{tr(lang, 'cfg_mode')}: {_mode_display(cfg, lang)}",
+            style="primary", callback_data="cfg:mode"),
         btn(f"{tr(lang, 'cfg_model')}: {model_display_name(cfg.get('model'), lang)}",
-            style="primary", callback_data="cfg:model"),
+            style=None, callback_data="cfg:model"),
+    )
+    kb.row(
         btn(f"{tr(lang, 'cfg_temp_short')}: {cfg.get('temperature', 0.9)}",
             style=None, callback_data="cfg:temp"),
+        btn(f"{tr(lang, 'cfg_websearch')}: {'✅' if cfg.get('web_search_enabled', True) else '❌'}",
+            style=None, callback_data="cfg:websearch"),
     )
     kb.row(
         btn(f"{tr(lang, 'cfg_sep')}: {'✅' if cfg.get('separate_enabled', True) else '❌'}",
@@ -108,10 +127,6 @@ def build_main_config_keyboard(platform: str, chat_id: int, user_id: int) -> Inl
     kb.row(
         btn(f"{tr(lang, 'cfg_random')}: {'✅' if cfg.get('random_messages_enabled', True) else '❌'}",
             style=None, callback_data="cfg:random"),
-        btn(f"{tr(lang, 'cfg_websearch')}: {'✅' if cfg.get('web_search_enabled', True) else '❌'}",
-            style=None, callback_data="cfg:websearch"),
-    )
-    kb.row(
         btn(tr(lang, "cfg_edit_prompt"), style="primary", callback_data="cfg:prompt"),
     )
     kb.row(
@@ -141,6 +156,29 @@ def build_model_keyboard(platform: str, chat_id: int, user_id: int) -> InlineKey
     if row:
         kb.row(*row)
     kb.row(btn(tr(lang, "cfg_back"), style="primary", callback_data="cfg:model_back"))
+    return kb
+
+
+def build_mode_keyboard(platform: str, chat_id: int, user_id: int, is_private: bool = True) -> InlineKeyboardMarkup:
+    cfg = get_user_config(platform, chat_id, user_id)
+    lang = cfg.get("language", "ru")
+    cur = str(cfg.get("communication_mode", "kent"))
+    kb = InlineKeyboardMarkup()
+
+    def mark(mode: str) -> str:
+        return "🔘" if cur == mode else "▫️"
+
+    kb.row(btn(f"{mark('kent')} {tr(lang, 'mode_kent')}",
+               style="primary" if cur == "kent" else None,
+               callback_data="cfg:mode_set:kent"))
+    kb.row(btn(f"{mark('assistant')} {tr(lang, 'mode_assistant')}",
+               style="primary" if cur == "assistant" else None,
+               callback_data="cfg:mode_set:assistant"))
+    if is_private:
+        kb.row(btn(f"{mark('pro')} {tr(lang, 'mode_pro')}",
+                   style="primary" if cur == "pro" else None,
+                   callback_data="cfg:mode_set:pro"))
+    kb.row(btn(tr(lang, "cfg_back_slash"), style="primary", callback_data="cfg:sub_back"))
     return kb
 
 
@@ -200,8 +238,23 @@ def model_picker_text(platform: str, chat_id: int, user_id: int) -> str:
         f"<b>{tr(lang, 'cfg_auto')}</b> — {tr(lang, 'cfg_auto_hint')}"
     )
 
+
+def mode_picker_text(platform: str, chat_id: int, user_id: int, is_private: bool = True) -> str:
+    cfg = get_user_config(platform, chat_id, user_id)
+    lang = cfg.get("language", "ru")
+    lines = [
+        f"<b>{tr(lang, 'cfg_choose_mode')}</b>",
+        "─" * 22,
+        f"▫️ <b>{tr(lang, 'mode_kent')}</b> — {tr(lang, 'mode_kent_hint')}",
+        f"▫️ <b>{tr(lang, 'mode_assistant')}</b> — {tr(lang, 'mode_assistant_hint')}",
+    ]
+    if is_private:
+        lines.append(f"▫️ <b>{tr(lang, 'mode_pro')}</b> — {tr(lang, 'mode_pro_hint')}")
+    return "\n".join(lines)
+
+
 # ============================================================
-# МЕНЮ / START / HELP / DONATE (без GIF, с декором)
+# МЕНЮ / START / HELP / DONATE
 # ============================================================
 def build_menu_text(lang: str) -> str:
     return (
@@ -209,12 +262,12 @@ def build_menu_text(lang: str) -> str:
         f"# {tr(lang, 'menu_title')}\n\n"
         f"✦彡巛〢 ✦ 彡 巛 〢 ✦ 彡 巛 〢 ✦\n\n"
         f"{tr(lang, 'menu_intro')}\n\n"
-        f"**{tr(lang, 'menu_available')}**\n"
-        f"▸ {tr(lang, 'menu_mini_app')}\n"
-        f"▸ {tr(lang, 'menu_settings_item')}\n"
-        f"▸ {tr(lang, 'menu_commands')}\n"
-        f"▸ {tr(lang, 'menu_donate_item')}\n"
-        f"▸ {tr(lang, 'menu_github_item')}\n\n"
+        f"**{tr(lang, 'menu_available')}**\n\n"
+        f"- {tr(lang, 'menu_mini_app')}\n"
+        f"- {tr(lang, 'menu_settings_item')}\n"
+        f"- {tr(lang, 'menu_commands')}\n"
+        f"- {tr(lang, 'menu_donate_item')}\n"
+        f"- {tr(lang, 'menu_github_item')}\n\n"
         f"✦ 彡 巛 〢 〢 巛 彡 ✦"
     )
 
@@ -224,10 +277,10 @@ def build_start_text(lang: str) -> str:
         f"# {tr(lang, 'start_title')}\n\n"
         f"✦彡巛〢 ✦ 彡 巛 〢 ✦ 彡 巛 〢 ✦\n\n"
         f"{tr(lang, 'start_intro')}\n\n"
-        f"**{tr(lang, 'start_where')}**\n"
-        f"▸ {tr(lang, 'start_mini_app')}\n"
-        f"▸ {tr(lang, 'start_menu')}\n"
-        f"▸ {tr(lang, 'start_config')}\n\n"
+        f"**{tr(lang, 'start_where')}**\n\n"
+        f"- {tr(lang, 'start_mini_app')}\n"
+        f"- {tr(lang, 'start_menu')}\n"
+        f"- {tr(lang, 'start_config')}\n\n"
         f"🍷🗿 {MINI_APP_URL}"
     )
 
