@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.41.3
+# Kulsh GPT | v2.41.5
 # by (main author): starfall-apk
 # coauthor & bot hosting: pomidorka1515
 
@@ -46,7 +46,7 @@ logger.addHandler(file_handler)
 logger.addHandler(console_handler)
 
 BOT_START_TS: float = time.time()
-BOT_VERSION: str = "2.41.3"
+BOT_VERSION: str = "2.41.5"
 
 # ============================================================
 # ВРЕМЯ
@@ -677,6 +677,36 @@ def clean_json_text(text: str) -> str:
     return text.strip()
 
 # ============================================================
+# ЛИПКИЕ МАТЕРНЫЕ ХВОСТЫ
+# ============================================================
+# Gemini иногда приклеивает матерные слова к предыдущему слову:
+# "забейхули", "суютхули", "идиблять". Разбиваем их.
+# Работаем ТОЛЬКО когда перед матом идёт минимум 3 кириллические буквы и
+# после него — не кириллица (то есть мат на конце слова или перед пунктуацией).
+_GLUED_CURSES: tuple[str, ...] = (
+    "хули", "хуй", "хуя", "хую", "хуё", "нахуй", "похуй",
+    "бля", "блять", "блядь",
+    "ебать", "ебал", "ебёт", "ебет", "ебу",
+    "пиздец", "пизда", "пизд",
+    "нахуя", "нахуй",
+)
+
+
+def fix_glued_curses(text: str) -> str:
+    """Разбивает приклеенные матерные слова от предыдущего слова."""
+    if not text:
+        return text
+    for curse in _GLUED_CURSES:
+        # [кириллица]{3,} + curse + не-кириллица (или конец строки)
+        pattern = re.compile(
+            rf'([а-яёА-ЯЁ]{{3,}})({re.escape(curse)})(?![а-яёА-ЯЁ])',
+            re.UNICODE,
+        )
+        text = pattern.sub(r'\1 \2', text)
+    return text
+
+
+# ============================================================
 # УТИЛИТЫ-МАРКЕРЫ
 # ============================================================
 UTILITY_PATTERNS = {
@@ -721,8 +751,6 @@ def extract_utility_markers(text: str) -> tuple[str, list[str], dict[str, str]]:
                 extras["user_info_id"] = m.group(1)
         text = pat.sub(' ', text)
     text = re.sub(r'[ \t]{2,}', ' ', text)
-    # Пробел перед пунктуацией убираем ТОЛЬКО если знак стоит отдельно
-    # (за ним пробел или конец строки). Иначе "фолз !раз" → "фолз!раз" терял пробел.
     text = re.sub(r'[ \t]+([,.!?;:])(?=[ \t\n]|$)', r'\1', text)
     text = re.sub(r'[ \t]+\n', '\n', text)
     text = re.sub(r'\n{3,}', '\n\n', text)
@@ -756,6 +784,7 @@ def scrub_stray_markers(text: str) -> str:
     """
     Страховка: удаляет уцелевшие маркеры утилит из текста перед отправкой.
     НЕ трогает одиночные '!' и слова после них — только известные маркеры.
+    Также разбивает приклеенные матерные хвосты (fix_glued_curses).
     """
     if not text:
         return text
@@ -770,6 +799,8 @@ def scrub_stray_markers(text: str) -> str:
     text = re.sub(r'[ \t]+([,.!?;:])(?=[ \t\n]|$)', r'\1', text)
     text = re.sub(r'[ \t]+\n', '\n', text)
     text = re.sub(r'\n{3,}', '\n\n', text)
+    # Разбиваем "забейхули" → "забей хули", "суютхули" → "суют хули"
+    text = fix_glued_curses(text)
     return text.strip()
 
 
@@ -824,6 +855,7 @@ def clean_extra_text(raw: str) -> list[str]:
     cleaned = REACT_PATTERN.sub(' ', cleaned)
     cleaned = WHY_PATTERN.sub(' ', cleaned)
     cleaned = re.sub(r'[ \t]{2,}', ' ', cleaned).strip()
+    cleaned = fix_glued_curses(cleaned)
     return [s.strip() for s in cleaned.split('\n\n') if s and s.strip()]
 
 # ============================================================
