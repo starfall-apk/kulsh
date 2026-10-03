@@ -1,8 +1,8 @@
-# Kulsh GPT | v2.39.0
+# Kulsh GPT | v2.41.4
 # by (main author): starfall-apk
 # coauthor & bot hosting: pomidorka1515
 
-"""Background loops: random posts, series reminders, donations, TTS."""
+"""Background loops: random posts, series reminders, donations, TTS, config save."""
 
 import asyncio
 import random
@@ -30,9 +30,9 @@ from src.util import (
     logger,
     memory_to_messages,
     process_ai_response,
-
-    JsonDict,)
-
+    save_user_configs,
+    JsonDict,
+)
 
 ds_bot: Any = None
 tg_bot: Any = None
@@ -99,7 +99,6 @@ async def donation_alerts_listener() -> None:
             logger.error(f"DA error: {e}")
 
     try:
-        # query is no longer a constructor arg; DA expects the token in the URL.
         await sio.connect(
             f'https://socket.donationalerts.ru:443?token={DONATIONALERTS_TOKEN}',
             transports=['websocket'],
@@ -107,6 +106,7 @@ async def donation_alerts_listener() -> None:
         await sio.wait()
     except Exception as e:
         logger.error(f"DA connect fail: {e}")
+
 
 async def say_in_voice(voice_client: discord.VoiceClient | None, text: str) -> None:
     if not voice_enabled or not voice_client or not voice_client.is_connected():
@@ -121,8 +121,22 @@ async def say_in_voice(voice_client: discord.VoiceClient | None, text: str) -> N
     except Exception as e:
         logger.error(f"TTS: {e}")
 
+
 # ============================================================
-# LOOPS
+# ПЕРИОДИЧЕСКОЕ СОХРАНЕНИЕ НАСТРОЕК
+# ============================================================
+async def periodic_config_save_loop() -> None:
+    """Каждые 60 секунд сохраняет настройки пользователей на диск."""
+    while True:
+        await asyncio.sleep(60)
+        try:
+            save_user_configs()
+        except Exception as e:
+            logger.warning(f"periodic_config_save_loop: {e}")
+
+
+# ============================================================
+# ОСНОВНЫЕ ЦИКЛЫ
 # ============================================================
 async def random_post_loop() -> None:
     while True:

@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.41.2
+# Kulsh GPT | v2.41.4
 # by (main author): starfall-apk
 # coauthor & bot hosting: pomidorka1515
 
@@ -30,9 +30,7 @@ if not AI_KEYS:
 
 tg_bot = AsyncTeleBot(TG_TOKEN)
 
-# ВАЖНО: не запрашиваем members intent — он privileged и требует включения
-# в Developer Portal. Для наших задач (member_count в /groupinfo,
-# joined_at/roles в /userinfo) он не нужен.
+# Без privileged intents (members intent требует включения в Developer Portal).
 intents = discord.Intents.default()
 intents.message_content = True
 intents.guilds = True
@@ -130,7 +128,15 @@ def register() -> None:
 
 
 def _smoke_check() -> None:
-    """Runtime smoke-проверка для safe_check_import."""
+    """
+    Runtime smoke-проверка. Вызывается safe_check_import() в subprocess после git pull.
+    Жёстко проверяем только то, без чего бот НЕ запустится:
+      - все функции telegram.*, rich.*, media.*, discord_cmds.*, discord_msg.on_message
+      - loops.bind
+    Опциональные loop-функции (random_post_loop, series_reminder_loop,
+    donation_alerts_listener, periodic_config_save_loop) проверяются мягко —
+    main() обращается к ним через getattr(..., None) с fallback.
+    """
     def _need(mod: Any, name: str) -> None:
         obj = getattr(mod, name, None)
         if obj is None:
@@ -138,25 +144,40 @@ def _smoke_check() -> None:
         if not callable(obj):
             raise RuntimeError(f"{getattr(mod, '__name__', '?')}.{name} — не callable")
 
+    # telegram
     for name in ("bind", "handle_start", "handle_menu", "handle_help", "handle_status",
                  "handle_donate", "handle_donate_stars", "handle_credits",
                  "handle_toggle_premium", "handle_pre_checkout", "handle_successful_payment",
                  "handle_cfg_callback", "handle_menu_callback"):
         _need(telegram, name)
+
+    # rich
     for name in ("bind", "send_tg_html", "reply_tg_html", "send_formatted", "send_rich_message"):
         _need(rich, name)
+
+    # media
     for name in ("handle_tg_media", "handle_tg_text"):
         _need(media, name)
+
+    # discord_msg
     _need(discord_msg, "on_message")
+
+    # discord_cmds
     for name in ("bind", "ds_slash_start", "ds_slash_menu", "ds_slash_help", "ds_slash_status",
                  "ds_slash_donate", "ds_slash_credits", "ds_slash_config", "ds_slash_logs",
                  "ds_slash_groupinfo", "ds_slash_userinfo", "ds_slash_avatar", "ds_slash_recall",
                  "ds_slash_search", "ds_slash_chart", "ds_slash_psl", "ds_slash_battle",
                  "ds_slash_femboy", "ds_slash_femboy_battle"):
         _need(discord_cmds, name)
-    for name in ("bind", "random_post_loop", "series_reminder_loop",
-                 "donation_alerts_listener", "periodic_config_save_loop", "send_donation_alert"):
-        _need(loops, name)
+
+    # loops.bind — критичен, вызывается в bind_all на старте модуля
+    _need(loops, "bind")
+
+    # Опциональные циклы — только warn, не падаем
+    for optional_name in ("random_post_loop", "series_reminder_loop",
+                          "donation_alerts_listener", "periodic_config_save_loop"):
+        if getattr(loops, optional_name, None) is None:
+            print(f"WARN: loops.{optional_name} отсутствует — соответствующая функция отключена")
 
 
 async def main() -> None:
@@ -172,7 +193,7 @@ async def main() -> None:
     if callable(_save_loop):
         asyncio.create_task(_save_loop())
     else:
-        logger.warning("periodic_config_save_loop отсутствует — пропускаю")
+        logger.warning("⚠️ periodic_config_save_loop отсутствует — настройки НЕ будут сохраняться автоматически")
 
     @ds_bot.event
     async def on_ready() -> None:
@@ -200,8 +221,6 @@ async def main() -> None:
         except discord.PrivilegedIntentsRequired as e:
             logger.critical(
                 "❌ Discord требует privileged intents, которые не включены в Developer Portal.\n"
-                "Либо включи их (Server Members Intent и т.п.), либо убери запрос "
-                "соответствующего intent в app.py.\n"
                 f"Детали: {e}"
             )
             raise
