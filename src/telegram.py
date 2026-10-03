@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.41.0
+# Kulsh GPT | v2.41.3
 # by (main author): starfall-apk
 # coauthor & bot hosting: pomidorka1515
 
@@ -67,22 +67,21 @@ from src.util import (
     MODEL_DISPLAY,
     MODEL_LIST,
     PREMIUM_ADMIN_ID,
+    REACT_PATTERN,
     STICKER_POOL,
     UTILITY_PATTERNS,
-    REACT_PATTERN,
     WHY_PATTERN,
-    add_typos,
     calc_typing_delay,
     cb_id,
     clean_extra_text,
     clean_json_text,
-    extract_reaction_and_why,
     human_uptime,
     is_femboy_battle_command,
     is_femboy_rate_command,
     mode_is_valid,
     process_ai_response,
     save_user_configs,
+    scrub_stray_markers,
     split_emojis,
     tr,
     tg_msg,
@@ -141,7 +140,7 @@ def _strip_recall_marker(text: str) -> str:
         return text
     out = pat.sub(' ', text)
     out = re.sub(r'[ \t]{2,}', ' ', out)
-    out = re.sub(r'[ \t]+([,.!?;:])', r'\1', out)
+    out = re.sub(r'[ \t]+([,.!?;:])(?=[ \t\n]|$)', r'\1', out)
     out = re.sub(r'[ \t]+\n', '\n', out)
     return out.strip()
 
@@ -149,15 +148,17 @@ def _strip_recall_marker(text: str) -> str:
 # ============================================================
 # РЕАКЦИИ
 # ============================================================
+def _tg_bot_id() -> int | None:
+    try:
+        return tg_bot.user.id if tg_bot and tg_bot.user else None
+    except Exception:
+        return None
+
+
 async def _apply_tg_reaction(chat_id: int, message_id: int, emojis_str: str) -> list[str]:
-    """Возвращает список реально поставленных эмодзи (или пустой)."""
-    if not state.premium_functions_enabled:
-        # реагировать можно и без premium, но в некоторых чатах запрещено
-        pass
     emojis = split_emojis(emojis_str)
     if not emojis:
         return []
-    applied: list[str] = []
     try:
         from telebot.types import ReactionTypeEmoji  # type: ignore
     except Exception:
@@ -168,11 +169,10 @@ async def _apply_tg_reaction(chat_id: int, message_id: int, emojis_str: str) -> 
     try:
         reaction_list = [ReactionTypeEmoji(emoji=e) for e in emojis[:1]]
         await tg_bot.set_message_reaction(chat_id, message_id, reaction=reaction_list)
-        applied = emojis[:1]
     except Exception as e:
         logger.warning(f"set_message_reaction: {e}")
         return []
-    return applied
+    return emojis[:1]
 
 
 async def _handle_reaction_markers(
@@ -191,24 +191,39 @@ async def _handle_reaction_markers(
     why_m = WHY_PATTERN.search(text or "")
     if not m:
         return text, []
+
     emojis_str = m.group(1)
     why_text = why_m.group(1).strip() if why_m else ""
+
+    # Определяем target — реагируем на reply-сообщение если есть, иначе на само сообщение.
     target_msg_id = message.message_id
-    # Если это реплай — реагируем на то, на что отвечаем.
     if message.reply_to_message and message.reply_to_message.message_id:
         target_msg_id = message.reply_to_message.message_id
+
+    # НЕ ставим реакцию на сообщения бота.
+    bot_id = _tg_bot_id()
+    target_from_bot = False
+    if target_msg_id != message.message_id and message.reply_to_message and message.reply_to_message.from_user:
+        if bot_id and message.reply_to_message.from_user.id == bot_id:
+            target_from_bot = True
+    if target_msg_id == message.message_id and message.from_user and bot_id and message.from_user.id == bot_id:
+        target_from_bot = True
+
+    cleaned = REACT_PATTERN.sub(' ', text)
+    cleaned = WHY_PATTERN.sub(' ', cleaned)
+    cleaned = re.sub(r'[ \t]{2,}', ' ', cleaned).strip()
+
+    if target_from_bot:
+        logger.info("Пропускаю реакцию: цель — собственное сообщение бота")
+        return cleaned, []
+
     applied = await _apply_tg_reaction(chat_id, target_msg_id, emojis_str)
     if applied and why_text:
-        # Пишем мысль в память бота — чтобы при вопросе про реакцию он помнил.
         mem_text = f"[реакция {' '.join(applied)}] {why_text}"
         add_bot_memory(f"tg_{chat_id}", mem_text)
         logger.info(f"😀 Реакция {' '.join(applied)} + мысль: {why_text[:80]}")
     elif applied:
         add_bot_memory(f"tg_{chat_id}", f"[реакция {' '.join(applied)}]")
-    # Убираем маркеры из текста
-    cleaned = REACT_PATTERN.sub(' ', text)
-    cleaned = WHY_PATTERN.sub(' ', cleaned)
-    cleaned = re.sub(r'[ \t]{2,}', ' ', cleaned).strip()
     return cleaned, applied
 
 
@@ -717,6 +732,9 @@ async def tg_handle_avatar(message: telebot.types.Message, chat_id: int, user_id
         await reply_tg_html(message, tr(lang, "avatar_fail"))
         return
     for i, seg in enumerate(segments):
+        seg = scrub_stray_markers(seg)
+        if not seg:
+            continue
         if i == 0:
             await reply_tg_html(message, seg)
         else:
@@ -740,6 +758,9 @@ async def tg_handle_recall_media(message: telebot.types.Message, chat_id: int, u
         await reply_tg_html(message, tr(lang, "recall_fail"))
         return
     for i, seg in enumerate(segments):
+        seg = scrub_stray_markers(seg)
+        if not seg:
+            continue
         if i == 0:
             await reply_tg_html(message, seg)
         else:
@@ -963,7 +984,6 @@ async def fetch_group_info_tg(chat_id: int, lang: str = "ru") -> str | None:
 
 async def fetch_user_info_tg(user_id: int, chat_id: int, lang: str = "ru") -> str | None:
     lines: list[str] = []
-    # Пробуем получить через get_chat — работает для пользователей в чате.
     try:
         chat = await tg_bot.get_chat(user_id)
         name = getattr(chat, "first_name", "") or ""
@@ -980,7 +1000,6 @@ async def fetch_user_info_tg(user_id: int, chat_id: int, lang: str = "ru") -> st
     except Exception as e:
         logger.debug(f"get_chat(user): {e}")
     lines.append(("ID: " if lang == "ru" else "ID: ") + str(user_id))
-    # Статус в текущем чате
     try:
         member = await tg_bot.get_chat_member(chat_id, user_id)
         status = getattr(member, "status", "?")
@@ -1015,7 +1034,7 @@ async def stream_text_via_drafts(chat_id: int, text: str, is_private: bool = Tru
 
 
 # ============================================================
-# SEND TG AI RESPONSE (главный пайплайн)
+# SEND TG AI RESPONSE
 # ============================================================
 async def send_tg_ai_response(message: telebot.types.Message, chat_id: int, user_id: int,
                               answer_raw: str, user_text: str | None = None,
@@ -1029,10 +1048,10 @@ async def send_tg_ai_response(message: telebot.types.Message, chat_id: int, user
 
     orig_user_text = (user_text or (message.text or message.caption or "")).strip()
 
-    # ---- !react / !why ----
+    # !react / !why
     answer_raw, applied_reactions = await _handle_reaction_markers(message, chat_id, user_id, answer_raw or "", cfg)
 
-    # ---- !search ----
+    # !search
     if cfg.get("web_search_enabled", True):
         query, _ = extract_search_marker(answer_raw or "")
         if query:
@@ -1049,7 +1068,7 @@ async def send_tg_ai_response(message: telebot.types.Message, chat_id: int, user
             else:
                 answer_raw = tr(lang, "search_nothing")
 
-    # ---- !recall_media ----
+    # !recall_media
     if UTILITY_PATTERNS["recall_media"].search(answer_raw or ""):
         media_bytes: bytes | None = None
         media_kind: str = ""
@@ -1075,12 +1094,11 @@ async def send_tg_ai_response(message: telebot.types.Message, chat_id: int, user
         else:
             answer_raw = _strip_recall_marker(answer_raw) + "\n" + tr(lang, "recall_fail")
 
-    # ---- !group_info / !user_info ----
+    # !group_info / !user_info
     gi = UTILITY_PATTERNS["group_info"].search(answer_raw or "")
     ui = UTILITY_PATTERNS["user_info"].search(answer_raw or "")
     if gi:
         info = await fetch_group_info_tg(chat_id, lang=lang)
-        # Убираем маркер
         answer_raw = UTILITY_PATTERNS["group_info"].sub(' ', answer_raw)
         if info:
             follow_prompt = (
@@ -1109,7 +1127,7 @@ async def send_tg_ai_response(message: telebot.types.Message, chat_id: int, user
             follow_prompt = "Не удалось получить инфо о пользователе. Скажи об этом."
         answer_raw = await ask_ai_async(prompt=follow_prompt, chat_id=chat_id, user_id=user_id, platform="tg")
 
-    # ---- !chart ----
+    # !chart
     if state.premium_functions_enabled:
         chart_spec, remaining = extract_chart_marker(answer_raw or "")
         if chart_spec:
@@ -1132,7 +1150,6 @@ async def send_tg_ai_response(message: telebot.types.Message, chat_id: int, user
             if chart_spec is not None or not user_asked_chart:
                 answer_raw = remaining
 
-    # ---- Split into segments and send ----
     clean_segments, markers = process_ai_response(answer_raw, separate_enabled=separate_enabled)
 
     extra_segments: list[str] = []
@@ -1150,7 +1167,6 @@ async def send_tg_ai_response(message: telebot.types.Message, chat_id: int, user
     all_segments = clean_segments + extra_segments
 
     if not all_segments:
-        # Ничего текстом — если реакции были, уже поставлены. Остальные маркеры — обработать.
         for m in markers:
             try:
                 await execute_utility_tg(message, m, chat_id, user_id)
@@ -1161,8 +1177,9 @@ async def send_tg_ai_response(message: telebot.types.Message, chat_id: int, user
     is_private_chat = (message.chat.type == 'private')
 
     for i, seg in enumerate(all_segments):
-        # Опечатки (кроме markdown/code/URL)
-        seg = add_typos(seg, probability=0.04)
+        seg = scrub_stray_markers(seg)
+        if not seg:
+            continue
         try:
             await typing_with_delay_tg(message.chat.id, seg, delay=calc_typing_delay(seg, segment_index=i))
         except Exception:
@@ -1244,7 +1261,9 @@ async def maybe_reply_to_old_message_tg(message: telebot.types.Message, chat_id:
             segments, markers = process_ai_response(comment, separate_enabled=cfg.get("separate_enabled", True))
             old_msg_id = old.get("message_id")
             for i, seg in enumerate(segments):
-                seg = add_typos(seg, probability=0.04)
+                seg = scrub_stray_markers(seg)
+                if not seg:
+                    continue
                 try:
                     await typing_with_delay_tg(message.chat.id, seg, delay=calc_typing_delay(seg, segment_index=i))
                 except Exception:

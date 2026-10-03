@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.41.0
+# Kulsh GPT | v2.41.3
 # by (main author): starfall-apk
 # coauthor & bot hosting: pomidorka1515
 
@@ -35,13 +35,13 @@ from src.util import (
     MODEL_LIST,
     REACT_PATTERN,
     WHY_PATTERN,
-    add_typos,
     ds_user,
     extract_reaction_and_why,
     human_uptime,
     json_str,
     process_ai_response,
     save_user_configs,
+    scrub_stray_markers,
     split_emojis,
     tr,
     add_bot_memory,
@@ -133,6 +133,13 @@ async def execute_utility_ds(message: discord.Message, marker: str, chat_id: int
             logger.error(f"gif error: {e}")
 
 
+def _ds_bot_user() -> discord.ClientUser | None:
+    try:
+        return ds_bot.user if ds_bot else None
+    except Exception:
+        return None
+
+
 async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: int,
                               answer_raw: str, user_text: str | None = None) -> None:
     cfg = get_user_config("ds", chat_id, user_id)
@@ -140,7 +147,6 @@ async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: i
     separate_enabled = cfg.get("separate_enabled", True)
     orig_user_text = (user_text or message.content or "").strip()
 
-    # ---- react / why ----
     applied_reactions: list[str] = []
     if cfg.get("reactions_enabled", True):
         m = REACT_PATTERN.search(answer_raw or "")
@@ -148,25 +154,34 @@ async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: i
         if m:
             emojis_str = m.group(1)
             why_text = why_m.group(1).strip() if why_m else ""
+            # Определяем target
             reply_target: discord.Message | None = None
             if message.reference and message.reference.resolved and isinstance(message.reference.resolved, discord.Message):
                 reply_target = message.reference.resolved
-            emojis = split_emojis(emojis_str)
-            for e in emojis[:3]:
-                try:
-                    target = reply_target or message
-                    await target.add_reaction(e)
-                    applied_reactions.append(e)
-                except Exception as ex:
-                    logger.warning(f"add_reaction {e}: {ex}")
-            if applied_reactions and why_text:
-                add_bot_memory(f"ds_{chat_id}", f"[реакция {' '.join(applied_reactions)}] {why_text}")
-            elif applied_reactions:
-                add_bot_memory(f"ds_{chat_id}", f"[реакция {' '.join(applied_reactions)}]")
+            me = _ds_bot_user()
+            target_from_bot = False
+            if reply_target is not None and me is not None and reply_target.author == me:
+                target_from_bot = True
+            if reply_target is None and me is not None and message.author == me:
+                target_from_bot = True
+            if not target_from_bot:
+                emojis = split_emojis(emojis_str)
+                for e in emojis[:3]:
+                    try:
+                        target = reply_target or message
+                        await target.add_reaction(e)
+                        applied_reactions.append(e)
+                    except Exception as ex:
+                        logger.warning(f"add_reaction {e}: {ex}")
+                if applied_reactions and why_text:
+                    add_bot_memory(f"ds_{chat_id}", f"[реакция {' '.join(applied_reactions)}] {why_text}")
+                elif applied_reactions:
+                    add_bot_memory(f"ds_{chat_id}", f"[реакция {' '.join(applied_reactions)}]")
+            else:
+                logger.info("Пропускаю DS реакцию: цель — собственное сообщение бота")
         answer_raw = REACT_PATTERN.sub(' ', answer_raw or "")
         answer_raw = WHY_PATTERN.sub(' ', answer_raw).strip()
 
-    # ---- search ----
     if cfg.get("web_search_enabled", True):
         query, _ = extract_search_marker(answer_raw or "")
         if query:
@@ -182,7 +197,6 @@ async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: i
             else:
                 answer_raw = tr(lang, "search_nothing")
 
-    # ---- chart ----
     if premium_functions_enabled:
         chart_spec, remaining = extract_chart_marker(answer_raw or "")
         if chart_spec:
@@ -233,7 +247,9 @@ async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: i
         return
 
     for i, seg in enumerate(all_segments):
-        seg = add_typos(seg, probability=0.04)
+        seg = scrub_stray_markers(seg)
+        if not seg:
+            continue
         try:
             await typing_with_delay_ds(message.channel, seg, delay=calc_typing_delay(seg, segment_index=i))
         except Exception:
@@ -295,25 +311,6 @@ def ds_config_embed(chat_id: int, user_id: int) -> discord.Embed:
         embed.add_field(name="🔎 Веб-поиск", value=websearch, inline=True)
         embed.add_field(name="🎬 Серия", value=series, inline=True)
         embed.add_field(name="📝 Кастомный промпт", value=prompt, inline=False)
-        embed.add_field(
-            name="📖 Команды",
-            value=(
-                "`кульш конфиг язык ru|en`\n"
-                "`кульш конфиг тема тёмная|светлая`\n"
-                "`кульш конфиг режим кент|ассистент`\n"
-                "`кульш конфиг модель` — список\n"
-                "`кульш конфиг модель <номер|авто>`\n"
-                "`кульш конфиг температура <0.0-2.0>`\n"
-                "`кульш конфиг разбивка вкл|выкл`\n"
-                "`кульш конфиг реакции вкл|выкл`\n"
-                "`кульш конфиг стикеры вкл|выкл`\n"
-                "`кульш конфиг автоответ вкл|выкл`\n"
-                "`кульш конфиг рандом вкл|выкл`\n"
-                "`кульш конфиг поиск вкл|выкл`\n"
-                "`кульш конфиг промпт <текст|сброс>`"
-            ),
-            inline=False,
-        )
     else:
         embed.add_field(name="🌐 Language", value=lang_disp, inline=True)
         embed.add_field(name="🌓 Theme", value=theme_disp, inline=True)
@@ -469,12 +466,6 @@ def ds_slash_menu(lang: str) -> str:
     return (
         "# ✦ Kulsh AI — menu ✦\n\n✦彡巛〢 ✦ 彡 巛 〢 ✦\n\n"
         "An open-source language model with built-in tools.\n\n"
-        "**Basics**\n\n- `/start` — greeting\n- `/help` — command list\n"
-        "- `/status` — bot status\n- `/config` — settings\n"
-        "- `/donate` — support\n- `/credits` — credits\n\n"
-        "**Tools**\n\n- `/avatar`, `/recall`, `/search`, `/chart`\n"
-        "- `/psl`, `/battle`, `/femboy`, `/femboy-battle`\n"
-        "- `/groupinfo`, `/userinfo`, `/logs`\n\n"
         f"🍷🗿 {MINI_APP_URL}"
     )
 
@@ -589,7 +580,9 @@ async def ds_slash_avatar(interaction: discord.Interaction, user: discord.Member
             await interaction.followup.send(tr(lang, "avatar_fail"))
             return
         for seg in segments:
-            await interaction.followup.send(seg)
+            seg = scrub_stray_markers(seg)
+            if seg:
+                await interaction.followup.send(seg)
     except Exception as e:
         logger.error(f"DS slash avatar: {e}")
         await interaction.followup.send(f"Ошибка: {e}")
@@ -800,9 +793,6 @@ async def ds_slash_femboy_battle(interaction: discord.Interaction, image1: disco
         await interaction.followup.send(f"Ошибка: {e}")
 
 
-# ============================================================
-# GROUP / USER INFO (slash)
-# ============================================================
 async def ds_slash_groupinfo(interaction: discord.Interaction) -> None:
     lang = ds_lang_of(interaction)
     if interaction.guild is None:
@@ -843,5 +833,5 @@ async def ds_slash_userinfo(interaction: discord.Interaction, user: discord.Memb
         if roles:
             lines.append(("Роли: " if lang == "ru" else "Roles: ") + ", ".join(roles[:8]))
     if target.bot:
-        lines.append(("Бот: " if lang == "ru" else "Bot: ") + "да" if lang == "ru" else "yes")
+        lines.append(("Бот: " if lang == "ru" else "Bot: ") + ("да" if lang == "ru" else "yes"))
     await interaction.response.send_message("\n".join(lines)[:1900])

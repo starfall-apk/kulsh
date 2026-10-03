@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.41.1
+# Kulsh GPT | v2.41.3
 # by (main author): starfall-apk
 # coauthor & bot hosting: pomidorka1515
 
@@ -46,7 +46,7 @@ logger.addHandler(file_handler)
 logger.addHandler(console_handler)
 
 BOT_START_TS: float = time.time()
-BOT_VERSION: str = "2.41.1"
+BOT_VERSION: str = "2.41.3"
 
 # ============================================================
 # ВРЕМЯ
@@ -78,7 +78,6 @@ def human_uptime() -> str:
         parts.append(f"{h}ч")
     parts.append(f"{m}м")
     return " ".join(parts)
-
 
 # ============================================================
 # КОНФИГ .env
@@ -142,16 +141,12 @@ PREMIUM_ADMIN_ID = 1420898868
 premium_functions_enabled: bool = True
 AUTHORIZED_UPDATERS = [735217033867821098, 1193627300797878362]
 
-# ============================================================
-# РЕЖИМЫ ОБЩЕНИЯ
-# ============================================================
 COMMUNICATION_MODES = ("kent", "assistant", "pro")
 DEFAULT_COMMUNICATION_MODE = "kent"
 
 
 def mode_is_valid(mode: str) -> bool:
     return mode in COMMUNICATION_MODES
-
 
 # ============================================================
 # ДЕКОР
@@ -170,7 +165,6 @@ def deco_divider(length: int = 20, char: str = "─") -> str:
 
 def deco_title(text: str, lang: str = "ru") -> str:
     return f"✦彡巛〢 {text} 〢巛彡✦"
-
 
 # ============================================================
 # VOICE / TTS
@@ -283,7 +277,6 @@ def theme_str(theme: ChartTheme, key: str, default: str = "#000000") -> str:
     value = theme.get(key, default)
     return value if isinstance(value, str) else default
 
-
 # ============================================================
 # ГЛОБАЛЬНЫЕ СТРУКТУРЫ
 # ============================================================
@@ -318,7 +311,6 @@ MAX_FILE_SIZE = 500 * 1024
 MAX_TOTAL_UNPACKED = 5 * 1024 * 1024
 MAX_FILES = 100
 MAX_SEPARATE_PARTS = 8
-
 
 # ============================================================
 # ФАЙЛЫ СОСТОЯНИЯ
@@ -403,7 +395,6 @@ def get_top_donators(top_n: int = 10) -> list[tuple[str, int]]:
         totals[name] = totals.get(name, 0) + total
     return sorted(totals.items(), key=lambda x: x[1], reverse=True)[:top_n]
 
-
 # ============================================================
 # КРЕДИТЫ
 # ============================================================
@@ -436,7 +427,6 @@ def spend_credits(platform: str, user_id: int, amount: int) -> bool:
     credits_data[key] = entry
     save_credits()
     return True
-
 
 # ============================================================
 # PER-USER CONFIG
@@ -480,7 +470,6 @@ def get_user_config(platform: str, chat_id: int, user_id: int) -> JsonDict:
 def get_chat_key(platform: str, chat_id: int) -> str:
     return f"{platform}_{chat_id}"
 
-
 # ============================================================
 # LOG TAIL / CHUNK
 # ============================================================
@@ -517,7 +506,6 @@ def chunk_text(text: str, size: int) -> list[str]:
     if current:
         chunks.append(current)
     return chunks
-
 
 # ============================================================
 # ПАМЯТЬ ЧАТА
@@ -581,7 +569,6 @@ def add_media_history(
         "file_id": file_id, "caption": caption,
         "time": msk_now().strftime('%d.%m %H:%M'),
     })
-
 
 # ============================================================
 # HTML / MARKDOWN (fallback)
@@ -653,7 +640,6 @@ async def extract_video_frame(video_bytes: bytes, ext_hint: str = ".mp4") -> byt
                 except Exception:
                     pass
 
-
 # ============================================================
 # TYPING
 # ============================================================
@@ -677,7 +663,6 @@ def calc_typing_delay(text: str, segment_index: int = 0) -> float:
         delay *= SEPARATED_TYPING_MULTIPLIER
     return max(TYPING_MIN_DELAY, min(TYPING_MAX_DELAY * (1 + segment_index * 0.5), delay))
 
-
 # ============================================================
 # MEMORY EXTRACTION
 # ============================================================
@@ -690,71 +675,6 @@ def clean_json_text(text: str) -> str:
     if text.endswith("```"):
         text = text[:-3]
     return text.strip()
-
-
-# ============================================================
-# ОПЕЧАТКИ
-# ============================================================
-_EN_ADJ = {
-    'q': 'wa', 'w': 'qeas', 'e': 'wrsd', 'r': 'etdf', 't': 'ryfg',
-    'y': 'tugh', 'u': 'yihj', 'i': 'uojk', 'o': 'ipkl', 'p': 'ol',
-    'a': 'qwsxz', 's': 'awedxz', 'd': 'serfcx', 'f': 'drtgvc', 'g': 'ftyhbv',
-    'h': 'gyujnb', 'j': 'huikmn', 'k': 'jiolm', 'l': 'kop',
-    'z': 'asx', 'x': 'zsdc', 'c': 'xdfv', 'v': 'cfgb', 'b': 'vghn',
-    'n': 'bhjm', 'm': 'njk',
-}
-_RU_ADJ = {
-    'й': 'цф', 'ц': 'йуыв', 'у': 'цкeв', 'к': 'уенa', 'е': 'кнр',
-    'н': 'егт', 'г': 'нш', 'ш': 'гщ', 'щ': 'шз', 'з': 'щх',
-    'х': 'зъ', 'ъ': 'х',
-    'ф': 'йыa', 'ы': 'фцв', 'в': 'ыуа', 'а': 'впf', 'п': 'ар',
-    'р': 'по', 'о': 'рл', 'л': 'од', 'д': 'лж', 'ж': 'дэ', 'э': 'ж',
-    'я': 'ч', 'ч': 'яс', 'с': 'чм', 'м': 'си', 'и': 'мт',
-    'т': 'иь', 'ь': 'тб', 'б': 'ью', 'ю': 'б',
-}
-
-_TYPO_SKIP_PREFIXES = ("http://", "https://", "www.", "t.me/", "@", "#", "/", "`", "```")
-
-
-def _apply_typo_word(word: str) -> str:
-    if len(word) < 3:
-        return word
-    letter_positions = [i for i, c in enumerate(word) if c.isalpha()]
-    if len(letter_positions) < 3:
-        return word
-    pos = random.choice(letter_positions[1:])
-    c = word[pos]
-    adj = _EN_ADJ.get(c.lower()) or _RU_ADJ.get(c.lower())
-    if not adj:
-        return word
-    sub = random.choice(adj)
-    if c.isupper():
-        sub = sub.upper()
-    return word[:pos] + sub + word[pos + 1:]
-
-
-def add_typos(text: str, probability: float = 0.04) -> str:
-    if not text or probability <= 0:
-        return text
-    parts = re.split(r'(\s+)', text)
-    out: list[str] = []
-    for part in parts:
-        if not part or part.isspace():
-            out.append(part)
-            continue
-        low = part.lower()
-        if any(low.startswith(p) for p in _TYPO_SKIP_PREFIXES):
-            out.append(part)
-            continue
-        if any(ch in part for ch in ('`', '\\', '_', '*', '[', ']', '(', ')')):
-            out.append(part)
-            continue
-        if random.random() > probability:
-            out.append(part)
-            continue
-        out.append(_apply_typo_word(part))
-    return ''.join(out)
-
 
 # ============================================================
 # УТИЛИТЫ-МАРКЕРЫ
@@ -771,6 +691,9 @@ SEPARATOR_PATTERN = re.compile(r'!\s*sep[ae]rate(?![A-Za-z])', re.IGNORECASE)
 
 REACT_PATTERN = re.compile(r'!\s*react\s*:\s*([^\s\n]+)', re.IGNORECASE)
 WHY_PATTERN = re.compile(r'!\s*why\s*:\s*([^\n]+)', re.IGNORECASE)
+
+SEARCH_MARKER_PATTERN = re.compile(r'!\s*search(?![A-Za-z])', re.IGNORECASE)
+CHART_MARKER_PATTERN = re.compile(r'!\s*chart(?![A-Za-z])', re.IGNORECASE)
 
 
 def split_by_separator(text: str, max_parts: int = MAX_SEPARATE_PARTS) -> list[str]:
@@ -798,7 +721,9 @@ def extract_utility_markers(text: str) -> tuple[str, list[str], dict[str, str]]:
                 extras["user_info_id"] = m.group(1)
         text = pat.sub(' ', text)
     text = re.sub(r'[ \t]{2,}', ' ', text)
-    text = re.sub(r'[ \t]+([,.!?;:])', r'\1', text)
+    # Пробел перед пунктуацией убираем ТОЛЬКО если знак стоит отдельно
+    # (за ним пробел или конец строки). Иначе "фолз !раз" → "фолз!раз" терял пробел.
+    text = re.sub(r'[ \t]+([,.!?;:])(?=[ \t\n]|$)', r'\1', text)
     text = re.sub(r'[ \t]+\n', '\n', text)
     text = re.sub(r'\n{3,}', '\n\n', text)
     return text.strip(), markers, extras
@@ -825,6 +750,27 @@ def process_ai_response(raw: str, separate_enabled: bool = True) -> tuple[list[s
         segments = [raw_clean]
     clean_segments = [s.strip() for s in segments if s and s.strip()]
     return clean_segments, markers
+
+
+def scrub_stray_markers(text: str) -> str:
+    """
+    Страховка: удаляет уцелевшие маркеры утилит из текста перед отправкой.
+    НЕ трогает одиночные '!' и слова после них — только известные маркеры.
+    """
+    if not text:
+        return text
+    pats = [
+        SEPARATOR_PATTERN, REACT_PATTERN, WHY_PATTERN,
+        SEARCH_MARKER_PATTERN, CHART_MARKER_PATTERN,
+        *UTILITY_PATTERNS.values(),
+    ]
+    for pat in pats:
+        text = pat.sub(' ', text)
+    text = re.sub(r'[ \t]{2,}', ' ', text)
+    text = re.sub(r'[ \t]+([,.!?;:])(?=[ \t\n]|$)', r'\1', text)
+    text = re.sub(r'[ \t]+\n', '\n', text)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text.strip()
 
 
 def extract_reaction_and_why(text: str) -> tuple[list[str], str | None, str | None]:
@@ -879,7 +825,6 @@ def clean_extra_text(raw: str) -> list[str]:
     cleaned = WHY_PATTERN.sub(' ', cleaned)
     cleaned = re.sub(r'[ \t]{2,}', ' ', cleaned).strip()
     return [s.strip() for s in cleaned.split('\n\n') if s and s.strip()]
-
 
 # ============================================================
 # STICKERS/GIFS
@@ -949,7 +894,6 @@ def is_battle_command(text: str) -> bool:
     t = (text or "").strip().lower()
     return bool(re.match(r'^(кульш\s+)?(battle|баттл|батл)$', t))
 
-
 # ============================================================
 # FEMBOY SCALE
 # ============================================================
@@ -1001,7 +945,6 @@ def is_femboy_battle_command(text: str) -> bool:
         t,
     ))
 
-
 # ============================================================
 # LOOKSMAXXING AI RULES
 # ============================================================
@@ -1023,7 +966,6 @@ FEMBOY_TIER_RULES_STRICT = (
     "ИСПОЛЬЗУЙ ТОЛЬКО ЭТИ НАЗВАНИЯ. Не выдумывай новые. "
     "Если на фото не человек — tier 'N/A', gender 'N/A'."
 )
-
 
 # ============================================================
 # SAFE GIT UPDATE
@@ -1067,7 +1009,6 @@ def check_python_syntax(fpath: str) -> str | None:
 
 
 def check_all_syntax(repo_path: str) -> list[str]:
-    """Возвращает список ошибок синтаксиса во всех .py файлах репозитория."""
     errors: list[str] = []
     try:
         for root, dirs, files in os.walk(repo_path):
@@ -1094,11 +1035,6 @@ def repo_root(fpath: str) -> str:
 
 
 def safe_check_import(fpath: str, timeout: int = 60) -> str | None:
-    """
-    Импортирует entry-модуль в subprocess и вызывает _smoke_check() если он есть.
-    Это ловит не только syntax/import-ошибки, но и отсутствующие функции,
-    к которым app.py обращается из main()/register().
-    """
     if not os.path.isfile(fpath):
         return None
     root = repo_root(fpath)
@@ -1120,7 +1056,6 @@ def safe_check_import(fpath: str, timeout: int = 60) -> str | None:
         "        smoke()\n"
         "    print('SMOKE_OK')\n"
         "except SystemExit:\n"
-        "    # graceful exit (например, нет AI ключей) — считаем как pass\n"
         "    print('SMOKE_OK_SYSEXIT')\n"
         "except BaseException:\n"
         "    import traceback\n"
@@ -1158,13 +1093,6 @@ def find_entry_file(repo_path: str) -> str | None:
 
 
 async def perform_safe_git_update(repo_path: str) -> tuple[str, str]:
-    """
-    Обновление с многошаговым откатом.
-    Пробуем HEAD, HEAD~1, ..., HEAD~MAX_BACK_STEPS. На каждом шаге:
-      - проверяем синтаксис всех .py
-      - запускаем smoke-тест (импорт src.app + _smoke_check)
-    Останавливаемся на первом рабочем коммите.
-    """
     rc, out, err = run_git(["rev-parse", "HEAD"], cwd=repo_path, timeout=10)
     if rc != 0 or not out.strip():
         return "error", f"git rev-parse: {err or out or 'unknown error'}"
@@ -1189,24 +1117,20 @@ async def perform_safe_git_update(repo_path: str) -> tuple[str, str]:
     tried_errors: list[str] = []
 
     for step in range(0, MAX_BACK_STEPS + 1):
-        # Узнаём хеш коммита на шаге step
         if step == 0:
             rc_h, out_h, err_h = run_git(["rev-parse", "HEAD"], cwd=repo_path, timeout=10)
         else:
             rc_h, out_h, err_h = run_git(["rev-parse", f"HEAD~{step}"], cwd=repo_path, timeout=10)
         if rc_h != 0 or not out_h.strip():
-            # Больше некуда откатываться
             break
         current_hash = out_h.strip()
 
-        # Откатываем рабочее дерево, если это не HEAD
         if step > 0:
             rc_reset, out_r, err_r = run_git(["reset", "--hard", current_hash], cwd=repo_path, timeout=30)
             if rc_reset != 0:
                 tried_errors.append(f"шаг {step}: git reset --hard fail: {err_r or out_r or 'unknown'}")
                 continue
 
-        # 1) syntax check
         syntax_errors = check_all_syntax(repo_path)
         if syntax_errors:
             tried_errors.append(
@@ -1214,7 +1138,6 @@ async def perform_safe_git_update(repo_path: str) -> tuple[str, str]:
             )
             continue
 
-        # 2) smoke check (импорт + _smoke_check)
         entry = find_entry_file(repo_path)
         if entry:
             import_err = await asyncio.to_thread(safe_check_import, entry)
@@ -1224,7 +1147,6 @@ async def perform_safe_git_update(repo_path: str) -> tuple[str, str]:
                 )
                 continue
 
-        # Успех
         if step == 0:
             logger.info(f"✅ Обновление прошло проверку на {current_hash[:7]}")
             return "ok", pull_out
@@ -1237,17 +1159,15 @@ async def perform_safe_git_update(repo_path: str) -> tuple[str, str]:
                 f"Причина последнего отказа:\n{summary[:1200]}"
             )
 
-    # Ничего рабочего не нашли — откатываемся к prev_hash как последняя надежда
     if prev_hash:
         run_git(["reset", "--hard", prev_hash], cwd=repo_path, timeout=30)
     return "error", (
-        "ни один из последних коммитов (включая откат на "
-        f"{MAX_BACK_STEPS}) не прошёл smoke-проверку. Вернул рабочее дерево на {prev_hash[:7]}.\n\n"
+        f"ни один из последних коммитов (включая откат на {MAX_BACK_STEPS}) не прошёл smoke-проверку. "
+        f"Вернул рабочее дерево на {prev_hash[:7]}.\n\n"
         + "\n\n".join(tried_errors[:5])[:1500]
     )
 
 
-# Загружаем сохранённые настройки
 try:
     load_user_configs()
     logger.info(f"✅ Загружено настроек пользователей: {len(user_configs)}")

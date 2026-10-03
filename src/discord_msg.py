@@ -39,7 +39,6 @@ from src.util import (
     voice_recognition_enabled,
     voice_recv_available,
     AudioSegment,
-    add_typos,
     tr,
     voice_client,
     add_bot_memory,
