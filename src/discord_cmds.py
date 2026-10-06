@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.41.3
+# Kulsh GPT | v2.42.1
 # by (main author): starfall-apk
 # coauthor & bot hosting: pomidorka1515
 
@@ -35,31 +35,39 @@ from src.util import (
     MODEL_LIST,
     REACT_PATTERN,
     WHY_PATTERN,
-    ds_user,
-    extract_reaction_and_why,
-    human_uptime,
-    json_str,
-    process_ai_response,
-    save_user_configs,
-    scrub_stray_markers,
-    split_emojis,
-    tr,
+    RECALL_MEDIA_ID_PATTERN,
     add_bot_memory,
-    chat_media_history,
-    download_image_bytes,
-    get_user_config,
-    get_user_credits,
-    logger,
-    model_display_name,
-    read_log_tail,
-
-    AUTHORIZED_UPDATERS,
-    GIF_POOL,
     as_member,
     calc_typing_delay,
+    chat_media_history,
     clean_extra_text,
     clean_json_text,
+    download_image_bytes,
+    ds_user,
+    extract_reaction_and_why,
+    extract_video_frame,
+    find_media_by_message_id,
+    get_ds_scope,
+    get_effective_config,
+    get_top_donators,
+    get_user_config,
+    get_user_credits,
+    get_write_config,
+    human_uptime,
+    json_str,
+    logger,
+    model_display_name,
     premium_functions_enabled,
+    process_ai_response,
+    read_log_tail,
+    save_ds_scopes,
+    save_user_configs,
+    scrub_stray_markers,
+    set_ds_scope,
+    split_emojis,
+    tr,
+    AUTHORIZED_UPDATERS,
+    GIF_POOL,
 )
 
 ds_bot: Any = None
@@ -106,9 +114,10 @@ async def get_avatar_description_ds(message: discord.Message, chat_id: int, user
         img_bytes = await download_image_bytes(target.display_avatar.url)
         prompt = (
             f"Ты только что посмотрел аватарку пользователя {name}. "
-            f"Опиши коротко (1-2 предложения) в стиле Кульша. Без markdown."
+            f"Опиши коротко (1-2 предложения) в стиле Кульша. Без markdown. "
+            f"Без маркеров."
             if lang == "ru" else
-            f"You've just seen the avatar of {name}. Describe briefly in Kulsh's style."
+            f"You've just seen the avatar of {name}. Describe briefly. No markers."
         )
         desc = json_str(await ask_ai_async(
             prompt=prompt, image_bytes=img_bytes, image_mime="image/jpeg",
@@ -121,7 +130,7 @@ async def get_avatar_description_ds(message: discord.Message, chat_id: int, user
 
 
 async def execute_utility_ds(message: discord.Message, marker: str, chat_id: int, user_id: int) -> None:
-    cfg = get_user_config("ds", chat_id, user_id)
+    cfg = get_effective_config("ds", chat_id, user_id)
     if marker in ("sticker", "gif"):
         if not cfg.get("stickers_enabled", True):
             return
@@ -140,21 +149,65 @@ def _ds_bot_user() -> discord.ClientUser | None:
         return None
 
 
+async def fetch_last_media_ds(chat_id: int) -> tuple[bytes | None, str, int | None]:
+    history = list(chat_media_history.get(f"ds_{chat_id}", []))
+    if not history:
+        return None, "", None
+    for item in reversed(history):
+        url = item.get("url")
+        mtype = str(item.get("type") or "")
+        mid = item.get("message_id")
+        if not url:
+            continue
+        try:
+            if mtype == "photo":
+                b = await download_image_bytes(url)
+                if b:
+                    return b, "photo", mid
+            elif mtype in ("video", "animation"):
+                raw = await download_image_bytes(url)
+                frame = await extract_video_frame(raw, ".mp4")
+                if frame:
+                    return frame, mtype, mid
+        except Exception as e:
+            logger.warning(f"fetch_last_media_ds ({mtype}): {e}")
+            continue
+    return None, "", None
+
+
+async def fetch_media_by_id_ds(chat_id: int, message_id: int) -> tuple[bytes | None, str]:
+    item = find_media_by_message_id(f"ds_{chat_id}", message_id)
+    if not item:
+        return None, ""
+    url = item.get("url")
+    mtype = str(item.get("type") or "")
+    if not url:
+        return None, ""
+    try:
+        if mtype == "photo":
+            b = await download_image_bytes(url)
+            return (b, "photo") if b else (None, "")
+        elif mtype in ("video", "animation"):
+            raw = await download_image_bytes(url)
+            frame = await extract_video_frame(raw, ".mp4")
+            return (frame, mtype) if frame else (None, "")
+    except Exception as e:
+        logger.warning(f"fetch_media_by_id_ds: {e}")
+    return None, ""
+
+
 async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: int,
                               answer_raw: str, user_text: str | None = None) -> None:
-    cfg = get_user_config("ds", chat_id, user_id)
+    cfg = get_effective_config("ds", chat_id, user_id)
     lang = cfg.get("language", "ru")
     separate_enabled = cfg.get("separate_enabled", True)
     orig_user_text = (user_text or message.content or "").strip()
 
+    # ---- react / why ----
     applied_reactions: list[str] = []
     if cfg.get("reactions_enabled", True):
-        m = REACT_PATTERN.search(answer_raw or "")
-        why_m = WHY_PATTERN.search(answer_raw or "")
-        if m:
-            emojis_str = m.group(1)
-            why_text = why_m.group(1).strip() if why_m else ""
-            # Определяем target
+        cleaned_text, emojis_str, why_text = extract_reaction_and_why(answer_raw or "")
+        if emojis_str:
             reply_target: discord.Message | None = None
             if message.reference and message.reference.resolved and isinstance(message.reference.resolved, discord.Message):
                 reply_target = message.reference.resolved
@@ -177,11 +230,9 @@ async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: i
                     add_bot_memory(f"ds_{chat_id}", f"[реакция {' '.join(applied_reactions)}] {why_text}")
                 elif applied_reactions:
                     add_bot_memory(f"ds_{chat_id}", f"[реакция {' '.join(applied_reactions)}]")
-            else:
-                logger.info("Пропускаю DS реакцию: цель — собственное сообщение бота")
-        answer_raw = REACT_PATTERN.sub(' ', answer_raw or "")
-        answer_raw = WHY_PATTERN.sub(' ', answer_raw).strip()
+        answer_raw = cleaned_text
 
+    # ---- search ----
     if cfg.get("web_search_enabled", True):
         query, _ = extract_search_marker(answer_raw or "")
         if query:
@@ -197,6 +248,54 @@ async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: i
             else:
                 answer_raw = tr(lang, "search_nothing")
 
+    # ---- !recall_media (с ID и без) ----
+    rm_id: int | None = None
+    rm_match = RECALL_MEDIA_ID_PATTERN.search(answer_raw or "")
+    if rm_match:
+        try:
+            rm_id = int(rm_match.group(1))
+        except ValueError:
+            rm_id = None
+    has_recall = bool(re.search(r'!\s*recall[\s_]*media(?![A-Za-z])', answer_raw or "", re.IGNORECASE))
+    if has_recall or rm_id is not None:
+        media_bytes: bytes | None = None
+        media_kind: str = ""
+        try:
+            if rm_id is not None:
+                media_bytes, media_kind = await fetch_media_by_id_ds(chat_id, rm_id)
+            else:
+                # Сначала пробуем медиа, на которое ответил пользователь
+                if message.reference and message.reference.resolved and isinstance(message.reference.resolved, discord.Message):
+                    parent_id = message.reference.resolved.id
+                    media_bytes, media_kind = await fetch_media_by_id_ds(chat_id, parent_id)
+                if media_bytes is None:
+                    media_bytes, media_kind, _ = await fetch_last_media_ds(chat_id)
+        except Exception as e:
+            logger.warning(f"DS recall fetch: {e}")
+            media_bytes, media_kind = None, ""
+
+        if media_bytes:
+            kind_label = {"photo": "фото", "video": "видео", "animation": "гифку"}.get(media_kind, "медиа")
+            follow_prompt = (
+                f"Пользователь написал: {orig_user_text or 'покажи последнее медиа'}\n\n"
+                f"Вот медиа из чата — это {kind_label}. Опиши коротко и живо, что на нём, "
+                f"в стиле Кульша. Маленькими буквами. Без маркеров."
+            )
+            new_answer = await ask_ai_async(
+                prompt=follow_prompt, image_bytes=media_bytes, image_mime="image/jpeg",
+                chat_id=chat_id, user_id=user_id, platform="ds",
+            )
+            if new_answer and new_answer.strip():
+                answer_raw = new_answer
+            else:
+                answer_raw = tr(lang, "recall_fail")
+        else:
+            answer_raw = tr(lang, "recall_fail")
+        # чистим ID-маркер, если остался
+        answer_raw = RECALL_MEDIA_ID_PATTERN.sub(' ', answer_raw)
+        answer_raw = re.sub(r'!\s*recall[\s_]*media', ' ', answer_raw, flags=re.IGNORECASE)
+
+    # ---- chart ----
     if premium_functions_enabled:
         chart_spec, remaining = extract_chart_marker(answer_raw or "")
         if chart_spec:
@@ -229,12 +328,6 @@ async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: i
             logger.warning(f"DS avatar: {e}")
     if "recall_media" in markers:
         markers.remove("recall_media")
-        history = list(chat_media_history.get(f"ds_{chat_id}", []))
-        if history:
-            last = history[-3:]
-            lines = [f"- {it.get('type', 'media')} {it.get('sender', '?')}: {(it.get('caption') or '')[:100]}"
-                     for it in last]
-            extra_segments.append("📎 " + "\n".join(lines))
 
     all_segments = clean_segments + extra_segments
     if not all_segments:
@@ -275,7 +368,8 @@ async def send_ds_ai_response(message: discord.Message, chat_id: int, user_id: i
 # CONFIG
 # ============================================================
 def ds_config_embed(chat_id: int, user_id: int) -> discord.Embed:
-    cfg = get_user_config("ds", chat_id, user_id)
+    scope = get_ds_scope(chat_id)
+    cfg = get_effective_config("ds", chat_id, user_id)
     lang = cfg.get("language", "ru")
     series = tr(lang, "on") if cfg.get("series_reminder_enabled", True) else tr(lang, "off")
     stickers = tr(lang, "on") if cfg.get("stickers_enabled", True) else tr(lang, "off")
@@ -292,12 +386,19 @@ def ds_config_embed(chat_id: int, user_id: int) -> discord.Embed:
     mode_raw = str(cfg.get("communication_mode", "kent"))
     mode_disp = tr(lang, "mode_assistant") if mode_raw == "assistant" else (tr(lang, "mode_pro") if mode_raw == "pro" else tr(lang, "mode_kent"))
 
+    if scope == "shared":
+        scope_disp = "🌐 Общие для канала (админ)" if lang == "ru" else "🌐 Shared for channel (admin)"
+    else:
+        scope_disp = "👤 Личные для каждого" if lang == "ru" else "👤 Per-user"
+
     title = "✦ Настройки Кульша ✦" if lang == "ru" else "✦ Kulsh Settings ✦"
-    desc = ("Текущие параметры канала. Изменение — текстом через `кульш конфиг <параметр> <значение>`."
+    desc = ("Область настроек: админ может задать общий набор для канала или разрешить каждому свои."
             if lang == "ru" else
-            "Current channel parameters. Change via text `kulsh config <param> <value>`.")
+            "Config scope: admin can set shared for the channel or allow per-user.")
     embed = discord.Embed(title=title, color=0x10B981, description=desc)
+
     if lang == "ru":
+        embed.add_field(name="🎛 Область", value=scope_disp, inline=False)
         embed.add_field(name="🌐 Язык", value=lang_disp, inline=True)
         embed.add_field(name="🌓 Тема", value=theme_disp, inline=True)
         embed.add_field(name="🧩 Режим", value=mode_disp, inline=True)
@@ -311,7 +412,27 @@ def ds_config_embed(chat_id: int, user_id: int) -> discord.Embed:
         embed.add_field(name="🔎 Веб-поиск", value=websearch, inline=True)
         embed.add_field(name="🎬 Серия", value=series, inline=True)
         embed.add_field(name="📝 Кастомный промпт", value=prompt, inline=False)
+        embed.add_field(
+            name="📖 Команды",
+            value=(
+                "`кульш конфиг область для_себя|для_всех`\n"
+                "`кульш конфиг язык ru|en`\n"
+                "`кульш конфиг тема тёмная|светлая`\n"
+                "`кульш конфиг режим кент|ассистент`\n"
+                "`кульш конфиг модель <номер|авто>`\n"
+                "`кульш конфиг температура <0.0-2.0>`\n"
+                "`кульш конфиг разбивка вкл|выкл`\n"
+                "`кульш конфиг реакции вкл|выкл`\n"
+                "`кульш конфиг стикеры вкл|выкл`\n"
+                "`кульш конфиг автоответ вкл|выкл`\n"
+                "`кульш конфиг рандом вкл|выкл`\n"
+                "`кульш конфиг поиск вкл|выкл`\n"
+                "`кульш конфиг промпт <текст|сброс>`"
+            ),
+            inline=False,
+        )
     else:
+        embed.add_field(name="🎛 Scope", value=scope_disp, inline=False)
         embed.add_field(name="🌐 Language", value=lang_disp, inline=True)
         embed.add_field(name="🌓 Theme", value=theme_disp, inline=True)
         embed.add_field(name="🧩 Mode", value=mode_disp, inline=True)
@@ -331,10 +452,12 @@ def ds_config_embed(chat_id: int, user_id: int) -> discord.Embed:
 async def ds_handle_config(message: discord.Message, user_id: int) -> None:
     chat_id = message.channel.id
     member = as_member(message.author)
-    if message.guild and not (member and member.guild_permissions.administrator):
-        cfg = get_user_config("ds", chat_id, user_id)
-        lang = cfg.get("language", "ru")
-        await message.reply(tr(lang, "ds_only_admins"))
+    is_admin = bool(member and member.guild_permissions.administrator) if message.guild else True
+    scope = get_ds_scope(chat_id)
+    if scope == "shared" and not is_admin:
+        # не админ в shared-режиме — показываем только его личные (self) значения
+        embed = ds_config_embed(chat_id, user_id)
+        await message.reply(embed=embed)
         return
     embed = ds_config_embed(chat_id, user_id)
     await message.reply(embed=embed)
@@ -342,11 +465,17 @@ async def ds_handle_config(message: discord.Message, user_id: int) -> None:
 
 async def ds_handle_config_param(message: discord.Message, user_id: int, parts: list[str]) -> None:
     chat_id = message.channel.id
-    cfg = get_user_config("ds", chat_id, user_id)
-    lang = cfg.get("language", "ru")
+    scope = get_ds_scope(chat_id)
+    cfg_read = get_effective_config("ds", chat_id, user_id)
+    lang = cfg_read.get("language", "ru")
     member = as_member(message.author)
-    if message.guild and not (member and member.guild_permissions.administrator):
-        await message.reply(tr(lang, "ds_only_admins"))
+    is_admin = bool(member and member.guild_permissions.administrator) if message.guild else True
+    # В shared-режиме менять может только админ; в self — каждый свои.
+    if scope == "shared" and not is_admin:
+        await message.reply(
+            "в этом канале настройки общие и меняет только админ" if lang == "ru" else
+            "shared config in this channel, only admin can change"
+        )
         return
     if len(parts) < 3:
         await ds_handle_config(message, user_id)
@@ -355,7 +484,22 @@ async def ds_handle_config_param(message: discord.Message, user_id: int, parts: 
     val = parts[3].lower() if len(parts) >= 4 else ""
     bool_on = val in ("вкл", "on", "1", "true", "да", "yes")
 
-    if param in ("язык", "language"):
+    # Запись всегда в правильный конфиг
+    cfg = get_write_config("ds", chat_id, user_id)
+
+    if param in ("область", "scope"):
+        if not is_admin:
+            await message.reply("только админ может менять область настроек")
+            return
+        if val in ("для_себя", "для-себя", "self", "личные", "личная"):
+            set_ds_scope(chat_id, "self")
+            await message.reply("👤 Область: личные настройки для каждого")
+        elif val in ("для_всех", "для-всех", "shared", "общие", "общая"):
+            set_ds_scope(chat_id, "shared")
+            await message.reply("🌐 Область: общие настройки для всего канала (задаёт админ)")
+        else:
+            await message.reply("укажи `для_себя` или `для_всех`")
+    elif param in ("язык", "language"):
         if val in ("ru", "русский", "russian"):
             cfg["language"] = "ru"; save_user_configs()
             await message.reply(tr("ru", "ds_setting_lang", tr("ru", "russian")))
@@ -450,7 +594,7 @@ def ds_slash_help(lang: str) -> str:
 def ds_slash_menu(lang: str) -> str:
     if lang == "ru":
         return (
-            "# ✦ Кульш AI — меню ✦\n\n✦彡巛〢 ✦ 彡 巛 〢 ✦\n\n"
+            "# ✦ Кульш AI — меню ✦\n\n---\n\n"
             "Открытая языковая модель с набором инструментов.\n\n"
             "**Основные**\n\n- `/start` — приветствие\n- `/help` — полный список команд\n"
             "- `/status` — состояние бота\n- `/config` — настройки канала\n"
@@ -464,7 +608,7 @@ def ds_slash_menu(lang: str) -> str:
             f"🍷🗿 {MINI_APP_URL}"
         )
     return (
-        "# ✦ Kulsh AI — menu ✦\n\n✦彡巛〢 ✦ 彡 巛 〢 ✦\n\n"
+        "# ✦ Kulsh AI — menu ✦\n\n---\n\n"
         "An open-source language model with built-in tools.\n\n"
         f"🍷🗿 {MINI_APP_URL}"
     )
@@ -473,14 +617,14 @@ def ds_slash_menu(lang: str) -> str:
 def ds_slash_start(lang: str) -> str:
     if lang == "ru":
         return (
-            "# 🍷🗿 Кульш на связи\n\n✦彡巛〢 ✦ 彡 巛 〢 ✦\n\n"
+            "# 🍷🗿 Кульш на связи\n\n---\n\n"
             "Открытая языковая модель с анализом изображений.\n\n"
             "**🚀 С чего начать**\n\n- `/menu` — все разделы\n- `/help` — команды\n"
             "- `/status` — состояние\n- `/config` — настройки\n\n"
             f"🍷🗿 {MINI_APP_URL}"
         )
     return (
-        "# 🍷🗿 Kulsh is online\n\n✦彡巛〢 ✦ 彡 巛 〢 ✦\n\n"
+        "# 🍷🗿 Kulsh is online\n\n---\n\n"
         "An open-source language model with image analysis.\n\n"
         f"🍷🗿 {MINI_APP_URL}"
     )
@@ -489,7 +633,7 @@ def ds_slash_start(lang: str) -> str:
 def ds_lang_of(interaction: discord.Interaction) -> str:
     chat_id = interaction.channel_id or 0
     user_id = interaction.user.id
-    cfg = get_user_config("ds", chat_id, user_id)
+    cfg = get_effective_config("ds", chat_id, user_id)
     lang = cfg.get("language", "ru")
     return lang if isinstance(lang, str) else "ru"
 
@@ -511,7 +655,7 @@ async def ds_slash_help(interaction: discord.Interaction) -> None:
 
 async def ds_slash_status(interaction: discord.Interaction) -> None:
     lang = ds_lang_of(interaction)
-    cfg = get_user_config("ds", interaction.channel_id or 0, interaction.user.id)
+    cfg = get_effective_config("ds", interaction.channel_id or 0, interaction.user.id)
     mode_raw = str(cfg.get("communication_mode", "kent"))
     mode_label = tr(lang, "mode_assistant") if mode_raw == "assistant" else (tr(lang, "mode_pro") if mode_raw == "pro" else tr(lang, "mode_kent"))
     try:
@@ -519,7 +663,7 @@ async def ds_slash_status(interaction: discord.Interaction) -> None:
     except Exception:
         latency_ms = 50
     text = (
-        f"# 🟢 {tr(lang, 'status_title')}\n\n✦ 彡 巛 〢 ✦ 彡 巛 〢 ✦\n\n"
+        f"# 🟢 {tr(lang, 'status_title')}\n\n---\n\n"
         f"**{tr(lang, 'status_online')}**\n\n"
         f"- {tr(lang, 'status_uptime')}: `{human_uptime()}`\n"
         f"- {tr(lang, 'status_latency')}: `~{latency_ms} ms`\n"
@@ -533,7 +677,7 @@ async def ds_slash_status(interaction: discord.Interaction) -> None:
 async def ds_slash_donate(interaction: discord.Interaction) -> None:
     lang = ds_lang_of(interaction)
     text = (
-        f"# {tr(lang, 'donate_title')}\n\n✦ 彡 巛 〢 ✦ 彡 巛 〢 ✦\n\n"
+        f"# {tr(lang, 'donate_title')}\n\n---\n\n"
         f"{tr(lang, 'donate_intro')}\n\n"
         f"- {tr(lang, 'donate_online')}: {DONATE_URL}\n- 🔗 GitHub: {GITHUB_URL}"
     )
@@ -546,16 +690,40 @@ async def ds_slash_credits(interaction: discord.Interaction) -> None:
     await interaction.response.send_message(tr(lang, "credits_balance", creds, DAILY_CREDITS))
 
 
-async def ds_slash_config(interaction: discord.Interaction) -> None:
+@app_commands.describe(scope="Config scope (admin only) / Область (только админ)")
+async def ds_slash_config(interaction: discord.Interaction, scope: str | None = None) -> None:
     chat_id = interaction.channel_id or 0
     user_id = interaction.user.id
     lang = ds_lang_of(interaction)
     member = as_member(interaction.user)
-    if interaction.guild and not (member and member.guild_permissions.administrator):
-        await interaction.response.send_message(tr(lang, "ds_only_admins"), ephemeral=True)
+    is_admin = True
+    if interaction.guild:
+        is_admin = bool(member and member.guild_permissions.administrator)
+
+    if scope:
+        if not is_admin:
+            await interaction.response.send_message(tr(lang, "ds_only_admins"), ephemeral=True)
+            return
+        s = scope.lower().strip()
+        if s in ("self", "для_себя", "для-себя", "личные"):
+            set_ds_scope(chat_id, "self")
+            await interaction.response.send_message("👤 Область: личные для каждого" if lang == "ru" else "👤 Scope: per-user")
+            return
+        if s in ("shared", "для_всех", "для-всех", "общие"):
+            set_ds_scope(chat_id, "shared")
+            await interaction.response.send_message("🌐 Область: общие для канала (задаёт админ)" if lang == "ru" else "🌐 Scope: shared")
+            return
+        await interaction.response.send_message("укажи self или shared", ephemeral=True)
+        return
+
+    cur_scope = get_ds_scope(chat_id)
+    if cur_scope == "shared" and not is_admin:
+        # не админ — показываем только его собственные настройки (он их видит, но не может менять)
+        embed = ds_config_embed(chat_id, user_id)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
         return
     embed = ds_config_embed(chat_id, user_id)
-    await interaction.response.send_message(embed=embed)
+    await interaction.response.send_message(embed=embed, ephemeral=not is_admin)
 
 
 @app_commands.describe(user="Whose avatar to describe / Чью аватарку описать")
@@ -571,7 +739,7 @@ async def ds_slash_avatar(interaction: discord.Interaction, user: discord.Member
             f"Ты только что посмотрел аватарку пользователя {target.display_name}. "
             f"Опиши коротко (1-2 предложения) в стиле Кульша. Без markdown."
             if lang == "ru" else
-            f"You've just seen the avatar of {target.display_name}. Describe briefly in Kulsh's style."
+            f"You've just seen the avatar of {target.display_name}. Describe briefly."
         )
         raw = await ask_ai_async(prompt=prompt, image_bytes=img_bytes, image_mime="image/jpeg",
                                  chat_id=chat_id, user_id=user_id, platform="ds")
@@ -595,13 +763,24 @@ async def ds_slash_recall(interaction: discord.Interaction, count: int = 3) -> N
     user_id = interaction.user.id
     lang = ds_lang_of(interaction)
     n = max(1, min(10, count))
-    history = list(chat_media_history.get(f"ds_{chat_id}", []))
-    if not history:
+    media_bytes, media_kind, _ = await fetch_last_media_ds(chat_id)
+    if media_bytes is None:
         await interaction.followup.send(tr(lang, "recall_fail"))
         return
-    last = history[-n:]
-    lines = [f"- {it.get('type', 'media')} {it.get('sender', '?')}: {(it.get('caption') or '')[:120]}" for it in last]
-    await interaction.followup.send("\n".join(lines))
+    kind_label = {"photo": "фото", "video": "видео", "animation": "гифку"}.get(media_kind, "медиа")
+    prompt = (
+        f"Вот последнее медиа в чате — это {kind_label}. Опиши коротко и живо, что на нём, "
+        f"в стиле Кульша. Без маркеров."
+    )
+    raw = await ask_ai_async(prompt=prompt, image_bytes=media_bytes, image_mime="image/jpeg",
+                             chat_id=chat_id, user_id=user_id, platform="ds")
+    if raw and raw.strip():
+        for seg in clean_extra_text(raw):
+            seg = scrub_stray_markers(seg)
+            if seg:
+                await interaction.followup.send(seg)
+    else:
+        await interaction.followup.send(tr(lang, "recall_fail"))
 
 
 async def ds_slash_logs(interaction: discord.Interaction) -> None:
@@ -628,7 +807,7 @@ async def ds_slash_search(interaction: discord.Interaction, query: str) -> None:
     chat_id = interaction.channel_id or 0
     user_id = interaction.user.id
     lang = ds_lang_of(interaction)
-    cfg = get_user_config("ds", chat_id, user_id)
+    cfg = get_effective_config("ds", chat_id, user_id)
     if not cfg.get("web_search_enabled", True):
         await interaction.followup.send(tr(lang, "search_off"))
         return
@@ -695,7 +874,7 @@ async def ds_slash_psl(interaction: discord.Interaction, image: discord.Attachme
     lang = ds_lang_of(interaction)
     try:
         img_bytes = await download_image_bytes(image.url)
-        cfg = get_user_config("ds", chat_id, user_id)
+        cfg = get_effective_config("ds", chat_id, user_id)
         theme = cfg.get("theme", "dark")
         ai_data = await get_looksmaxxing_data(img_bytes, advice, lang=lang)
         if "error" in ai_data:
@@ -723,7 +902,7 @@ async def ds_slash_battle(interaction: discord.Interaction, image1: discord.Atta
     try:
         p1 = await download_image_bytes(image1.url)
         p2 = await download_image_bytes(image2.url)
-        cfg = get_user_config("ds", chat_id, user_id)
+        cfg = get_effective_config("ds", chat_id, user_id)
         theme = cfg.get("theme", "dark")
         ai_data = await get_battle_data(p1, p2, lang=lang)
         if "error" in ai_data:
@@ -748,7 +927,7 @@ async def ds_slash_femboy(interaction: discord.Interaction, image: discord.Attac
     lang = ds_lang_of(interaction)
     try:
         img_bytes = await download_image_bytes(image.url)
-        cfg = get_user_config("ds", chat_id, user_id)
+        cfg = get_effective_config("ds", chat_id, user_id)
         theme = cfg.get("theme", "dark")
         ai_data = await get_femboy_data(img_bytes, advice, lang=lang)
         if "error" in ai_data:
@@ -776,7 +955,7 @@ async def ds_slash_femboy_battle(interaction: discord.Interaction, image1: disco
     try:
         p1 = await download_image_bytes(image1.url)
         p2 = await download_image_bytes(image2.url)
-        cfg = get_user_config("ds", chat_id, user_id)
+        cfg = get_effective_config("ds", chat_id, user_id)
         theme = cfg.get("theme", "dark")
         ai_data = await get_femboy_battle_data(p1, p2, lang=lang)
         if "error" in ai_data:
