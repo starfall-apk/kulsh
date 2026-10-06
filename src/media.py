@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.41.0
+# Kulsh GPT | v2.42.0
 # by (main author): starfall-apk
 # coauthor & bot hosting: pomidorka1515
 
@@ -31,9 +31,6 @@ def _tg() -> Any:
     return tg
 
 
-# ============================================================
-# AVATAR / RECALL
-# ============================================================
 def tg_bot_id() -> int | None:
     try:
         return _tg().tg_bot.user.id if _tg().tg_bot.user else None
@@ -77,11 +74,9 @@ async def get_avatar_description_tg(
         prompt = (
             f"Ты только что посмотрел аватарку пользователя {name} {uname}. "
             f"Опиши коротко (1-2 предложения) в стиле Кульша. Без markdown. "
-            f"НЕ используй маркеры !separate, !avatar, !recall_media, !sticker, !gif, !search, !chart."
+            f"НЕ используй маркеры !separate, !avatar, !recall_media, !sticker, !gif, !search, !chart, !react, !why."
             if lang == "ru" else
-            f"You've just seen the avatar of {name} {uname}. "
-            f"Describe briefly (1-2 sentences) in Kulsh's style. No markdown. "
-            f"Do NOT use markers !separate, !avatar, !recall_media, !sticker, !gif, !search, !chart."
+            f"You've just seen the avatar of {name} {uname}. Describe briefly. No markers."
         )
         return json_str(await ask_ai_async(
             prompt=prompt, image_bytes=img_bytes, image_mime="image/jpeg",
@@ -92,95 +87,70 @@ async def get_avatar_description_tg(
         return None
 
 
-async def fetch_last_media_tg(chat_id: int) -> tuple[bytes | None, str]:
-    """Возвращает (байты изображения, тип) для последнего реально скачиваемого медиа."""
+async def fetch_last_media_tg(chat_id: int) -> tuple[bytes | None, str, int | None]:
+    """Возвращает (байты, тип, message_id) для последнего реально скачиваемого медиа."""
     history = list(chat_media_history.get(f"tg_{chat_id}", []))
     if not history:
-        return None, ""
+        return None, "", None
     for item in reversed(history):
         fid = item.get("file_id")
         mtype = str(item.get("type") or "")
+        mid = item.get("message_id")
         if not fid:
             continue
         try:
             if mtype == "photo":
                 b = await get_tg_file_bytes(_tg().tg_bot, fid)
                 if b:
-                    return b, "photo"
+                    return b, "photo", mid
             elif mtype in ("video", "animation"):
                 raw = await get_tg_file_bytes(_tg().tg_bot, fid)
                 frame = await extract_video_frame(raw, ".mp4")
                 if frame:
-                    return frame, mtype
+                    return frame, mtype, mid
         except Exception as e:
             logger.warning(f"fetch_last_media ({mtype}): {e}")
             continue
+    return None, "", None
+
+
+async def fetch_media_by_id_tg(chat_id: int, message_id: int) -> tuple[bytes | None, str]:
+    """Возвращает (байты, тип) для медиа с конкретным message_id."""
+    from src.util import find_media_by_message_id
+    item = find_media_by_message_id(f"tg_{chat_id}", message_id)
+    if not item:
+        return None, ""
+    fid = item.get("file_id")
+    mtype = str(item.get("type") or "")
+    if not fid:
+        return None, ""
+    try:
+        if mtype == "photo":
+            b = await get_tg_file_bytes(_tg().tg_bot, fid)
+            return (b, "photo") if b else (None, "")
+        elif mtype in ("video", "animation"):
+            raw = await get_tg_file_bytes(_tg().tg_bot, fid)
+            frame = await extract_video_frame(raw, ".mp4")
+            return (frame, mtype) if frame else (None, "")
+    except Exception as e:
+        logger.warning(f"fetch_media_by_id: {e}")
     return None, ""
 
 
 async def get_recall_media_description_tg(
     message: telebot.types.Message, chat_id: int, user_id: int, n: int = 3, lang: str = "ru",
 ) -> str | None:
-    history = list(chat_media_history.get(f"tg_{chat_id}", []))
-    if not history:
-        return None
-    last = history[-n:]
-    img_bytes: bytes | None = None
-    img_kind: str = ""
-    for item in reversed(last):
-        fid = item.get("file_id")
-        mtype = str(item.get("type") or "")
-        if not fid:
-            continue
-        try:
-            if mtype == "photo":
-                img_bytes = await get_tg_file_bytes(_tg().tg_bot, fid)
-                img_kind = "photo"
-                break
-            elif mtype in ("video", "animation"):
-                raw = await get_tg_file_bytes(_tg().tg_bot, fid)
-                frame = await extract_video_frame(raw, ".mp4")
-                if frame:
-                    img_bytes = frame
-                    img_kind = mtype
-                    break
-        except Exception as e:
-            logger.warning(f"recall media fetch ({mtype}): {e}")
-            continue
-
+    """Резервный путь — если бот вызвал !recall_media из обычного чата, а не через send_tg_ai_response."""
+    img_bytes, img_kind, _ = await fetch_last_media_tg(chat_id)
     if img_bytes is None:
-        lines = []
-        for item in last:
-            mtype = item.get("type", "media")
-            sender = item.get("sender", "?")
-            when = item.get("time", "")
-            cap = (item.get("caption") or "")[:120]
-            lines.append(f"- {mtype} от {sender} ({when}): {cap}")
-        meta = "\n".join(lines)
-        try:
-            prompt = (
-                f"Ты вспоминаешь недавние медиа. Список:\n{meta}\n\n"
-                f"Коротко прокомментируй в стиле Кульша. Без markdown. "
-                f"НЕ используй маркеры !separate, !avatar, !recall_media, !sticker, !gif, !search, !chart."
-                if lang == "ru" else
-                f"You recall recent media. List:\n{meta}\n\n"
-                f"Comment briefly in Kulsh's style. No markdown."
-            )
-            return json_str(await ask_ai_async(
-                prompt=prompt, chat_id=chat_id, user_id=user_id, platform="tg",
-            )) or None
-        except Exception as e:
-            logger.warning(f"recall meta: {e}")
-            return None
-
+        return None
     try:
         kind_label = {"photo": "фото", "video": "видео", "animation": "гифку"}.get(img_kind, "медиа")
         prompt = (
-            f"Ты вспоминаешь последнее медиа в чате — это {kind_label}. Опиши коротко, что на нём, "
-            f"в стиле Кульша. Без markdown. "
-            f"НЕ используй маркеры !separate, !avatar, !recall_media, !sticker, !gif, !search, !chart."
+            f"Последнее медиа в чате — это {kind_label}. Опиши коротко, что на нём, в стиле Кульша. "
+            f"Без markdown. НЕ используй маркеры !separate, !avatar, !recall_media, !sticker, !gif, !search, !chart, !react."
             if lang == "ru" else
-            f"You recall the last media — it's a {img_kind}. Describe briefly in Kulsh's style. No markdown."
+            f"Last media — a {img_kind}. Describe briefly. No markers."
         )
         return json_str(await ask_ai_async(
             prompt=prompt, image_bytes=img_bytes, image_mime="image/jpeg",
@@ -232,7 +202,6 @@ from src.util import (
 
 
 def _is_addressed_from_bot_tg(message: telebot.types.Message) -> bool:
-    """Разрешить ли реагировать на сообщение от другого бота."""
     bot_id = tg_bot_id()
     reply_ok = bool(
         message.reply_to_message and message.reply_to_message.from_user
@@ -303,8 +272,13 @@ async def handle_tg_media(message: telebot.types.Message) -> None:
         media_type = "sticker"
         media_tag = "[стикер]" if lang == "ru" else "[sticker]"
 
+    # ВАЖНО: сохраняем message_id, чтобы бот мог ссылаться на конкретное медиа
     if file_id and media_tag:
-        add_media_history(chat_key, None, media_type or "media", display_name, file_id=file_id, caption=caption)
+        add_media_history(
+            chat_key, None, media_type or "media", display_name,
+            file_id=file_id, caption=caption,
+            message_id=message.message_id,
+        )
 
     # FEMBOY BATTLE
     if is_femboy_battle_command(caption) and message.photo:
@@ -462,7 +436,9 @@ async def handle_tg_media(message: telebot.types.Message) -> None:
     addressed = bool(is_reply_to_bot or re.search(r'(?i)\bкульш\b', caption) or is_dm)
 
     if not addressed:
-        add_user_memory(chat_key, "TG", display_name, username, user_id, caption or "",
+        # Сохраняем в память как "[фото без подписи]" — НЕ подставляем "че на этом?"
+        text_for_memory = caption.strip() or f"[{media_tag} без подписи]"
+        add_user_memory(chat_key, "TG", display_name, username, user_id, text_for_memory,
                         [media_tag or "медиа"], message_id=message.message_id)
         if await _tg().should_random_reply("tg", chat_id, user_id):
             answer = await ask_ai_async(
@@ -475,6 +451,7 @@ async def handle_tg_media(message: telebot.types.Message) -> None:
                 await _tg().send_tg_ai_response(message, chat_id, user_id, answer)
         return
 
+    # addressed — отправляем картинку в AI
     await _tg().tg_bot.send_chat_action(chat_id, 'typing')
     image_bytes = None
     image_mime = "image/jpeg"
@@ -497,10 +474,14 @@ async def handle_tg_media(message: telebot.types.Message) -> None:
     except Exception as e:
         logger.warning(f"download media: {e}")
 
-    default_prompt = "че на этом?" if lang == "ru" else "what's this?"
-    prompt = caption.strip() or default_prompt
+    # Если подписи нет — НЕ подставляем "че на этом?". Просто описание.
+    if caption.strip():
+        prompt = caption.strip()
+    else:
+        prompt = ""  # пусто = бот сам решит что сказать, глядя на фото
+
     add_user_memory(chat_key, "TG", display_name, username, user_id,
-                    f"{prompt} [с медиа: {media_tag}]", [media_tag or "медиа"],
+                    f"{prompt or '[медиа без подписи]'} [с медиа: {media_tag}]", [media_tag or "медиа"],
                     message_id=message.message_id)
     messages = memory_to_messages(get_chat_memory(chat_key))
     answer = await ask_ai_async(messages=messages, image_bytes=image_bytes,
@@ -663,7 +644,17 @@ async def handle_tg_text(message: telebot.types.Message) -> None:
             await _tg().tg_bot.send_chat_action(chat_id, 'typing')
         except Exception:
             pass
-        add_user_memory(chat_key, "TG", display_name, username, user_id, text, message_id=message.message_id)
+        # Если это реплай на сообщение с медиа — добавляем в память msg_id родителя
+        parent_media_id = None
+        if message.reply_to_message and message.reply_to_message.message_id:
+            from src.util import find_media_by_message_id
+            if find_media_by_message_id(chat_key, message.reply_to_message.message_id):
+                parent_media_id = message.reply_to_message.message_id
+        text_for_memory = text
+        if parent_media_id:
+            text_for_memory = f"{text} [отвечает на msg_id:{parent_media_id} (медиа)]"
+        add_user_memory(chat_key, "TG", display_name, username, user_id, text_for_memory,
+                        message_id=message.message_id)
         messages = memory_to_messages(get_chat_memory(chat_key))
         answer = await ask_ai_async(messages=messages, chat_id=chat_id, user_id=user_id, platform="tg")
         await _tg().send_tg_ai_response(message, chat_id, user_id, answer, user_text=text)
