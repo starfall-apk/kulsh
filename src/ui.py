@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.40.0
+# Kulsh GPT | v2.42.0
 # by (main author): starfall-apk
 # coauthor & bot hosting: pomidorka1515
 
@@ -65,7 +65,8 @@ def config_text(platform: str, chat_id: int, user_id: int) -> str:
     cfg = get_user_config(platform, chat_id, user_id)
     lang = cfg.get("language", "ru")
     prompt_safe = html.escape(cfg.get("custom_prompt") or tr(lang, "cfg_prompt_default"))
-    line = "─" * 22
+    # Rich-разделитель (Bot API 10.3+): `---` на отдельной строке рендерится как divider
+    line = "---"
     on = "✅"
     off = "❌"
     theme_disp = tr(lang, "dark") if cfg.get("theme", "dark") == "dark" else tr(lang, "light")
@@ -74,7 +75,7 @@ def config_text(platform: str, chat_id: int, user_id: int) -> str:
     search_txt = on if cfg.get("web_search_enabled", True) else off
     mode_txt = _mode_display(cfg, lang)
     return (
-        f"✦ {tr(lang, 'cfg_title')} ✦\n{line}\n"
+        f"# {tr(lang, 'cfg_title')}\n\n{line}\n\n"
         f"{tr(lang, 'cfg_lang')}: {tr(lang, 'russian') if lang == 'ru' else tr(lang, 'english')}\n"
         f"{tr(lang, 'cfg_theme')}: {theme_disp}\n"
         f"{tr(lang, 'cfg_mode')}: {mode_txt}\n"
@@ -86,8 +87,8 @@ def config_text(platform: str, chat_id: int, user_id: int) -> str:
         f"{tr(lang, 'cfg_autoreply')}: {on if cfg.get('random_reply_enabled') else off}\n"
         f"{tr(lang, 'cfg_random')}: {on if cfg.get('random_messages_enabled', True) else off}\n"
         f"{tr(lang, 'cfg_websearch')}: {search_txt}\n"
-        f"{tr(lang, 'cfg_credits_label')}: <code>{credits}/{DAILY_CREDITS}</code>\n"
-        f"{line}\n"
+        f"{tr(lang, 'cfg_credits_label')}: <code>{credits}/{DAILY_CREDITS}</code>\n\n"
+        f"{line}\n\n"
         f"{tr(lang, 'cfg_prompt_label')}: {prompt_safe}"
     )
 
@@ -232,10 +233,9 @@ def model_picker_text(platform: str, chat_id: int, user_id: int) -> str:
     cfg = get_user_config(platform, chat_id, user_id)
     lang = cfg.get("language", "ru")
     return (
-        f"<b>{tr(lang, 'cfg_choose_model')}</b>\n"
-        f"{'─' * 22}\n"
+        f"# {tr(lang, 'cfg_choose_model')}\n\n---\n\n"
         f"{tr(lang, 'cfg_current')}: {model_display_name(cfg.get('model'), lang)}\n\n"
-        f"<b>{tr(lang, 'cfg_auto')}</b> — {tr(lang, 'cfg_auto_hint')}"
+        f"**{tr(lang, 'cfg_auto')}** — {tr(lang, 'cfg_auto_hint')}"
     )
 
 
@@ -243,13 +243,15 @@ def mode_picker_text(platform: str, chat_id: int, user_id: int, is_private: bool
     cfg = get_user_config(platform, chat_id, user_id)
     lang = cfg.get("language", "ru")
     lines = [
-        f"<b>{tr(lang, 'cfg_choose_mode')}</b>",
-        "─" * 22,
-        f"▫️ <b>{tr(lang, 'mode_kent')}</b> — {tr(lang, 'mode_kent_hint')}",
-        f"▫️ <b>{tr(lang, 'mode_assistant')}</b> — {tr(lang, 'mode_assistant_hint')}",
+        f"# {tr(lang, 'cfg_choose_mode')}",
+        "",
+        "---",
+        "",
+        f"- **{tr(lang, 'mode_kent')}** — {tr(lang, 'mode_kent_hint')}",
+        f"- **{tr(lang, 'mode_assistant')}** — {tr(lang, 'mode_assistant_hint')}",
     ]
     if is_private:
-        lines.append(f"▫️ <b>{tr(lang, 'mode_pro')}</b> — {tr(lang, 'mode_pro_hint')}")
+        lines.append(f"- **{tr(lang, 'mode_pro')}** — {tr(lang, 'mode_pro_hint')}")
     return "\n".join(lines)
 
 
@@ -258,24 +260,23 @@ def mode_picker_text(platform: str, chat_id: int, user_id: int, is_private: bool
 # ============================================================
 def build_menu_text(lang: str) -> str:
     return (
-        "|K|*U*|L|*S*|H|\n\n"
+        "|K|*U*|L*|S*|H|\n\n"
         f"# {tr(lang, 'menu_title')}\n\n"
-        f"✦彡巛〢 ✦ 彡 巛 〢 ✦ 彡 巛 〢 ✦\n\n"
+        f"---\n\n"
         f"{tr(lang, 'menu_intro')}\n\n"
         f"**{tr(lang, 'menu_available')}**\n\n"
         f"- {tr(lang, 'menu_mini_app')}\n"
         f"- {tr(lang, 'menu_settings_item')}\n"
         f"- {tr(lang, 'menu_commands')}\n"
         f"- {tr(lang, 'menu_donate_item')}\n"
-        f"- {tr(lang, 'menu_github_item')}\n\n"
-        f"✦ 彡 巛 〢 〢 巛 彡 ✦"
+        f"- {tr(lang, 'menu_github_item')}"
     )
 
 
 def build_start_text(lang: str) -> str:
     return (
         f"# {tr(lang, 'start_title')}\n\n"
-        f"✦彡巛〢 ✦ 彡 巛 〢 ✦ 彡 巛 〢 ✦\n\n"
+        f"---\n\n"
         f"{tr(lang, 'start_intro')}\n\n"
         f"**{tr(lang, 'start_where')}**\n\n"
         f"- {tr(lang, 'start_mini_app')}\n"
