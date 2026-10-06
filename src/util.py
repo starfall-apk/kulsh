@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.42.0
+# Kulsh GPT | v2.42.1
 # by (main author): starfall-apk
 # coauthor & bot hosting: pomidorka1515
 
@@ -46,11 +46,8 @@ logger.addHandler(file_handler)
 logger.addHandler(console_handler)
 
 BOT_START_TS: float = time.time()
-BOT_VERSION: str = "2.42.0"
+BOT_VERSION: str = "2.42.1"
 
-# ============================================================
-# ВРЕМЯ
-# ============================================================
 MSK = timezone(timedelta(hours=3))
 
 
@@ -79,9 +76,7 @@ def human_uptime() -> str:
     parts.append(f"{m}м")
     return " ".join(parts)
 
-# ============================================================
-# КОНФИГ .env
-# ============================================================
+
 load_dotenv()
 TG_TOKEN: str = os.getenv('TG_TOKEN') or ""
 DISCORD_TOKEN: str = os.getenv('DISCORD_TOKEN') or ""
@@ -98,9 +93,6 @@ AI_KEYS = [k for k in [AI_KEY_1, AI_KEY_2, AI_KEY_3] if k]
 if not AI_KEYS and AI_KEY:
     AI_KEYS.append(AI_KEY)
 
-# ============================================================
-# КОНСТАНТЫ
-# ============================================================
 DS_SERIES_GUILD_ID = 1403828466075304036
 DS_SERIES_CHANNEL_ID = 1403828467014832270
 DS_SERIES_TARGET_USER_ID = 1364588699589021890
@@ -143,14 +135,13 @@ AUTHORIZED_UPDATERS = [735217033867821098, 1193627300797878362]
 
 COMMUNICATION_MODES = ("kent", "assistant", "pro")
 DEFAULT_COMMUNICATION_MODE = "kent"
+DS_SCOPES = ("self", "shared")
 
 
 def mode_is_valid(mode: str) -> bool:
     return mode in COMMUNICATION_MODES
 
-# ============================================================
-# ДЕКОР
-# ============================================================
+
 DECO = {
     "sparkle": "✦", "wave": "彡", "rivers": "巛", "stroke": "〢",
     "line": "─", "dline": "═", "dot": "▪", "hollow": "▫",
@@ -167,16 +158,12 @@ def deco_title(text: str, lang: str = "ru") -> str:
     return f"**{text}**"
 
 
-# ============================================================
-# RICH-РАЗДЕЛИТЕЛИ (Bot API 10.3+)
-# ============================================================
-# `---` на отдельной строке рендерится как нативный divider в Rich Messages.
 RICH_DIVIDER = "---"
 
 
 def rich_divider() -> str:
-    """Строка-разделитель для Rich Message (fallback: ---)."""
     return RICH_DIVIDER
+
 
 # ============================================================
 # VOICE / TTS
@@ -219,9 +206,7 @@ except ImportError:
     voice_enabled = False
     logger.info("⚠️ edge_tts/FFmpeg не найдены")
 
-# ============================================================
-# TYPING HELPERS
-# ============================================================
+
 JsonDict: TypeAlias = dict[str, Any]
 Color: TypeAlias = str | tuple[int, int, int]
 Font: TypeAlias = ImageFont.FreeTypeFont | ImageFont.ImageFont
@@ -289,6 +274,7 @@ def theme_str(theme: ChartTheme, key: str, default: str = "#000000") -> str:
     value = theme.get(key, default)
     return value if isinstance(value, str) else default
 
+
 # ============================================================
 # ГЛОБАЛЬНЫЕ СТРУКТУРЫ
 # ============================================================
@@ -311,11 +297,14 @@ battle_photos: dict[str, list[bytes]] = {}
 pending_donations: dict[int, int] = {}
 user_looksmaxxing_state: defaultdict[int, bool] = defaultdict(lambda: False)
 user_femboy_state: defaultdict[int, bool] = defaultdict(lambda: False)
+# DS: chat_id -> "self" | "shared"
+ds_config_scope: dict[int, str] = {}
 
 DONATIONS_FILE = 'donations.json'
 MEMORY_FILE = 'long_term_memory.json'
 CREDITS_FILE = 'credits.json'
 USER_CONFIGS_FILE = 'user_configs.json'
+DS_SCOPES_FILE = 'ds_scopes.json'
 DAILY_CREDITS = 500
 COST_ARCHIVE_EDIT = 500
 COST_CONSOLE_CMD = 25
@@ -323,6 +312,7 @@ MAX_FILE_SIZE = 500 * 1024
 MAX_TOTAL_UNPACKED = 5 * 1024 * 1024
 MAX_FILES = 100
 MAX_SEPARATE_PARTS = 8
+
 
 # ============================================================
 # ФАЙЛЫ СОСТОЯНИЯ
@@ -388,6 +378,38 @@ def load_user_configs() -> None:
         logger.error(f"load_user_configs: {e}")
 
 
+def save_ds_scopes() -> None:
+    try:
+        data = {str(k): v for k, v in ds_config_scope.items()}
+        with open(DS_SCOPES_FILE, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"save_ds_scopes: {e}")
+
+
+def load_ds_scopes() -> None:
+    data = load_json_file(DS_SCOPES_FILE)
+    for k, v in data.items():
+        try:
+            key = int(k)
+        except (ValueError, TypeError):
+            continue
+        s = str(v)
+        if s in DS_SCOPES:
+            ds_config_scope[key] = s
+
+
+def get_ds_scope(chat_id: int) -> str:
+    return ds_config_scope.get(chat_id, "shared")
+
+
+def set_ds_scope(chat_id: int, scope: str) -> None:
+    if scope not in DS_SCOPES:
+        return
+    ds_config_scope[chat_id] = scope
+    save_ds_scopes()
+
+
 def add_donation(platform: str, user_id: int, amount: int, name: str = "Аноним") -> None:
     key = f"{platform}_{user_id}"
     donations_data[key] = donations_data.get(key, 0) + amount
@@ -406,6 +428,7 @@ def get_top_donators(top_n: int = 10) -> list[tuple[str, int]]:
         name = names.get(key, key)
         totals[name] = totals.get(name, 0) + total
     return sorted(totals.items(), key=lambda x: x[1], reverse=True)[:top_n]
+
 
 # ============================================================
 # КРЕДИТЫ
@@ -439,6 +462,7 @@ def spend_credits(platform: str, user_id: int, amount: int) -> bool:
     credits_data[key] = entry
     save_credits()
     return True
+
 
 # ============================================================
 # PER-USER CONFIG
@@ -479,8 +503,23 @@ def get_user_config(platform: str, chat_id: int, user_id: int) -> JsonDict:
     return cfg
 
 
+def get_effective_config(platform: str, chat_id: int, user_id: int) -> JsonDict:
+    """Для DS — возвращает либо общий конфиг канала (scope=shared), либо личный (scope=self)."""
+    if platform == "ds" and get_ds_scope(chat_id) == "shared":
+        return get_user_config("ds", chat_id, 0)
+    return get_user_config(platform, chat_id, user_id)
+
+
+def get_write_config(platform: str, chat_id: int, user_id: int) -> JsonDict:
+    """Куда писать настройки — в личный или в общий конфиг DS."""
+    if platform == "ds" and get_ds_scope(chat_id) == "shared":
+        return get_user_config("ds", chat_id, 0)
+    return get_user_config(platform, chat_id, user_id)
+
+
 def get_chat_key(platform: str, chat_id: int) -> str:
     return f"{platform}_{chat_id}"
+
 
 # ============================================================
 # LOG TAIL / CHUNK
@@ -519,6 +558,7 @@ def chunk_text(text: str, size: int) -> list[str]:
         chunks.append(current)
     return chunks
 
+
 # ============================================================
 # ПАМЯТЬ ЧАТА
 # ============================================================
@@ -553,7 +593,6 @@ def add_bot_memory(chat_id: str, text: str, message_id: int | None = None) -> No
 
 
 def memory_to_messages(mem_deque: deque[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Преобразует память чата в messages для AI. message_id пишется, чтобы бот мог ссылаться на конкретные сообщения."""
     messages: list[dict[str, Any]] = []
     for entry in mem_deque:
         if entry.get("type") == "bot":
@@ -596,6 +635,7 @@ def find_media_by_message_id(chat_id: str, message_id: int) -> dict[str, Any] | 
         if item.get("message_id") == message_id:
             return item
     return None
+
 
 # ============================================================
 # HTML / MARKDOWN (fallback)
@@ -667,6 +707,7 @@ async def extract_video_frame(video_bytes: bytes, ext_hint: str = ".mp4") -> byt
                 except Exception:
                     pass
 
+
 # ============================================================
 # TYPING
 # ============================================================
@@ -690,9 +731,7 @@ def calc_typing_delay(text: str, segment_index: int = 0) -> float:
         delay *= SEPARATED_TYPING_MULTIPLIER
     return max(TYPING_MIN_DELAY, min(TYPING_MAX_DELAY * (1 + segment_index * 0.5), delay))
 
-# ============================================================
-# MEMORY EXTRACTION
-# ============================================================
+
 def clean_json_text(text: str) -> str:
     text = text.strip()
     if text.startswith("```json"):
@@ -703,47 +742,6 @@ def clean_json_text(text: str) -> str:
         text = text[:-3]
     return text.strip()
 
-# ============================================================
-# СКЛЕЙКИ / ПРИКЛЕЕННЫЕ СЛОВА
-# ============================================================
-# Слова, которые Gemini часто приклеивает к предыдущему слову.
-_GLUE_TAILS: tuple[str, ...] = (
-    # мат
-    "хули", "хуй", "хуя", "хую", "хуё", "нахуй", "похуй", "нахуя",
-    "бля", "блять", "блядь",
-    "ебать", "ебал", "ебёт", "ебет", "ебу", "ебись",
-    "пиздец", "пизда", "пизд",
-    # местоимения / наречия / частицы
-    "тебе", "тебя", "тобой", "меня", "мне", "мной",
-    "его", "ему", "им", "её", "ей", "ею", "их", "ими",
-    "нас", "нам", "вас", "вам",
-    "что", "кто", "где", "как", "зачем", "почему", "когда", "куда", "откуда",
-    "это", "этот", "эта", "эти", "тот", "та", "те",
-    "там", "тут", "здесь", "сюда", "туда",
-    "же", "ли", "бы",
-    # короткие предлоги-хвосты
-    "ты", "я", "он", "она", "мы", "вы", "они",
-)
-
-
-def fix_glued_words(text: str) -> str:
-    """
-    Разбивает приклеенные слова (забейхули → забей хули, бочкеты → бочке ты).
-    Работает по списку частых хвостов. Хвост отделяется только если:
-      * перед ним 3+ кириллических буквы
-      * после него нет кириллицы (или конец строки/пунктуация)
-    """
-    if not text:
-        return text
-    # Сортируем по длине, чтобы сначала пробовать длинные хвосты
-    tails_sorted = sorted(_GLUE_TAILS, key=len, reverse=True)
-    for tail in tails_sorted:
-        pattern = re.compile(
-            rf'([а-яёА-ЯЁ]{{3,}})({re.escape(tail)})(?![а-яёА-ЯЁ])',
-            re.UNICODE,
-        )
-        text = pattern.sub(r'\1 \2', text)
-    return text
 
 # ============================================================
 # УТИЛИТЫ-МАРКЕРЫ
@@ -756,7 +754,6 @@ UTILITY_PATTERNS = {
     "group_info": re.compile(r'!\s*group[\s_]*info(?![A-Za-z])', re.IGNORECASE),
     "user_info": re.compile(r'!\s*user[\s_]*info(?::\s*(\d+))?(?![A-Za-z])', re.IGNORECASE),
 }
-# !separate — с ведущим ! ОБЯЗАТЕЛЬНО, но допускаем вариант без ! в кириллическом контексте
 SEPARATOR_PATTERN = re.compile(
     r'!\s*sep[ae]rate(?![A-Za-z])|(?<![A-Za-z])sep[ae]rate(?![A-Za-z])',
     re.IGNORECASE,
@@ -768,7 +765,6 @@ WHY_PATTERN = re.compile(r'!\s*why\s*:\s*([^\n]+)', re.IGNORECASE)
 SEARCH_MARKER_PATTERN = re.compile(r'!\s*search(?![A-Za-z])', re.IGNORECASE)
 CHART_MARKER_PATTERN = re.compile(r'!\s*chart(?![A-Za-z])', re.IGNORECASE)
 
-# !recall_media:[ID] — взять конкретное сообщение
 RECALL_MEDIA_ID_PATTERN = re.compile(
     r'!\s*recall[\s_]*media\s*:?\s*(\d+)',
     re.IGNORECASE,
@@ -799,7 +795,6 @@ def extract_utility_markers(text: str) -> tuple[str, list[str], dict[str, str]]:
             if name == "user_info" and m.group(1):
                 extras["user_info_id"] = m.group(1)
         text = pat.sub(' ', text)
-    # Отдельно ловим !recall_media:ID
     rm = RECALL_MEDIA_ID_PATTERN.search(text)
     if rm:
         extras["recall_media_id"] = rm.group(1)
@@ -822,7 +817,6 @@ def dedupe_markers(markers: list[str]) -> list[str]:
 
 
 def process_ai_response(raw: str, separate_enabled: bool = True) -> tuple[list[str], list[str]]:
-    """Возвращает (сегменты, маркеры). !react/!why обрабатываются отдельно ДО этого."""
     raw_clean, markers, _ = extract_utility_markers(raw or "")
     markers = dedupe_markers(markers)
     if separate_enabled:
@@ -836,7 +830,7 @@ def process_ai_response(raw: str, separate_enabled: bool = True) -> tuple[list[s
 
 
 def scrub_stray_markers(text: str) -> str:
-    """Страховка: удаляет уцелевшие служебные маркеры и разбивает склейки."""
+    """Страховка: удаляет уцелевшие служебные маркеры."""
     if not text:
         return text
     pats = [
@@ -851,12 +845,10 @@ def scrub_stray_markers(text: str) -> str:
     text = re.sub(r'[ \t]+([,.!?;:])(?=[ \t\n]|$)', r'\1', text)
     text = re.sub(r'[ \t]+\n', '\n', text)
     text = re.sub(r'\n{3,}', '\n\n', text)
-    text = fix_glued_words(text)
     return text.strip()
 
 
 def extract_reaction_and_why(text: str) -> tuple[str, str | None, str | None]:
-    """Возвращает (очищенный_текст, emojis, why). Чистит только !react / !why — !separate остаётся."""
     if not text:
         return "", None, None
     react_match = REACT_PATTERN.search(text)
@@ -907,11 +899,11 @@ def clean_extra_text(raw: str) -> list[str]:
     cleaned = REACT_PATTERN.sub(' ', cleaned)
     cleaned = WHY_PATTERN.sub(' ', cleaned)
     cleaned = re.sub(r'[ \t]{2,}', ' ', cleaned).strip()
-    cleaned = fix_glued_words(cleaned)
     return [s.strip() for s in cleaned.split('\n\n') if s and s.strip()]
 
+
 # ============================================================
-# STICKERS/GIFS
+# STICKERS / GIFS
 # ============================================================
 STICKER_POOL = [
     "CAACAgEAAxkBAAEXkj1qd6YOMXAHLciofztbliRFn-qf5gACvAIAAmIaIUTfm-IZfGZGmj0E",
@@ -927,6 +919,7 @@ GIF_POOL = [
     "https://cdn.discordapp.com/attachments/1494583947664035913/1535766838070345829/freedom_20260808214842.gif",
     "https://cdn.discordapp.com/attachments/1494583947664035913/1535766837772427294/octopus_20260808214849.gif",
 ]
+
 
 # ============================================================
 # LOOKSMAXXING TIERS
@@ -978,9 +971,7 @@ def is_battle_command(text: str) -> bool:
     t = (text or "").strip().lower()
     return bool(re.match(r'^(кульш\s+)?(battle|баттл|батл)$', t))
 
-# ============================================================
-# FEMBOY SCALE
-# ============================================================
+
 FEMBOY_TIER_DISTRIBUTION: list[dict[str, Any]] = [
     {"key": "chad",     "short": "CHD", "full_m": "CHAD",     "full_f": "CHAD",     "fmb_low": 1.0,  "fmb_high": 2.4,  "color": "#E53E3E"},
     {"key": "sigma",    "short": "SGM", "full_m": "SIGMA",    "full_f": "SIGMA",    "fmb_low": 2.5,  "fmb_high": 3.9,  "color": "#ED8936"},
@@ -1029,9 +1020,7 @@ def is_femboy_battle_command(text: str) -> bool:
         t,
     ))
 
-# ============================================================
-# LOOKSMAXXING AI RULES
-# ============================================================
+
 TIER_RULES_M = "SUB 3, SUB 5, LTN, MTN, HTN, CHADLITE, CHAD, ADAMLITE, TRUE ADAM"
 TIER_RULES_F = "SUB 3, SUB 5, LTB, MTB, HTB, STACYLITE, STACY, EVELITE, TRUE EVE"
 TIER_RULES_STRICT = (
@@ -1050,6 +1039,7 @@ FEMBOY_TIER_RULES_STRICT = (
     "ИСПОЛЬЗУЙ ТОЛЬКО ЭТИ НАЗВАНИЯ. Не выдумывай новые. "
     "Если на фото не человек — tier 'N/A', gender 'N/A'."
 )
+
 
 # ============================================================
 # SAFE GIT UPDATE
@@ -1254,8 +1244,9 @@ async def perform_safe_git_update(repo_path: str) -> tuple[str, str]:
 
 try:
     load_user_configs()
-    logger.info(f"✅ Загружено настроек пользователей: {len(user_configs)}")
+    load_ds_scopes()
+    logger.info(f"✅ Загружено настроек пользователей: {len(user_configs)}, DS-scope: {len(ds_config_scope)}")
 except Exception as e:
-    logger.warning(f"load_user_configs на старте: {e}")
+    logger.warning(f"load на старте: {e}")
 
 from src.i18n import TEXTS, html_to_md, tr
