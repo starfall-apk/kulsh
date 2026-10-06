@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.41.0
+# Kulsh GPT | v2.42.0
 # by (main author): starfall-apk
 # coauthor & bot hosting: pomidorka1515
 
@@ -75,69 +75,23 @@ async def _is_addressed_from_bot_ds(message: discord.Message) -> bool:
     me = dcmd.ds_bot.user if dcmd.ds_bot else None
     if me is None:
         return False
-    # reply to bot?
     if message.reference and message.reference.resolved and isinstance(message.reference.resolved, discord.Message):
         if message.reference.resolved.author == me:
             return True
     content = (message.content or "").lower()
     if "кульш" in content or "kulsh" in content:
         return True
-    if me.mention in message.content:
-        return True
-    if me.name.lower() in content:
-        return True
+    try:
+        if me.mention in message.content:
+            return True
+    except Exception:
+        pass
+    try:
+        if me.name.lower() in content:
+            return True
+    except Exception:
+        pass
     return False
-
-
-async def _apply_ds_reaction(message: discord.Message, emojis_str: str, reply_target: discord.Message | None = None) -> list[str]:
-    if not emojis_str:
-        return []
-    from src.util import split_emojis
-    emojis = split_emojis(emojis_str)
-    if not emojis:
-        return []
-    target = reply_target or message
-    applied: list[str] = []
-    for e in emojis[:3]:
-        try:
-            await target.add_reaction(e)
-            applied.append(e)
-        except Exception as ex:
-            logger.warning(f"add_reaction {e}: {ex}")
-    return applied
-
-
-async def _handle_reaction_markers_ds(
-    message: discord.Message,
-    chat_id: int,
-    text: str,
-    cfg: dict[str, Any],
-) -> tuple[str, list[str]]:
-    from src.util import REACT_PATTERN, WHY_PATTERN
-    if not cfg.get("reactions_enabled", True):
-        cleaned = REACT_PATTERN.sub(' ', text or "")
-        cleaned = WHY_PATTERN.sub(' ', cleaned)
-        return cleaned.strip(), []
-    m = REACT_PATTERN.search(text or "")
-    why_m = WHY_PATTERN.search(text or "")
-    if not m:
-        return text, []
-    emojis_str = m.group(1)
-    why_text = why_m.group(1).strip() if why_m else ""
-    reply_target: discord.Message | None = None
-    if message.reference and message.reference.resolved and isinstance(message.reference.resolved, discord.Message):
-        reply_target = message.reference.resolved
-    applied = await _apply_ds_reaction(message, emojis_str, reply_target=reply_target)
-    if applied and why_text:
-        mem_text = f"[реакция {' '.join(applied)}] {why_text}"
-        add_bot_memory(f"ds_{chat_id}", mem_text)
-        logger.info(f"😀 DS реакция {' '.join(applied)}: {why_text[:80]}")
-    elif applied:
-        add_bot_memory(f"ds_{chat_id}", f"[реакция {' '.join(applied)}]")
-    cleaned = REACT_PATTERN.sub(' ', text or "")
-    cleaned = WHY_PATTERN.sub(' ', cleaned)
-    cleaned = re.sub(r'[ \t]{2,}', ' ', cleaned).strip()
-    return cleaned, applied
 
 
 async def on_message(message: discord.Message) -> None:
@@ -145,7 +99,9 @@ async def on_message(message: discord.Message) -> None:
         return
     guild = message.guild
     is_dm = guild is None
-    chat_id = message.author.id if guild is None else guild.id
+    # ВАЖНО: chat_id ВСЕГДА message.channel.id, чтобы совпадало с настройками
+    # (в discord_cmds.ds_handle_config используется message.channel.id).
+    chat_id = message.channel.id
     user_id = message.author.id
     content_lower = message.content.lower()
     display_name = str(getattr(message.author, "display_name", message.author.name))
@@ -489,9 +445,11 @@ async def on_message(message: discord.Message) -> None:
         return
 
     for att in image_attachments:
-        add_media_history(f"ds_{chat_id}", att.url, "photo", display_name, caption=message.content[:200])
+        add_media_history(f"ds_{chat_id}", att.url, "photo", display_name,
+                          caption=message.content[:200], message_id=message.id)
     for att in video_attachments:
-        add_media_history(f"ds_{chat_id}", att.url, "video", display_name, caption=message.content[:200])
+        add_media_history(f"ds_{chat_id}", att.url, "video", display_name,
+                          caption=message.content[:200], message_id=message.id)
 
     is_reply_to_bot = False
     if message.reference and message.reference.resolved and isinstance(message.reference.resolved, discord.Message):
@@ -514,9 +472,9 @@ async def on_message(message: discord.Message) -> None:
                     frame = await extract_video_frame(vid, ".mp4")
                     if frame:
                         media_bytes = frame
-                prompt = message.content.strip() or ("че на этом?" if lang == "ru" else "what's this?")
+                prompt = message.content.strip() or ""
                 add_user_memory(f"ds_{chat_id}", "DS", display_name, username, user_id,
-                                f"{prompt} [с медиа]",
+                                f"{prompt or '[медиа без подписи]'} [с медиа]",
                                 ["photo" if image_attachments else "video"],
                                 message_id=message.id)
                 messages = memory_to_messages(get_chat_memory(f"ds_{chat_id}"))
