@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.42.0
+# Kulsh GPT | v2.42.1
 # by (main author): starfall-apk
 # coauthor & bot hosting: pomidorka1515
 
@@ -46,8 +46,8 @@ from src.util import (
     add_user_memory,
     download_image_bytes,
     get_chat_memory,
+    get_effective_config,
     get_top_donators,
-    get_user_config,
     is_femboy_battle_command,
     is_femboy_rate_command,
     last_bot_reply,
@@ -99,14 +99,13 @@ async def on_message(message: discord.Message) -> None:
         return
     guild = message.guild
     is_dm = guild is None
-    # ВАЖНО: chat_id ВСЕГДА message.channel.id, чтобы совпадало с настройками
-    # (в discord_cmds.ds_handle_config используется message.channel.id).
+    # ВАЖНО: chat_id всегда channel.id, чтобы совпадать с настройками.
     chat_id = message.channel.id
     user_id = message.author.id
     content_lower = message.content.lower()
     display_name = str(getattr(message.author, "display_name", message.author.name))
     username = message.author.name
-    cfg = get_user_config("ds", chat_id, user_id)
+    cfg = get_effective_config("ds", chat_id, user_id)
     lang_raw = cfg.get("language", "ru")
     lang = lang_raw if isinstance(lang_raw, str) else "ru"
 
