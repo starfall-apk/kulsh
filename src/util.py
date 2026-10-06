@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.41.5
+# Kulsh GPT | v2.42.0
 # by (main author): starfall-apk
 # coauthor & bot hosting: pomidorka1515
 
@@ -46,7 +46,7 @@ logger.addHandler(file_handler)
 logger.addHandler(console_handler)
 
 BOT_START_TS: float = time.time()
-BOT_VERSION: str = "2.41.5"
+BOT_VERSION: str = "2.42.0"
 
 # ============================================================
 # ВРЕМЯ
@@ -164,7 +164,19 @@ def deco_divider(length: int = 20, char: str = "─") -> str:
 
 
 def deco_title(text: str, lang: str = "ru") -> str:
-    return f"✦彡巛〢 {text} 〢巛彡✦"
+    return f"**{text}**"
+
+
+# ============================================================
+# RICH-РАЗДЕЛИТЕЛИ (Bot API 10.3+)
+# ============================================================
+# `---` на отдельной строке рендерится как нативный divider в Rich Messages.
+RICH_DIVIDER = "---"
+
+
+def rich_divider() -> str:
+    """Строка-разделитель для Rich Message (fallback: ---)."""
+    return RICH_DIVIDER
 
 # ============================================================
 # VOICE / TTS
@@ -541,6 +553,7 @@ def add_bot_memory(chat_id: str, text: str, message_id: int | None = None) -> No
 
 
 def memory_to_messages(mem_deque: deque[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Преобразует память чата в messages для AI. message_id пишется, чтобы бот мог ссылаться на конкретные сообщения."""
     messages: list[dict[str, Any]] = []
     for entry in mem_deque:
         if entry.get("type") == "bot":
@@ -550,8 +563,10 @@ def memory_to_messages(mem_deque: deque[dict[str, Any]]) -> list[dict[str, Any]]
             media_str = ""
             if entry.get("media"):
                 media_str = f" [прикрепил: {', '.join(entry['media'])}]"
+            mid = entry.get("message_id")
+            mid_str = f", msg_id:{mid}" if mid else ""
             prefix = (f"[{entry.get('time','')}] [{entry.get('platform','')}] "
-                      f"{entry.get('display','?')} ({uname}, id:{entry.get('id','?')})")
+                      f"{entry.get('display','?')} ({uname}, id:{entry.get('id','?')}{mid_str})")
             messages.append({"role": "user", "text": f"{prefix}{media_str}: {entry.get('text','')}"})
     return messages
 
@@ -563,12 +578,24 @@ def add_media_history(
     sender: str,
     file_id: str | None = None,
     caption: str = "",
+    message_id: int | None = None,
 ) -> None:
     chat_media_history[chat_id].append({
         "url": url, "type": media_type, "sender": sender,
         "file_id": file_id, "caption": caption,
+        "message_id": message_id,
         "time": msk_now().strftime('%d.%m %H:%M'),
     })
+
+
+def find_media_by_message_id(chat_id: str, message_id: int) -> dict[str, Any] | None:
+    hist = chat_media_history.get(chat_id)
+    if not hist:
+        return None
+    for item in reversed(hist):
+        if item.get("message_id") == message_id:
+            return item
+    return None
 
 # ============================================================
 # HTML / MARKDOWN (fallback)
@@ -677,34 +704,46 @@ def clean_json_text(text: str) -> str:
     return text.strip()
 
 # ============================================================
-# ЛИПКИЕ МАТЕРНЫЕ ХВОСТЫ
+# СКЛЕЙКИ / ПРИКЛЕЕННЫЕ СЛОВА
 # ============================================================
-# Gemini иногда приклеивает матерные слова к предыдущему слову:
-# "забейхули", "суютхули", "идиблять". Разбиваем их.
-# Работаем ТОЛЬКО когда перед матом идёт минимум 3 кириллические буквы и
-# после него — не кириллица (то есть мат на конце слова или перед пунктуацией).
-_GLUED_CURSES: tuple[str, ...] = (
-    "хули", "хуй", "хуя", "хую", "хуё", "нахуй", "похуй",
+# Слова, которые Gemini часто приклеивает к предыдущему слову.
+_GLUE_TAILS: tuple[str, ...] = (
+    # мат
+    "хули", "хуй", "хуя", "хую", "хуё", "нахуй", "похуй", "нахуя",
     "бля", "блять", "блядь",
-    "ебать", "ебал", "ебёт", "ебет", "ебу",
+    "ебать", "ебал", "ебёт", "ебет", "ебу", "ебись",
     "пиздец", "пизда", "пизд",
-    "нахуя", "нахуй",
+    # местоимения / наречия / частицы
+    "тебе", "тебя", "тобой", "меня", "мне", "мной",
+    "его", "ему", "им", "её", "ей", "ею", "их", "ими",
+    "нас", "нам", "вас", "вам",
+    "что", "кто", "где", "как", "зачем", "почему", "когда", "куда", "откуда",
+    "это", "этот", "эта", "эти", "тот", "та", "те",
+    "там", "тут", "здесь", "сюда", "туда",
+    "же", "ли", "бы",
+    # короткие предлоги-хвосты
+    "ты", "я", "он", "она", "мы", "вы", "они",
 )
 
 
-def fix_glued_curses(text: str) -> str:
-    """Разбивает приклеенные матерные слова от предыдущего слова."""
+def fix_glued_words(text: str) -> str:
+    """
+    Разбивает приклеенные слова (забейхули → забей хули, бочкеты → бочке ты).
+    Работает по списку частых хвостов. Хвост отделяется только если:
+      * перед ним 3+ кириллических буквы
+      * после него нет кириллицы (или конец строки/пунктуация)
+    """
     if not text:
         return text
-    for curse in _GLUED_CURSES:
-        # [кириллица]{3,} + curse + не-кириллица (или конец строки)
+    # Сортируем по длине, чтобы сначала пробовать длинные хвосты
+    tails_sorted = sorted(_GLUE_TAILS, key=len, reverse=True)
+    for tail in tails_sorted:
         pattern = re.compile(
-            rf'([а-яёА-ЯЁ]{{3,}})({re.escape(curse)})(?![а-яёА-ЯЁ])',
+            rf'([а-яёА-ЯЁ]{{3,}})({re.escape(tail)})(?![а-яёА-ЯЁ])',
             re.UNICODE,
         )
         text = pattern.sub(r'\1 \2', text)
     return text
-
 
 # ============================================================
 # УТИЛИТЫ-МАРКЕРЫ
@@ -717,13 +756,23 @@ UTILITY_PATTERNS = {
     "group_info": re.compile(r'!\s*group[\s_]*info(?![A-Za-z])', re.IGNORECASE),
     "user_info": re.compile(r'!\s*user[\s_]*info(?::\s*(\d+))?(?![A-Za-z])', re.IGNORECASE),
 }
-SEPARATOR_PATTERN = re.compile(r'!\s*sep[ae]rate(?![A-Za-z])', re.IGNORECASE)
+# !separate — с ведущим ! ОБЯЗАТЕЛЬНО, но допускаем вариант без ! в кириллическом контексте
+SEPARATOR_PATTERN = re.compile(
+    r'!\s*sep[ae]rate(?![A-Za-z])|(?<![A-Za-z])sep[ae]rate(?![A-Za-z])',
+    re.IGNORECASE,
+)
 
 REACT_PATTERN = re.compile(r'!\s*react\s*:\s*([^\s\n]+)', re.IGNORECASE)
 WHY_PATTERN = re.compile(r'!\s*why\s*:\s*([^\n]+)', re.IGNORECASE)
 
 SEARCH_MARKER_PATTERN = re.compile(r'!\s*search(?![A-Za-z])', re.IGNORECASE)
 CHART_MARKER_PATTERN = re.compile(r'!\s*chart(?![A-Za-z])', re.IGNORECASE)
+
+# !recall_media:[ID] — взять конкретное сообщение
+RECALL_MEDIA_ID_PATTERN = re.compile(
+    r'!\s*recall[\s_]*media\s*:?\s*(\d+)',
+    re.IGNORECASE,
+)
 
 
 def split_by_separator(text: str, max_parts: int = MAX_SEPARATE_PARTS) -> list[str]:
@@ -750,6 +799,11 @@ def extract_utility_markers(text: str) -> tuple[str, list[str], dict[str, str]]:
             if name == "user_info" and m.group(1):
                 extras["user_info_id"] = m.group(1)
         text = pat.sub(' ', text)
+    # Отдельно ловим !recall_media:ID
+    rm = RECALL_MEDIA_ID_PATTERN.search(text)
+    if rm:
+        extras["recall_media_id"] = rm.group(1)
+        text = RECALL_MEDIA_ID_PATTERN.sub(' ', text)
     text = re.sub(r'[ \t]{2,}', ' ', text)
     text = re.sub(r'[ \t]+([,.!?;:])(?=[ \t\n]|$)', r'\1', text)
     text = re.sub(r'[ \t]+\n', '\n', text)
@@ -768,6 +822,7 @@ def dedupe_markers(markers: list[str]) -> list[str]:
 
 
 def process_ai_response(raw: str, separate_enabled: bool = True) -> tuple[list[str], list[str]]:
+    """Возвращает (сегменты, маркеры). !react/!why обрабатываются отдельно ДО этого."""
     raw_clean, markers, _ = extract_utility_markers(raw or "")
     markers = dedupe_markers(markers)
     if separate_enabled:
@@ -781,16 +836,13 @@ def process_ai_response(raw: str, separate_enabled: bool = True) -> tuple[list[s
 
 
 def scrub_stray_markers(text: str) -> str:
-    """
-    Страховка: удаляет уцелевшие маркеры утилит из текста перед отправкой.
-    НЕ трогает одиночные '!' и слова после них — только известные маркеры.
-    Также разбивает приклеенные матерные хвосты (fix_glued_curses).
-    """
+    """Страховка: удаляет уцелевшие служебные маркеры и разбивает склейки."""
     if not text:
         return text
     pats = [
         SEPARATOR_PATTERN, REACT_PATTERN, WHY_PATTERN,
         SEARCH_MARKER_PATTERN, CHART_MARKER_PATTERN,
+        RECALL_MEDIA_ID_PATTERN,
         *UTILITY_PATTERNS.values(),
     ]
     for pat in pats:
@@ -799,14 +851,14 @@ def scrub_stray_markers(text: str) -> str:
     text = re.sub(r'[ \t]+([,.!?;:])(?=[ \t\n]|$)', r'\1', text)
     text = re.sub(r'[ \t]+\n', '\n', text)
     text = re.sub(r'\n{3,}', '\n\n', text)
-    # Разбиваем "забейхули" → "забей хули", "суютхули" → "суют хули"
-    text = fix_glued_curses(text)
+    text = fix_glued_words(text)
     return text.strip()
 
 
-def extract_reaction_and_why(text: str) -> tuple[list[str], str | None, str | None]:
+def extract_reaction_and_why(text: str) -> tuple[str, str | None, str | None]:
+    """Возвращает (очищенный_текст, emojis, why). Чистит только !react / !why — !separate остаётся."""
     if not text:
-        return [], None, None
+        return "", None, None
     react_match = REACT_PATTERN.search(text)
     why_match = WHY_PATTERN.search(text)
     emojis: str | None = None
@@ -818,7 +870,7 @@ def extract_reaction_and_why(text: str) -> tuple[list[str], str | None, str | No
     cleaned = REACT_PATTERN.sub(' ', text)
     cleaned = WHY_PATTERN.sub(' ', cleaned)
     cleaned = re.sub(r'[ \t]{2,}', ' ', cleaned).strip()
-    return [p.strip() for p in cleaned.split('\n') if p.strip()], emojis, why
+    return cleaned, emojis, why
 
 
 def split_emojis(emojis: str) -> list[str]:
@@ -855,7 +907,7 @@ def clean_extra_text(raw: str) -> list[str]:
     cleaned = REACT_PATTERN.sub(' ', cleaned)
     cleaned = WHY_PATTERN.sub(' ', cleaned)
     cleaned = re.sub(r'[ \t]{2,}', ' ', cleaned).strip()
-    cleaned = fix_glued_curses(cleaned)
+    cleaned = fix_glued_words(cleaned)
     return [s.strip() for s in cleaned.split('\n\n') if s and s.strip()]
 
 # ============================================================
