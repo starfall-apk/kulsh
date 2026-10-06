@@ -104,6 +104,8 @@ from src.util import (
     prompt_waiting,
     save_long_term_memory,
     user_femboy_state,
+    find_media_by_message_id,
+    rich_divider,
 )
 import src.util as state
 
@@ -575,7 +577,7 @@ async def handle_donate(message: telebot.types.Message) -> None:
     cfg = get_user_config("tg", message.chat.id, message.from_user.id)
     lang = cfg.get("language", "ru")
     text = (
-        f"# {tr(lang, 'donate_title')}\n\n✦ 彡 巛 〢 ✦ 彡 巛 〢 ✦\n\n"
+        f"# {tr(lang, 'donate_title')}\n\n---\n\n"
         f"{tr(lang, 'donate_intro')}\n\n**{tr(lang, 'donate_methods')}**\n\n"
         f"- {tr(lang, 'donate_online')}: {DONATE_URL}\n"
         f"- {tr(lang, 'donate_stars_hint')}\n\n🔗 GitHub: {GITHUB_URL}"
@@ -646,7 +648,7 @@ async def handle_status(message: telebot.types.Message) -> None:
         proc_load = 0.5
     mood = "🍷🗿" if proc_load < 1.0 else ("😎" if proc_load < 2.5 else "🔥")
     text = (
-        f"# 🟢 {tr(lang, 'status_title')}\n\n✦ 彡 巛 〢 ✦ 彡 巛 〢 ✦\n\n"
+        f"# 🟢 {tr(lang, 'status_title')}\n\n---\n\n"
         f"**{tr(lang, 'status_online')}**\n\n"
         f"- {tr(lang, 'status_uptime')}: `{human_uptime()}`\n"
         f"- {tr(lang, 'status_latency')}: `~{max(1, int(proc_load * 40))} ms`\n"
@@ -745,6 +747,34 @@ async def tg_handle_recall_media(message: telebot.types.Message, chat_id: int, u
     cfg = get_user_config("tg", chat_id, user_id)
     lang = cfg.get("language", "ru")
     n = 3
+    rm_id = None
+    for p in parts:
+        if p.isdigit() and len(p) >= 6:  # ID обычно длиннее n
+            rm_id = int(p)
+            break
+    if rm_id is not None:
+        media_bytes, media_kind = await _media().fetch_media_by_id_tg(chat_id, rm_id)
+        if media_bytes:
+            kind_label = {"photo": "фото", "video": "видео", "animation": "гифку"}.get(media_kind, "медиа")
+            prompt = (
+                f"Опиши коротко и живо, что на этом {kind_label}, в стиле Кульша. Маленькими буквами. "
+                f"Без маркеров."
+            )
+            raw = await ask_ai_async(
+                prompt=prompt, image_bytes=media_bytes, image_mime="image/jpeg",
+                chat_id=chat_id, user_id=user_id, platform="tg",
+            )
+            if raw:
+                segments = clean_extra_text(raw)
+                for i, seg in enumerate(segments):
+                    seg = scrub_stray_markers(seg)
+                    if not seg:
+                        continue
+                    if i == 0:
+                        await reply_tg_html(message, seg)
+                    else:
+                        await send_tg_html(message.chat.id, seg)
+                return
     for p in parts:
         if p.isdigit():
             n = min(int(p), 10)
@@ -1069,19 +1099,38 @@ async def send_tg_ai_response(message: telebot.types.Message, chat_id: int, user
                 answer_raw = tr(lang, "search_nothing")
 
     # !recall_media
-    if UTILITY_PATTERNS["recall_media"].search(answer_raw or ""):
+    rm_id = None
+    rm_match = re.search(r'!\s*recall[\s_]*media\s*:?\s*(\d+)', answer_raw or "", re.IGNORECASE)
+    if rm_match:
+        try:
+            rm_id = int(rm_match.group(1))
+        except ValueError:
+            rm_id = None
+    if UTILITY_PATTERNS["recall_media"].search(answer_raw or "") or rm_id is not None:
         media_bytes: bytes | None = None
         media_kind: str = ""
         try:
-            media_bytes, media_kind = await _media().fetch_last_media_tg(chat_id)
+            if rm_id is not None:
+                media_bytes, media_kind = await _media().fetch_media_by_id_tg(chat_id, rm_id)
+            else:
+                # Сначала пробуем последнее медиа, на которое юзер отвечал (если это реплай)
+                if message.reply_to_message and message.reply_to_message.message_id:
+                    media_bytes, media_kind = await _media().fetch_media_by_id_tg(
+                        chat_id, message.reply_to_message.message_id
+                    )
+                if media_bytes is None:
+                    media_bytes, media_kind, _ = await _media().fetch_last_media_tg(chat_id)
         except Exception as e:
             logger.warning(f"recall fetch: {e}")
+            media_bytes, media_kind = None, ""
+
         if media_bytes:
             kind_label = {"photo": "фото", "video": "видео", "animation": "гифку"}.get(media_kind, "медиа")
             follow_prompt = (
                 f"Пользователь написал: {orig_user_text or 'покажи последнее медиа'}\n\n"
-                f"Вот последнее медиа в чате — это {kind_label}. Опиши что на нём и ответь "
-                f"пользователю естественно, живо. НЕ используй !search, !chart, !recall_media, !avatar."
+                f"Вот медиа из чата — это {kind_label}. Опиши коротко и живо, что на нём, в стиле Кульша. "
+                f"Маленькими буквами. НЕ используй !search, !chart, !recall_media, !avatar, "
+                f"!group_info, !user_info."
             )
             new_answer = await ask_ai_async(
                 prompt=follow_prompt, image_bytes=media_bytes, image_mime="image/jpeg",
@@ -1093,6 +1142,9 @@ async def send_tg_ai_response(message: telebot.types.Message, chat_id: int, user
                 answer_raw = _strip_recall_marker(answer_raw) + "\n" + tr(lang, "recall_fail")
         else:
             answer_raw = _strip_recall_marker(answer_raw) + "\n" + tr(lang, "recall_fail")
+        # Дополнительно: чистим ID-маркер, если остался
+        if rm_id is not None:
+            answer_raw = re.sub(r'!\s*recall[\s_]*media\s*:?\s*\d+', ' ', answer_raw, flags=re.IGNORECASE)
 
     # !group_info / !user_info
     gi = UTILITY_PATTERNS["group_info"].search(answer_raw or "")
