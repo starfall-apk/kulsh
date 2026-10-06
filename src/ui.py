@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.42.0
+# Kulsh GPT | v2.42.1
 # by (main author): starfall-apk
 # coauthor & bot hosting: pomidorka1515
 
@@ -58,14 +58,10 @@ def _mode_display(cfg: JsonDict, lang: str) -> str:
     return tr(lang, "mode_kent")
 
 
-# ============================================================
-# CONFIG TEXT / KEYBOARDS
-# ============================================================
 def config_text(platform: str, chat_id: int, user_id: int) -> str:
     cfg = get_user_config(platform, chat_id, user_id)
     lang = cfg.get("language", "ru")
     prompt_safe = html.escape(cfg.get("custom_prompt") or tr(lang, "cfg_prompt_default"))
-    # Rich-разделитель (Bot API 10.3+): `---` на отдельной строке рендерится как divider
     line = "---"
     on = "✅"
     off = "❌"
@@ -80,14 +76,14 @@ def config_text(platform: str, chat_id: int, user_id: int) -> str:
         f"{tr(lang, 'cfg_theme')}: {theme_disp}\n"
         f"{tr(lang, 'cfg_mode')}: {mode_txt}\n"
         f"{tr(lang, 'cfg_model')}: {model_display_name(cfg.get('model'), lang)}\n"
-        f"{tr(lang, 'cfg_temp_short')}: <code>{cfg.get('temperature', 0.9)}</code>\n"
+        f"{tr(lang, 'cfg_temp_short')}: `{cfg.get('temperature', 0.9)}`\n"
         f"{tr(lang, 'cfg_sep')}: {on if cfg.get('separate_enabled', True) else off}\n"
         f"{tr(lang, 'cfg_stream')}: {stream_txt}\n"
         f"{tr(lang, 'cfg_stickers')}: {on if cfg.get('stickers_enabled', True) else off}\n"
         f"{tr(lang, 'cfg_autoreply')}: {on if cfg.get('random_reply_enabled') else off}\n"
         f"{tr(lang, 'cfg_random')}: {on if cfg.get('random_messages_enabled', True) else off}\n"
         f"{tr(lang, 'cfg_websearch')}: {search_txt}\n"
-        f"{tr(lang, 'cfg_credits_label')}: <code>{credits}/{DAILY_CREDITS}</code>\n\n"
+        f"{tr(lang, 'cfg_credits_label')}: `{credits}/{DAILY_CREDITS}`\n\n"
         f"{line}\n\n"
         f"{tr(lang, 'cfg_prompt_label')}: {prompt_safe}"
     )
@@ -256,11 +252,13 @@ def mode_picker_text(platform: str, chat_id: int, user_id: int, is_private: bool
 
 
 # ============================================================
-# МЕНЮ / START / HELP / DONATE
+# МЕНЮ / START
 # ============================================================
 def build_menu_text(lang: str) -> str:
+    # Таблица: K | *U* | L | *S* | H  → K, L, H — без заливки (is_header=False),
+    # U и S — с заливкой (is_header=True через *одинарные* звёздочки).
     return (
-        "|K|*U*|L*|S*|H|\n\n"
+        "|K|*U*|L|*S*|H|\n\n"
         f"# {tr(lang, 'menu_title')}\n\n"
         f"---\n\n"
         f"{tr(lang, 'menu_intro')}\n\n"
