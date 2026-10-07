@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.42.1
+# Kulsh GPT | v2.43.0
 # by (main author): starfall-apk
 # coauthor & bot hosting: pomidorka1515
 
@@ -46,7 +46,7 @@ logger.addHandler(file_handler)
 logger.addHandler(console_handler)
 
 BOT_START_TS: float = time.time()
-BOT_VERSION: str = "2.42.1"
+BOT_VERSION: str = "2.43.0"
 
 MSK = timezone(timedelta(hours=3))
 
@@ -297,7 +297,6 @@ battle_photos: dict[str, list[bytes]] = {}
 pending_donations: dict[int, int] = {}
 user_looksmaxxing_state: defaultdict[int, bool] = defaultdict(lambda: False)
 user_femboy_state: defaultdict[int, bool] = defaultdict(lambda: False)
-# DS: chat_id -> "self" | "shared"
 ds_config_scope: dict[int, str] = {}
 
 DONATIONS_FILE = 'donations.json'
@@ -311,7 +310,6 @@ COST_CONSOLE_CMD = 25
 MAX_FILE_SIZE = 500 * 1024
 MAX_TOTAL_UNPACKED = 5 * 1024 * 1024
 MAX_FILES = 100
-MAX_SEPARATE_PARTS = 8
 
 
 # ============================================================
@@ -504,14 +502,12 @@ def get_user_config(platform: str, chat_id: int, user_id: int) -> JsonDict:
 
 
 def get_effective_config(platform: str, chat_id: int, user_id: int) -> JsonDict:
-    """Для DS — возвращает либо общий конфиг канала (scope=shared), либо личный (scope=self)."""
     if platform == "ds" and get_ds_scope(chat_id) == "shared":
         return get_user_config("ds", chat_id, 0)
     return get_user_config(platform, chat_id, user_id)
 
 
 def get_write_config(platform: str, chat_id: int, user_id: int) -> JsonDict:
-    """Куда писать настройки — в личный или в общий конфиг DS."""
     if platform == "ds" and get_ds_scope(chat_id) == "shared":
         return get_user_config("ds", chat_id, 0)
     return get_user_config(platform, chat_id, user_id)
@@ -754,8 +750,10 @@ UTILITY_PATTERNS = {
     "group_info": re.compile(r'!\s*group[\s_]*info(?![A-Za-z])', re.IGNORECASE),
     "user_info": re.compile(r'!\s*user[\s_]*info(?::\s*(\d+))?(?![A-Za-z])', re.IGNORECASE),
 }
+# ВАЖНО: единый паттерн, `!` опционален.
+# Раньше была альтернатива `!sep...|sep...` — вторая ветка съедала только слово и оставляла голый "!".
 SEPARATOR_PATTERN = re.compile(
-    r'!\s*sep[ae]rate(?![A-Za-z])|(?<![A-Za-z])sep[ae]rate(?![A-Za-z])',
+    r'!?\s*sep[ae]rate(?![A-Za-z])',
     re.IGNORECASE,
 )
 
@@ -771,17 +769,12 @@ RECALL_MEDIA_ID_PATTERN = re.compile(
 )
 
 
-def split_by_separator(text: str, max_parts: int = MAX_SEPARATE_PARTS) -> list[str]:
+def split_by_separator(text: str) -> list[str]:
+    """Разбивает по !separate (или просто separate). Без ограничений по количеству."""
     if not text:
         return []
     parts = SEPARATOR_PATTERN.split(text)
-    parts = [p.strip() for p in parts if p and p.strip()]
-    if len(parts) > max_parts:
-        head = parts[:max_parts - 1]
-        tail = " ".join(parts[max_parts - 1:])
-        head.append(tail)
-        parts = head
-    return parts
+    return [p.strip() for p in parts if p and p.strip()]
 
 
 def extract_utility_markers(text: str) -> tuple[str, list[str], dict[str, str]]:
@@ -830,7 +823,7 @@ def process_ai_response(raw: str, separate_enabled: bool = True) -> tuple[list[s
 
 
 def scrub_stray_markers(text: str) -> str:
-    """Страховка: удаляет уцелевшие служебные маркеры."""
+    """Страховка: удаляет уцелевшие служебные маркеры и голые '!' перед буквами."""
     if not text:
         return text
     pats = [
@@ -841,6 +834,8 @@ def scrub_stray_markers(text: str) -> str:
     ]
     for pat in pats:
         text = pat.sub(' ', text)
+    # Убираем одинокие '!' перед кириллицей (артефакт старых версий)
+    text = re.sub(r'!\s*(?=[а-яёА-ЯЁ])', '', text)
     text = re.sub(r'[ \t]{2,}', ' ', text)
     text = re.sub(r'[ \t]+([,.!?;:])(?=[ \t\n]|$)', r'\1', text)
     text = re.sub(r'[ \t]+\n', '\n', text)
