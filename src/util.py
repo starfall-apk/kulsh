@@ -750,13 +750,10 @@ UTILITY_PATTERNS = {
     "group_info": re.compile(r'!\s*group[\s_]*info(?![A-Za-z])', re.IGNORECASE),
     "user_info": re.compile(r'!\s*user[\s_]*info(?::\s*(\d+))?(?![A-Za-z])', re.IGNORECASE),
 }
-# ВАЖНО: единый паттерн, `!` опционален.
-# Раньше была альтернатива `!sep...|sep...` — вторая ветка съедала только слово и оставляла голый "!".
 SEPARATOR_PATTERN = re.compile(
-    r'!?\s*sep[ae]rate(?![A-Za-z])',
+    r'!+\s*sep[ae]rate(?![A-Za-z])',
     re.IGNORECASE,
 )
-
 REACT_PATTERN = re.compile(r'!\s*react\s*:\s*([^\s\n]+)', re.IGNORECASE)
 WHY_PATTERN = re.compile(r'!\s*why\s*:\s*([^\n]+)', re.IGNORECASE)
 
