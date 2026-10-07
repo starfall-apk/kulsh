@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.41.3
+# Kulsh GPT | v2.43.1
 # by (main author): starfall-apk
 # coauthor & bot hosting: pomidorka1515
 
@@ -37,6 +37,7 @@ from src.rich import (
     play_apply_animation,
     reply_tg_html,
     send_formatted,
+    send_formatted_returning_id,
     send_rich_message,
     send_tg_html,
     stream_draft,
@@ -75,9 +76,11 @@ from src.util import (
     cb_id,
     clean_extra_text,
     clean_json_text,
+    find_media_by_message_id,
     human_uptime,
     is_femboy_battle_command,
     is_femboy_rate_command,
+    markdown_like_to_telegram_html,
     mode_is_valid,
     process_ai_response,
     save_user_configs,
@@ -104,8 +107,6 @@ from src.util import (
     prompt_waiting,
     save_long_term_memory,
     user_femboy_state,
-    find_media_by_message_id,
-    rich_divider,
 )
 import src.util as state
 
@@ -184,7 +185,6 @@ async def _handle_reaction_markers(
     text: str,
     cfg: dict[str, Any],
 ) -> tuple[str, list[str]]:
-    """Возвращает (текст_без_маркеров, применённые_эмодзи). Пишет thought в память."""
     if not cfg.get("reactions_enabled", True):
         cleaned = REACT_PATTERN.sub(' ', text)
         cleaned = WHY_PATTERN.sub(' ', cleaned)
@@ -197,12 +197,10 @@ async def _handle_reaction_markers(
     emojis_str = m.group(1)
     why_text = why_m.group(1).strip() if why_m else ""
 
-    # Определяем target — реагируем на reply-сообщение если есть, иначе на само сообщение.
     target_msg_id = message.message_id
     if message.reply_to_message and message.reply_to_message.message_id:
         target_msg_id = message.reply_to_message.message_id
 
-    # НЕ ставим реакцию на сообщения бота.
     bot_id = _tg_bot_id()
     target_from_bot = False
     if target_msg_id != message.message_id and message.reply_to_message and message.reply_to_message.from_user:
@@ -230,16 +228,43 @@ async def _handle_reaction_markers(
 
 
 # ============================================================
-# CALLBACK HANDLER (cfg:)
+# EDIT HELPERS
 # ============================================================
+async def _edit_config_message(chat_id: int, message_id: int,
+                                text: str, kb: InlineKeyboardMarkup) -> bool:
+    """Универсально редактирует сообщение настроек: rich → HTML → plain."""
+    ok = await edit_rich_message(chat_id, message_id, text, reply_markup=kb)
+    if ok:
+        return True
+    html_text = markdown_like_to_telegram_html(text)
+    try:
+        await tg_bot.edit_message_text(
+            html_text, chat_id, message_id,
+            parse_mode='HTML', reply_markup=kb,
+        )
+        return True
+    except Exception as e:
+        err = str(e)
+        if "message is not modified" in err:
+            return True
+        logger.warning(f"edit(html) fail: {e}")
+        plain = re.sub(r'<[^>]+>', '', html_text)
+        try:
+            await tg_bot.edit_message_text(plain, chat_id, message_id, reply_markup=kb)
+            return True
+        except Exception as e2:
+            logger.warning(f"edit(plain) fail: {e2}")
+            return False
+
+
 async def edit_or_send(call: telebot.types.CallbackQuery, text: str, kb: InlineKeyboardMarkup) -> None:
     msg = tg_msg(call)
-    try:
-        await tg_bot.edit_message_text(text, msg.chat.id, msg.message_id, parse_mode='HTML', reply_markup=kb)
-    except Exception as e:
-        logger.warning(f"edit_message_text fail: {e}")
+    await _edit_config_message(msg.chat.id, msg.message_id, text, kb)
 
 
+# ============================================================
+# CALLBACK HANDLER (cfg:)
+# ============================================================
 async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
     msg = tg_msg(call)
     data = call.data or ""
@@ -315,7 +340,7 @@ async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
         return
 
     if action == "lang":
-        await edit_or_send(call, f"<b>{tr(lang, 'cfg_lang')}</b>", build_lang_keyboard("tg", chat_id, user_id))
+        await edit_or_send(call, f"# {tr(lang, 'cfg_lang')}\n\n---\n", build_lang_keyboard("tg", chat_id, user_id))
         await tg_bot.answer_callback_query(cb_id(call))
         return
 
@@ -332,7 +357,7 @@ async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
         return
 
     if action == "theme":
-        await edit_or_send(call, f"<b>{tr(lang, 'cfg_theme')}</b>", build_theme_keyboard("tg", chat_id, user_id))
+        await edit_or_send(call, f"# {tr(lang, 'cfg_theme')}\n\n---\n", build_theme_keyboard("tg", chat_id, user_id))
         await tg_bot.answer_callback_query(cb_id(call))
         return
 
@@ -348,7 +373,7 @@ async def handle_cfg_callback(call: telebot.types.CallbackQuery) -> None:
         return
 
     if action == "temp":
-        await edit_or_send(call, f"<b>{tr(lang, 'cfg_temp_short')}</b>",
+        await edit_or_send(call, f"# {tr(lang, 'cfg_temp_short')}\n\n---\n",
                             build_temp_keyboard("tg", chat_id, user_id))
         await tg_bot.answer_callback_query(cb_id(call))
         return
@@ -474,11 +499,9 @@ async def handle_menu_callback(call: telebot.types.CallbackQuery) -> None:
     if action == "settings":
         cfg_text = config_text("tg", chat_id, user_id)
         kb = build_main_config_keyboard("tg", chat_id, user_id)
-        try:
-            await tg_bot.edit_message_text(cfg_text, chat_id, msg.message_id, parse_mode='HTML', reply_markup=kb)
+        ok = await _edit_config_message(chat_id, msg.message_id, cfg_text, kb)
+        if ok:
             config_msg_owners[msg.message_id] = user_id
-        except Exception as e:
-            logger.warning(f"menu:settings edit: {e}")
         await tg_bot.answer_callback_query(cb_id(call))
         return
 
@@ -578,9 +601,11 @@ async def handle_donate(message: telebot.types.Message) -> None:
     lang = cfg.get("language", "ru")
     text = (
         f"# {tr(lang, 'donate_title')}\n\n---\n\n"
-        f"{tr(lang, 'donate_intro')}\n\n**{tr(lang, 'donate_methods')}**\n\n"
+        f"{tr(lang, 'donate_intro')}\n\n"
+        f"**{tr(lang, 'donate_methods')}**\n\n"
         f"- {tr(lang, 'donate_online')}: {DONATE_URL}\n"
-        f"- {tr(lang, 'donate_stars_hint')}\n\n🔗 GitHub: {GITHUB_URL}"
+        f"- {tr(lang, 'donate_stars_hint')}\n\n"
+        f"🔗 GitHub: {GITHUB_URL}"
     )
     try:
         await send_formatted(message.chat.id, text, reply_to=message.message_id)
@@ -704,22 +729,23 @@ async def tg_handle_config(message: telebot.types.Message) -> None:
     user_id = message.from_user.id
     chat_key = get_chat_key("tg", chat_id)
     config_trigger_msgs[chat_key] = message.message_id
-    try:
-        sent = await tg_bot.send_message(
-            chat_id, config_text("tg", chat_id, user_id), parse_mode='HTML',
-            reply_markup=build_main_config_keyboard("tg", chat_id, user_id),
-            reply_to_message_id=message.message_id,
-        )
-        config_msg_owners[sent.message_id] = user_id
-    except Exception as e:
-        logger.warning(f"Config send failed: {e}")
+    cfg_text = config_text("tg", chat_id, user_id)
+    kb = build_main_config_keyboard("tg", chat_id, user_id)
+    mid = await send_formatted_returning_id(
+        chat_id, cfg_text, reply_to=message.message_id, reply_markup=kb,
+    )
+    if mid is not None:
+        config_msg_owners[mid] = user_id
+    else:
+        # fallback plain
         try:
-            await tg_bot.send_message(
-                chat_id, re.sub(r'<[^>]+>', '', config_text("tg", chat_id, user_id)),
-                reply_markup=build_main_config_keyboard("tg", chat_id, user_id),
+            msg = await tg_bot.send_message(
+                chat_id, re.sub(r'<[^>]+>', '', markdown_like_to_telegram_html(cfg_text)),
+                reply_markup=kb, reply_to_message_id=message.message_id,
             )
-        except Exception as e2:
-            logger.error(f"Config fallback fail: {e2}")
+            config_msg_owners[getattr(msg, "message_id", 0)] = user_id
+        except Exception as e:
+            logger.error(f"Config fallback fail: {e}")
 
 
 async def tg_handle_avatar(message: telebot.types.Message, chat_id: int, user_id: int) -> None:
@@ -747,26 +773,26 @@ async def tg_handle_recall_media(message: telebot.types.Message, chat_id: int, u
     cfg = get_user_config("tg", chat_id, user_id)
     lang = cfg.get("language", "ru")
     n = 3
-    rm_id = None
+    rm_id: int | None = None
     for p in parts:
-        if p.isdigit() and len(p) >= 6:  # ID обычно длиннее n
-            rm_id = int(p)
-            break
+        if p.isdigit():
+            if len(p) >= 6:
+                rm_id = int(p)
+            else:
+                n = min(int(p), 10)
     if rm_id is not None:
         media_bytes, media_kind = await _media().fetch_media_by_id_tg(chat_id, rm_id)
         if media_bytes:
             kind_label = {"photo": "фото", "video": "видео", "animation": "гифку"}.get(media_kind, "медиа")
             prompt = (
-                f"Опиши коротко и живо, что на этом {kind_label}, в стиле Кульша. Маленькими буквами. "
-                f"Без маркеров."
+                f"Опиши коротко и живо, что на этом {kind_label}, в стиле Кульша. Маленькими буквами. Без маркеров."
             )
             raw = await ask_ai_async(
                 prompt=prompt, image_bytes=media_bytes, image_mime="image/jpeg",
                 chat_id=chat_id, user_id=user_id, platform="tg",
             )
             if raw:
-                segments = clean_extra_text(raw)
-                for i, seg in enumerate(segments):
+                for i, seg in enumerate(clean_extra_text(raw)):
                     seg = scrub_stray_markers(seg)
                     if not seg:
                         continue
@@ -775,10 +801,6 @@ async def tg_handle_recall_media(message: telebot.types.Message, chat_id: int, u
                     else:
                         await send_tg_html(message.chat.id, seg)
                 return
-    for p in parts:
-        if p.isdigit():
-            n = min(int(p), 10)
-            break
     raw = await get_recall_media_description_tg(message, chat_id, user_id, n, lang=lang)
     if not raw:
         await reply_tg_html(message, tr(lang, "recall_fail"))
@@ -820,13 +842,13 @@ async def tg_handle_search(message: telebot.types.Message, query: str, chat_id: 
         f"Без маркеров !search, !chart, !separate."
     )
     answer = await ask_ai_async(prompt=prompt, chat_id=chat_id, user_id=user_id, platform="tg")
-    header = f"🔎 <b>{html.escape(query)}</b>\n"
+    header = f"🔎 **{query}**\n\n"
     full = header + "\n" + (answer or "")
     sources = []
     for i, r in enumerate(results[:4], 1):
-        sources.append(f"{i}. [{html.escape(r.get('title', '')[:60])}]({r.get('url', '')})")
+        sources.append(f"{i}. [{r.get('title', '')[:60]}]({r.get('url', '')})")
     if sources:
-        full += "\n\n<b>" + tr(lang, "search_source") + ":</b>\n" + "\n".join(sources)
+        full += "\n\n**" + tr(lang, "search_source") + ":**\n" + "\n".join(sources)
     await send_formatted(chat_id, full, reply_to=message.message_id)
 
 
@@ -906,25 +928,24 @@ async def tg_handle_femboy_rate(message: telebot.types.Message, chat_id: int, us
             return
         infographic = await create_femboy_infographic(photo_bytes, ai_data, theme=theme, lang=lang)
         report = (
-            f"<b>{tr(lang, 'femboy_title')}</b>\n\n"
+            f"**{tr(lang, 'femboy_title')}**\n\n"
             f"{tr(lang, 'femboy_gender')} {ai_data.get('gender', '?')}\n"
-            f"{tr(lang, 'femboy_score')} <code>{ai_data.get('fmb', '?')}/10.0</code>\n"
-            f"{tr(lang, 'femboy_tier')} <code>{ai_data.get('tier', '?')}</code>\n"
+            f"{tr(lang, 'femboy_score')} `{ai_data.get('fmb', '?')}/10.0`\n"
+            f"{tr(lang, 'femboy_tier')} `{ai_data.get('tier', '?')}`\n"
         )
         if ai_data.get("potential"):
-            report += f"{tr(lang, 'femboy_potential')} <code>{ai_data['potential']}</code>\n"
-        report += f"\n<b>{tr(lang, 'femboy_analysis')}</b>\n{html.escape(ai_data.get('summary', ''))}"
+            report += f"{tr(lang, 'femboy_potential')} `{ai_data['potential']}`\n"
+        report += f"\n**{tr(lang, 'femboy_analysis')}**\n{ai_data.get('summary', '')}"
         if include_advice and ai_data.get("advice"):
-            report += f"\n\n<b>{tr(lang, 'femboy_advice')}</b>\n{html.escape(ai_data['advice'])}"
+            report += f"\n\n**{tr(lang, 'femboy_advice')}**\n{ai_data['advice']}"
         try:
             await tg_bot.send_photo(chat_id, InputFile(infographic), caption=tr(lang, "femboy_report"))
         except Exception as e:
             logger.error(f"femboy infographic send: {e}")
-        for chunk in [report[i:i + 3900] for i in range(0, len(report), 3900)]:
-            try:
-                await tg_bot.send_message(chat_id, chunk, parse_mode='HTML')
-            except Exception:
-                await tg_bot.send_message(chat_id, re.sub(r'<[^>]+>', '', chunk))
+        try:
+            await send_formatted(chat_id, report, reply_to=message.message_id)
+        except Exception:
+            await tg_bot.send_message(chat_id, re.sub(r'<[^>]+>', '', report))
         await tg_bot.delete_message(chat_id, status.message_id)
     except Exception as e:
         logger.error(f"femboy rate: {e}")
@@ -955,19 +976,26 @@ async def tg_process_femboy_album(media_group_id: str, chat_id: int, user_id: in
     winner_num = str(ai_data.get("winner", "1"))
     winner_label = tr(lang, "femboy_battle_first") if winner_num == "1" else tr(lang, "femboy_battle_second")
     report_text = (
-        f"<b>{tr(lang, 'femboy_battle_title')}</b>\n\n"
-        f"{tr(lang, 'femboy_battle_winner')} <b>{winner_label}</b>\n"
-        f"{tr(lang, 'femboy_battle_reason')} {html.escape(ai_data.get('reason', ''))}\n\n"
+        f"**{tr(lang, 'femboy_battle_title')}**\n\n"
+        f"{tr(lang, 'femboy_battle_winner')} **{winner_label}**\n"
+        f"{tr(lang, 'femboy_battle_reason')} {ai_data.get('reason', '')}\n\n"
     )
     try:
         await tg_bot.send_photo(chat_id, InputFile(battle_img), caption=tr(lang, "femboy_battle_caption"))
     except Exception as e:
         logger.error(f"femboy battle infra: {e}")
     try:
-        await tg_bot.send_message(chat_id, report_text, parse_mode='HTML')
+        await send_formatted(chat_id, report_text, reply_to=message_id_fallback(message))
     except Exception:
-        await tg_bot.send_message(chat_id, re.sub(r'<[^>]+>', '', report_text))
+        try:
+            await tg_bot.send_message(chat_id, re.sub(r'<[^>]+>', '', report_text))
+        except Exception:
+            pass
     await tg_bot.delete_message(chat_id, status.message_id)
+
+
+def message_id_fallback(message: telebot.types.Message | None) -> int | None:
+    return message.message_id if message else None
 
 
 # ============================================================
@@ -1078,7 +1106,7 @@ async def send_tg_ai_response(message: telebot.types.Message, chat_id: int, user
 
     orig_user_text = (user_text or (message.text or message.caption or "")).strip()
 
-    # !react / !why
+    # !react / !why — до всего
     answer_raw, applied_reactions = await _handle_reaction_markers(message, chat_id, user_id, answer_raw or "", cfg)
 
     # !search
@@ -1091,29 +1119,28 @@ async def send_tg_ai_response(message: telebot.types.Message, chat_id: int, user
                 follow_prompt = (
                     f"Пользователь спросил: {orig_user_text}\n\n"
                     f"Ты выполнил поиск: {query}\n\nРезультаты:\n{context}\n\n"
-                    f"Ответь на основе результатов. Без !search, !chart, !react. "
-                    f"Краткий точный ответ."
+                    f"Ответь на основе результатов. Без !search, !chart, !react. Краткий ответ."
                 )
                 answer_raw = await ask_ai_async(prompt=follow_prompt, chat_id=chat_id, user_id=user_id, platform="tg")
             else:
                 answer_raw = tr(lang, "search_nothing")
 
-    # !recall_media
-    rm_id = None
+    # !recall_media (ID или последнее)
+    rm_id: int | None = None
     rm_match = re.search(r'!\s*recall[\s_]*media\s*:?\s*(\d+)', answer_raw or "", re.IGNORECASE)
     if rm_match:
         try:
             rm_id = int(rm_match.group(1))
         except ValueError:
             rm_id = None
-    if UTILITY_PATTERNS["recall_media"].search(answer_raw or "") or rm_id is not None:
+    has_recall = bool(UTILITY_PATTERNS["recall_media"].search(answer_raw or "")) or rm_id is not None
+    if has_recall:
         media_bytes: bytes | None = None
         media_kind: str = ""
         try:
             if rm_id is not None:
                 media_bytes, media_kind = await _media().fetch_media_by_id_tg(chat_id, rm_id)
             else:
-                # Сначала пробуем последнее медиа, на которое юзер отвечал (если это реплай)
                 if message.reply_to_message and message.reply_to_message.message_id:
                     media_bytes, media_kind = await _media().fetch_media_by_id_tg(
                         chat_id, message.reply_to_message.message_id
@@ -1128,9 +1155,8 @@ async def send_tg_ai_response(message: telebot.types.Message, chat_id: int, user
             kind_label = {"photo": "фото", "video": "видео", "animation": "гифку"}.get(media_kind, "медиа")
             follow_prompt = (
                 f"Пользователь написал: {orig_user_text or 'покажи последнее медиа'}\n\n"
-                f"Вот медиа из чата — это {kind_label}. Опиши коротко и живо, что на нём, в стиле Кульша. "
-                f"Маленькими буквами. НЕ используй !search, !chart, !recall_media, !avatar, "
-                f"!group_info, !user_info."
+                f"Вот медиа — это {kind_label}. Опиши коротко и живо, что на нём, в стиле Кульша. "
+                f"Маленькими буквами. Без маркеров."
             )
             new_answer = await ask_ai_async(
                 prompt=follow_prompt, image_bytes=media_bytes, image_mime="image/jpeg",
@@ -1142,7 +1168,6 @@ async def send_tg_ai_response(message: telebot.types.Message, chat_id: int, user
                 answer_raw = _strip_recall_marker(answer_raw) + "\n" + tr(lang, "recall_fail")
         else:
             answer_raw = _strip_recall_marker(answer_raw) + "\n" + tr(lang, "recall_fail")
-        # Дополнительно: чистим ID-маркер, если остался
         if rm_id is not None:
             answer_raw = re.sub(r'!\s*recall[\s_]*media\s*:?\s*\d+', ' ', answer_raw, flags=re.IGNORECASE)
 
@@ -1154,11 +1179,11 @@ async def send_tg_ai_response(message: telebot.types.Message, chat_id: int, user
         answer_raw = UTILITY_PATTERNS["group_info"].sub(' ', answer_raw)
         if info:
             follow_prompt = (
-                f"Пользователь попросил инфо о текущей группе. Вот данные:\n{info}\n\n"
-                f"Кратко и живо перескажи в своём стиле. Без !group_info, !user_info, !chart."
+                f"Пользователь попросил инфо о текущей группе. Данные:\n{info}\n\n"
+                f"Кратко перескажи в своём стиле. Без маркеров."
             )
         else:
-            follow_prompt = "Не удалось получить инфо о группе. Скажи об этом кратко."
+            follow_prompt = "Не удалось получить инфо о группе. Скажи кратко."
         answer_raw = await ask_ai_async(prompt=follow_prompt, chat_id=chat_id, user_id=user_id, platform="tg")
     if ui:
         m_ui = UTILITY_PATTERNS["user_info"].search(answer_raw)
@@ -1173,7 +1198,7 @@ async def send_tg_ai_response(message: telebot.types.Message, chat_id: int, user
         if info:
             follow_prompt = (
                 f"Пользователь попросил инфо о пользователе id {target_uid}. Данные:\n{info}\n\n"
-                f"Кратко перескажи в своём стиле. Без !group_info, !user_info, !chart."
+                f"Кратко перескажи в своём стиле. Без маркеров."
             )
         else:
             follow_prompt = "Не удалось получить инфо о пользователе. Скажи об этом."
@@ -1202,6 +1227,7 @@ async def send_tg_ai_response(message: telebot.types.Message, chat_id: int, user
             if chart_spec is not None or not user_asked_chart:
                 answer_raw = remaining
 
+    # Разбиение на сегменты
     clean_segments, markers = process_ai_response(answer_raw, separate_enabled=separate_enabled)
 
     extra_segments: list[str] = []
@@ -1298,7 +1324,7 @@ async def maybe_reply_to_old_message_tg(message: telebot.types.Message, chat_id:
         comment = await ask_ai_async(
             prompt=(
                 f"Сейчас идёт живая переписка. Ты краем глаза заметил старое сообщение от "
-                f"{old.get('display','?')}: \"{old.get('text','')}\". Хочешь коротко и по-пацански "
+                f"{old.get('display','?')}: \"{old.get('text','')}\". Хочешь коротко по-пацански "
                 f"прокомментировать? Если да — одно короткое сообщение в стиле общения со всеми. "
                 f"Если не хочешь — ответь ровно 'НЕТ'."
             ),
