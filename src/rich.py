@@ -1,4 +1,4 @@
-# Kulsh GPT | v2.39.0
+# Kulsh GPT | v2.43.0
 # by (main author): starfall-apk
 # coauthor & bot hosting: pomidorka1515
 
@@ -31,6 +31,7 @@ def bind(bot: Any) -> None:
     global tg_bot
     tg_bot = bot
 
+
 async def send_tg_html(chat_id: int, text: str, reply_to: int | None = None) -> None:
     html_text = markdown_like_to_telegram_html(text)
     chunks = [html_text[i:i + 4000] for i in range(0, max(len(html_text), 1), 4000)]
@@ -56,6 +57,7 @@ async def send_tg_html(chat_id: int, text: str, reply_to: int | None = None) -> 
 async def reply_tg_html(message: telebot.types.Message, text: str) -> None:
     await send_tg_html(message.chat.id, text, reply_to=message.message_id)
 
+
 async def typing_with_delay_tg(chat_id: int, text: str, delay: float | None = None) -> None:
     if delay is None:
         delay = calc_typing_delay(text)
@@ -69,6 +71,7 @@ async def typing_with_delay_tg(chat_id: int, text: str, delay: float | None = No
         step = min(chunk, delay - elapsed)
         await asyncio.sleep(step)
         elapsed += step
+
 
 # ============================================================
 # RICH MESSAGE
@@ -157,7 +160,7 @@ def parse_inline(text: str) -> Any:
 
 
 def make_cell(raw: str) -> JsonDict:
-    """Ячейка таблицы. *...* → is_header=True (залитая). Все ячейки по центру."""
+    """Ячейка таблицы. *...* → is_header=True (залитая). По центру."""
     s = (raw or "").strip()
     is_header = False
     inner = s
@@ -326,7 +329,9 @@ def looks_like_rich(text: str) -> bool:
         re.search(r'^>\s', text, re.MULTILINE) or
         '```' in text or
         re.search(r'\$\$.+?\$\$', text, re.DOTALL) or
-        re.search(r'<(b|strong|i|em|u|ins|s|strike|del|code|pre|a)\b', text, re.IGNORECASE)
+        re.search(r'<(b|strong|i|em|u|ins|s|strike|del|code|pre|a)\b', text, re.IGNORECASE) or
+        re.search(r'^-{3,}\s*$', text, re.MULTILINE) or
+        re.search(r'^\*{3,}\s*$', text, re.MULTILINE)
     )
 
 
@@ -394,6 +399,42 @@ async def send_rich_message(
     except Exception as e:
         logger.warning(f"sendRichMessage error: {e}")
         return False
+
+
+async def send_rich_message_returning_id(
+    chat_id: int,
+    text: str,
+    reply_to: int | None = None,
+    reply_markup: InlineKeyboardMarkup | None = None,
+) -> int | None:
+    """Отправляет rich и возвращает message_id, или None."""
+    if not state.premium_functions_enabled:
+        return None
+    rich = build_rich_message(text)
+    if not rich:
+        return None
+    payload: dict[str, Any] = {"chat_id": chat_id, "rich_message": rich}
+    if reply_to:
+        payload["reply_parameters"] = {"message_id": reply_to}
+    if reply_markup is not None:
+        try:
+            payload["reply_markup"] = json_dict(cast(Any, reply_markup).to_dict())
+        except AttributeError:
+            payload["reply_markup"] = reply_markup
+    try:
+        async with aiohttp.ClientSession() as session:
+            url = f"https://api.telegram.org/bot{TG_TOKEN}/sendRichMessage"
+            async with session.post(url, json=payload, timeout=30) as resp:
+                body = await resp.json()
+                if resp.status == 200 and body.get("ok"):
+                    res = body.get("result") or {}
+                    mid = res.get("message_id")
+                    if isinstance(mid, int):
+                        return mid
+                logger.warning(f"sendRichMessage(ret) {resp.status}: {str(body)[:400]}")
+    except Exception as e:
+        logger.warning(f"send_rich_message_returning_id: {e}")
+    return None
 
 
 async def edit_rich_message(
@@ -483,6 +524,37 @@ async def send_formatted(
             logger.error(f"plain fallback fail: {e2}")
 
 
+async def send_formatted_returning_id(
+    chat_id: int,
+    text: str,
+    reply_to: int | None = None,
+    reply_markup: InlineKeyboardMarkup | None = None,
+) -> int | None:
+    """Как send_formatted, но возвращает message_id."""
+    mid = await send_rich_message_returning_id(chat_id, text, reply_to=reply_to, reply_markup=reply_markup)
+    if mid is not None:
+        return mid
+    html_text = markdown_like_to_telegram_html(text)
+    try:
+        msg = await tg_bot.send_message(
+            chat_id, html_text, parse_mode='HTML',
+            reply_to_message_id=reply_to, reply_markup=reply_markup,
+        )
+        return getattr(msg, "message_id", None)
+    except Exception as e:
+        err = str(e)
+        logger.warning(f"send_formatted_returning_id: html failed: {err}")
+        plain = re.sub(r'<[^>]+>', '', html_text)
+        try:
+            msg = await tg_bot.send_message(
+                chat_id, plain, reply_to_message_id=reply_to, reply_markup=reply_markup,
+            )
+            return getattr(msg, "message_id", None)
+        except Exception as e2:
+            logger.error(f"send_formatted_returning_id: plain fail: {e2}")
+            return None
+
+
 async def stream_draft(chat_id: int, draft_id: int, text: str) -> bool:
     if not state.premium_functions_enabled:
         return False
@@ -495,14 +567,8 @@ async def stream_draft(chat_id: int, draft_id: int, text: str) -> bool:
     except Exception:
         return False
 
-# ============================================================
-# АНИМАЦИЯ ПРИМЕНЕНИЯ НАСТРОЕК (медленнее)
-# ============================================================
-APPLY_ANIMATION_FRAMES = [
-    "🍷🗿",
-    "🗿🍷",
-    "🍷🗿",
-]
+
+APPLY_ANIMATION_FRAMES = ["🍷🗿", "🗿🍷", "🍷🗿"]
 
 
 async def edit_plain_safe(chat_id: int, message_id: int, text: str, attempts: int = 3) -> bool:
@@ -546,4 +612,3 @@ async def cleanup_config_children(chat_id: int, user_id: int) -> None:
                 await tg_bot.delete_message(chat_id, mid)
             except Exception:
                 pass
-
