@@ -42,7 +42,7 @@ Now also a brutally honest **looksmaxxing analyst** – upload a face photo and 
 ## 🛠️ Tech Stack
 
 - **Core:** Python 3.10+
-- **AI Engine:** Google Generative AI (Gemini 3.8 Flash, Gemini 3.7 Flash, Gemini 3.6 Flash, Gemini 3.5 Flash, Gemini 3.5 Flash Lite, Gemini 2.5 Flash, Gemini 2.5 Flash Lite) — multiple models with automatic fallback
+- **AI Engine:** DarkAPI (`glm-5.3-flash`, `deepseek-4.1-flash`, `deepseek-v4-pro`, `gpt-6-luna`) first, then NeutralBeats (`glm-5.3-flash`, `deepseek-4.1-flash`, `kimi-k3`, `deepseek-v4-pro`), then Google Generative AI (Gemini 3.8 Flash, Gemini 3.7 Flash, Gemini 3.6 Flash, Gemini 3.5 Flash, Gemini 3.5 Flash Lite, Gemini 2.5 Flash, Gemini 2.5 Flash Lite). A successful response is not sent to the next provider.
 - **Frameworks:** `pyTelegramBotAPI` (Async), `discord.py` 2.x
 - **Voice Processing:** `discord-ext-voice-receive`, `SpeechRecognition`, `pydub`
 - **Audio/Networking:** `FFmpeg`, `aiohttp`, `edge-tts`
@@ -76,6 +76,8 @@ AI_KEY=your_google_gemini_api_key_fallback
 AI_KEY_1=your_primary_gemini_key
 AI_KEY_2=your_secondary_gemini_key
 AI_KEY_3=your_tertiary_gemini_key
+DARKAPI_API_KEY=your_darkapi_api_key
+NEUTRALBEATS_API_KEY=your_neutralbeats_api_key
 
 # IDs & Configuration
 TG_TARGET_CHAT=your_target_group_id
@@ -87,7 +89,7 @@ DONATIONALERTS_TOKEN=your_donationalerts_token
 REPO_PATH=/path/to/bot/folder
 ```
 
-**Note:** `AI_KEY` is a fallback. Use `AI_KEY_1`, `AI_KEY_2`, `AI_KEY_3` for the multi-model fallback system. The bot will cycle through all available model+key combinations on failure.
+**Note:** `DARKAPI_API_KEY` is optional and is tried first. `NEUTRALBEATS_API_KEY` is required. Shared models (`glm-5.3-flash`, `deepseek-4.1-flash`, `deepseek-v4-pro`) try DarkAPI, then NeutralBeats, then Gemini. `kimi-k3` skips DarkAPI and starts at NeutralBeats. `gpt-6-luna` is DarkAPI-only and falls through to Gemini. `AI_KEY` is a Gemini fallback. Use `AI_KEY_1`, `AI_KEY_2`, `AI_KEY_3` for the Gemini multi-key fallback. A successful response stops the chain; later providers are not called.
 
 ### 4. Launch
 ```bash

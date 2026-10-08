@@ -84,6 +84,10 @@ AI_KEY = os.getenv('AI_KEY')
 AI_KEY_1 = os.getenv('AI_KEY_1')
 AI_KEY_2 = os.getenv('AI_KEY_2')
 AI_KEY_3 = os.getenv('AI_KEY_3')
+DARKAPI_API_KEY: str = os.getenv('DARKAPI_API_KEY') or ""
+DARKAPI_URL = "https://darkapi.shop/v1/chat/completions"
+NEUTRALBEATS_API_KEY: str = os.getenv('NEUTRALBEATS_API_KEY') or ""
+NEUTRALBEATS_URL = "https://api.neutralbeats.com/v1/chat/completions"
 TG_TARGET_CHAT = int(os.getenv('TG_TARGET_CHAT') or "0")
 DS_ALLOWED_GUILD_ID = int(os.getenv('DS_ALLOWED_GUILD_ID') or "0")
 DS_DONATION_CHANNEL_ID = int(os.getenv('DONATIONALERTS_CHANNEL_ID', '0'))
@@ -101,12 +105,34 @@ MINI_APP_URL = "https://kulsh.vercel.app"
 DONATE_URL = "https://kulsh.vercel.app/donate"
 GITHUB_URL = "https://github.com/starfall-apk/kulsh"
 
+DARKAPI_MODELS = (
+    "glm-5.3-flash",
+    "deepseek-4.1-flash",
+    "deepseek-v4-pro",
+    "gpt-6-luna",
+)
+NEUTRALBEATS_MODELS = (
+    "glm-5.3-flash",
+    "deepseek-4.1-flash",
+    "kimi-k3",
+    "deepseek-v4-pro",
+)
 MODEL_LIST = [
+    "glm-5.3-flash",
+    "deepseek-4.1-flash",
+    "kimi-k3",
+    "deepseek-v4-pro",
+    "gpt-6-luna",
     "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
     "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-2.5-flash",
     "gemini-2.5-flash-lite",
 ]
 MODEL_DISPLAY: dict[str, str] = {
+    "glm-5.3-flash": "🧊 GLM 5.3 Flash",
+    "deepseek-4.1-flash": "🐋 DeepSeek 4.1 Flash",
+    "kimi-k3": "🌙 Kimi K3",
+    "deepseek-v4-pro": "🐳 DeepSeek V4 Pro",
+    "gpt-6-luna": "🌑 GPT-6 Luna",
     "gemini-3.8-flash": "🚀 3.8 Flash",
     "gemini-3.7-flash": "⚡ 3.7 Flash",
     "gemini-3.6-flash": "🌠 3.6 Flash",

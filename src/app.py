@@ -14,6 +14,7 @@ from telebot.async_telebot import AsyncTeleBot
 from src import discord_cmds, discord_msg, loops, media, rich, telegram
 from src.util import (
     AI_KEYS,
+    NEUTRALBEATS_API_KEY,
     DISCORD_TOKEN,
     DONATIONALERTS_TOKEN,
     DS_ALLOWED_GUILD_ID,
@@ -26,6 +27,9 @@ from src.util import (
 
 if not AI_KEYS:
     logger.critical("❌ Не найден ни один API ключ Gemini!")
+    raise SystemExit(1)
+if not NEUTRALBEATS_API_KEY:
+    logger.critical("❌ Не найден NEUTRALBEATS_API_KEY!")
     raise SystemExit(1)
 
 tg_bot = AsyncTeleBot(TG_TOKEN)

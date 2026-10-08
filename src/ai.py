@@ -15,7 +15,13 @@ import aiohttp
 
 from src.util import (
     AI_KEYS,
+    DARKAPI_API_KEY,
+    DARKAPI_MODELS,
+    DARKAPI_URL,
     MODEL_LIST,
+    NEUTRALBEATS_API_KEY,
+    NEUTRALBEATS_MODELS,
+    NEUTRALBEATS_URL,
     SearchHit,
     json_dict,
     json_str,
@@ -196,6 +202,106 @@ def build_system_prompt(platform: str, chat_id: int, user_id: int) -> str:
     return "".join(parts)
 
 
+def _openai_content(parts: list[dict[str, Any]]) -> str | list[dict[str, Any]]:
+    blocks: list[dict[str, Any]] = []
+    for part in parts:
+        text = part.get("text")
+        if isinstance(text, str) and text:
+            blocks.append({"type": "text", "text": text})
+        inline = part.get("inline_data")
+        if isinstance(inline, dict):
+            data = inline.get("data")
+            mime = inline.get("mime_type") or "image/jpeg"
+            if isinstance(data, str) and data:
+                blocks.append({
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{mime};base64,{data}"},
+                })
+    if blocks and all(block.get("type") == "text" for block in blocks):
+        return "\n".join(str(block["text"]) for block in blocks)
+    return blocks or ""
+
+
+def _to_openai_messages(
+    contents: list[dict[str, Any]],
+    system_text: str,
+) -> list[dict[str, Any]]:
+    messages: list[dict[str, Any]] = []
+    if system_text:
+        messages.append({"role": "system", "content": system_text})
+    for item in contents:
+        role = "assistant" if item.get("role") == "model" else "user"
+        parts = item.get("parts")
+        content = _openai_content(parts if isinstance(parts, list) else [])
+        messages.append({"role": role, "content": content})
+    return messages
+
+
+async def _ask_openai_chat(
+    provider: str,
+    url: str,
+    api_key: str,
+    model_name: str,
+    messages: list[dict[str, Any]],
+    temp: float,
+) -> str | None:
+    if not api_key:
+        return None
+    payload = {
+        "model": model_name,
+        "messages": messages,
+        "temperature": temp,
+    }
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    timeout = aiohttp.ClientTimeout(total=180, sock_connect=20, sock_read=180)
+    logger.info(f"🔄 AI model={model_name} ({provider})")
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=payload, headers=headers, timeout=timeout) as resp:
+                status = resp.status
+                logger.info(f"   ↳ HTTP {status} ({model_name})")
+                if status != 200:
+                    text = await resp.text()
+                    logger.error(f"   {status} {provider}: {text[:300]}")
+                    return None
+                data = json_dict(await resp.json())
+    except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+        logger.warning(f"   Сетевая ошибка {provider}: {type(e).__name__}: {e}")
+        return None
+    except Exception as e:
+        logger.error(f"   Непредвиденная ошибка {provider}: {e}")
+        return None
+
+    choices = data.get("choices")
+    if not isinstance(choices, list) or not choices:
+        logger.error(f"   {provider}: пустой choices")
+        return None
+    message = json_dict(json_dict(choices[0]).get("message"))
+    content = message.get("content")
+    if isinstance(content, str) and content.strip():
+        logger.info("   ✓ 200 OK — ответ получен")
+        return content
+    if isinstance(content, list):
+        texts = [
+            json_str(json_dict(block).get("text"))
+            for block in content
+            if isinstance(block, dict)
+        ]
+        joined = "".join(texts).strip()
+        if joined:
+            logger.info("   ✓ 200 OK — ответ получен")
+            return joined
+    reasoning = message.get("reasoning_content") or message.get("reasoning")
+    if isinstance(reasoning, str) and reasoning.strip():
+        logger.info("   ✓ 200 OK — ответ в reasoning")
+        return reasoning
+    logger.error(f"   {provider}: пустой content")
+    return None
+
+
 # ============================================================
 # AI REQUEST
 # ============================================================
@@ -293,14 +399,38 @@ async def ask_ai_async(
     models_to_try: list[str] = []
     if preferred_model and preferred_model in MODEL_LIST:
         models_to_try.append(preferred_model)
-        logger.info(f"🎯 Используется выбранная модель: {preferred_model} — перебор только по ключам")
+        logger.info(f"🎯 Используется выбранная модель: {preferred_model}")
     else:
         for m in MODEL_LIST:
             models_to_try.append(m)
 
+    openai_messages = _to_openai_messages(contents, base_context)
+    gemini_models = [
+        m for m in models_to_try
+        if m not in DARKAPI_MODELS and m not in NEUTRALBEATS_MODELS
+    ]
     total_attempt = 0
-    total_max = len(models_to_try) * len(AI_KEYS)
-    for model_idx, model_name in enumerate(models_to_try):
+    total_max = len(gemini_models) * len(AI_KEYS)
+    gemini_idx = 0
+    for model_name in models_to_try:
+        if model_name in DARKAPI_MODELS:
+            answer = await _ask_openai_chat(
+                "darkapi", DARKAPI_URL, DARKAPI_API_KEY, model_name, openai_messages, temp,
+            )
+            if answer:
+                return answer
+        if model_name in NEUTRALBEATS_MODELS:
+            answer = await _ask_openai_chat(
+                "neutralbeats", NEUTRALBEATS_URL, NEUTRALBEATS_API_KEY,
+                model_name, openai_messages, temp,
+            )
+            if answer:
+                return answer
+        if model_name not in gemini_models:
+            continue
+
+        model_idx = gemini_idx
+        gemini_idx += 1
         backoff = 2 ** min(model_idx, 4)
         for api_key in AI_KEYS:
             total_attempt += 1
