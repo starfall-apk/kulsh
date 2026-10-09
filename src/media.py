@@ -369,7 +369,9 @@ async def handle_tg_media(message: telebot.types.Message) -> None:
                 (reply_text and ("совет" in reply_text.lower() or "advice" in reply_text.lower()))
             )
             theme = cfg.get("theme", "dark")
-            ai_data = await get_looksmaxxing_data(img_bytes, include_advice, lang=lang)
+            ai_data = await get_looksmaxxing_data(
+                img_bytes, include_advice, lang=lang, chat_id=chat_id, user_id=user_id, platform="tg",
+            )
             if "error" in ai_data:
                 await _tg().tg_bot.edit_message_text(ai_data['error'], chat_id, status.message_id)
                 return

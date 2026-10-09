@@ -876,7 +876,9 @@ async def ds_slash_psl(interaction: discord.Interaction, image: discord.Attachme
         img_bytes = await download_image_bytes(image.url)
         cfg = get_effective_config("ds", chat_id, user_id)
         theme = cfg.get("theme", "dark")
-        ai_data = await get_looksmaxxing_data(img_bytes, advice, lang=lang)
+        ai_data = await get_looksmaxxing_data(
+            img_bytes, advice, lang=lang, chat_id=chat_id, user_id=user_id, platform="ds",
+        )
         if "error" in ai_data:
             await interaction.followup.send(ai_data['error'])
             return

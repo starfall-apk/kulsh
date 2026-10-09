@@ -447,7 +447,14 @@ async def create_battle_infographic(
 # ============================================================
 # PSL AI DATA
 # ============================================================
-async def get_looksmaxxing_data(photo_bytes: bytes, include_advice: bool, lang: str = "en") -> dict[str, Any]:
+async def get_looksmaxxing_data(
+    photo_bytes: bytes,
+    include_advice: bool,
+    lang: str = "en",
+    chat_id: int = 0,
+    user_id: int = 0,
+    platform: str = "tg",
+) -> dict[str, Any]:
     if lang == "ru":
         prompt = (
             "Ты — чрезвычайно строгий AI-аналитик по looksmaxxing. Оцени лицо критически. "
@@ -481,10 +488,17 @@ async def get_looksmaxxing_data(photo_bytes: bytes, include_advice: bool, lang: 
             "You are a professional looksmaxxing AI. Answer ONLY with JSON. "
             "STRICT tier names only, no synonyms, no invented variants."
         ),
+        chat_id=chat_id, user_id=user_id, platform=platform,
     )
     try:
-        return json_dict(json.loads(clean_json_text(raw)))
-    except json.JSONDecodeError:
+        data = json_dict(json.loads(clean_json_text(raw)))
+        required = ("gender", "psl", "tier", "potential", "skin", "eyes", "jawline", "bloat",
+                    "hair", "bone_structure", "symmetry", "canthal_tilt", "pros", "cons", "summary")
+        if not all(data.get(key) not in (None, "", "N/A") for key in required):
+            logger.error(f"Looksmaxxing response is incomplete: {raw[:300]}")
+            return {"error": tr(lang, "ai_json_fail")}
+        return data
+    except (json.JSONDecodeError, TypeError):
         logger.error(f"Looksmaxxing JSON decode: {raw[:200]}")
         return {"error": tr(lang, "ai_json_fail")}
 

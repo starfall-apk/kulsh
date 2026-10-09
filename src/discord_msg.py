@@ -109,7 +109,7 @@ async def on_message(message: discord.Message) -> None:
     lang_raw = cfg.get("language", "ru")
     lang = lang_raw if isinstance(lang_raw, str) else "ru"
 
-    # Bot-to-bot
+    # Ignore messages from this bot and unrelated bots to prevent self-conversation loops.
     if message.author.bot:
         if not await _is_addressed_from_bot_ds(message):
             return
@@ -404,7 +404,9 @@ async def on_message(message: discord.Message) -> None:
                 psl_bytes = await download_image_bytes(image_attachments[0].url)
                 include_advice = "совет" in content_lower or "advice" in content_lower
                 theme = cfg.get("theme", "dark")
-                ai_data = await get_looksmaxxing_data(psl_bytes, include_advice, lang=lang)
+                ai_data = await get_looksmaxxing_data(
+                    psl_bytes, include_advice, lang=lang, chat_id=chat_id, user_id=user_id, platform="ds",
+                )
                 if "error" in ai_data:
                     await message.reply(ai_data['error'])
                     return
@@ -499,14 +501,15 @@ async def on_message(message: discord.Message) -> None:
         return
 
     add_user_memory(f"ds_{chat_id}", "DS", display_name, username, user_id, message.content, message_id=message.id)
-    if await should_random_reply("ds", chat_id, user_id):
+    if not message.author.bot and await should_random_reply("ds", chat_id, user_id):
         try:
             answer = await ask_ai_async(
                 context_type="observer",
                 messages=memory_to_messages(get_chat_memory(f"ds_{chat_id}")),
                 chat_id=chat_id, user_id=user_id, platform="ds",
             )
-            if answer and answer.strip() and answer.strip().upper() not in ("НЕТ", "NO"):
+            if (answer and answer.strip() and answer.strip().upper() not in ("НЕТ", "NO")
+                    and not message.author.bot):
                 last_random_reply[f"ds_{chat_id}"] = time.time()
                 await send_ds_ai_response(message, chat_id, user_id, answer)
         except Exception as e:

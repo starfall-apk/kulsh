@@ -107,19 +107,19 @@ GITHUB_URL = "https://github.com/starfall-apk/kulsh"
 
 DARKAPI_MODELS = (
     "glm-5.3-flash",
-    "deepseek-4.1-flash",
+    "deepseek-v4.1-flash",
     "deepseek-v4-pro",
     "gpt-6-luna",
 )
 NEUTRALBEATS_MODELS = (
     "glm-5.3-flash",
-    "deepseek-4.1-flash",
+    "deepseek-v4.1-flash",
     "kimi-k3",
     "deepseek-v4-pro",
 )
 MODEL_LIST = [
     "glm-5.3-flash",
-    "deepseek-4.1-flash",
+    "deepseek-v4.1-flash",
     "kimi-k3",
     "deepseek-v4-pro",
     "gpt-6-luna",
@@ -129,7 +129,7 @@ MODEL_LIST = [
 ]
 MODEL_DISPLAY: dict[str, str] = {
     "glm-5.3-flash": "🧊 GLM 5.3 Flash",
-    "deepseek-4.1-flash": "🐋 DeepSeek 4.1 Flash",
+    "deepseek-v4.1-flash": "🐋 DeepSeek 4.1 Flash",
     "kimi-k3": "🌙 Kimi K3",
     "deepseek-v4-pro": "🐳 DeepSeek V4 Pro",
     "gpt-6-luna": "🌑 GPT-6 Luna",

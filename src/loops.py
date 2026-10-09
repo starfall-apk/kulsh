@@ -179,8 +179,10 @@ async def series_reminder_loop() -> None:
         return
     while True:
         try:
-            prompt = ("Попроси Антона отправить Фолзу сообщение в TikTok чтобы продлить серию. "
-                      "Одно короткое сообщение в стиле Кульша.")
+            prompt = ("Напиши Антону короткое напоминание про фолзу в тикток, чтобы не сгорела серия. "
+                      "Одна живая реплика как кент в нашем чате: строчными буквами, без приветствия, "
+                      "без вежливого официоза, без примера готового сообщения для пересылки и без эмодзи. "
+                      "Не объясняй задачу, просто напиши само напоминание.")
             answer = await ask_ai_async(prompt=prompt, context_type="default",
                                         chat_id=DS_SERIES_CHANNEL_ID, user_id=0, platform="ds")
             segments, _ = process_ai_response(answer, separate_enabled=True)
